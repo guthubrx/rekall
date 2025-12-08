@@ -1,0 +1,75 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rekall"
+version = "0.1.0"
+description = "Rekall - Developer Knowledge Management. Capture and retrieve bugs, patterns, decisions."
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+authors = [
+    {name = "Rekall Contributors"}
+]
+keywords = ["cli", "knowledge-management", "developer-tools", "memory", "bugs", "patterns", "total-recall"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Documentation",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "typer>=0.12.0",
+    "rich>=13.0.0",
+    "textual>=0.89.0",
+    "prompt_toolkit>=3.0.0",
+    "platformdirs>=4.0",
+    "tomli>=2.0; python_version < '3.11'",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=4.0.0",
+    "ruff>=0.1.0",
+]
+
+[project.scripts]
+rekall = "rekall.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/guthubrx/rekall"
+Documentation = "https://github.com/guthubrx/rekall#readme"
+Repository = "https://github.com/guthubrx/rekall"
+Issues = "https://github.com/guthubrx/rekall/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["rekall*"]
+
+[tool.setuptools.package-data]
+rekall = ["research/*.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+
+[tool.ruff]
+target-version = "py39"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = ["E501"]
