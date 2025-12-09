@@ -36,9 +36,13 @@ htmlcov/
 # IDE
 .idea/
 .vscode/
+.cursor/
 *.swp
 *.swo
 *~
+
+# Personal notes
+docs/
 
 # SQLite
 *.db

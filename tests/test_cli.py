@@ -262,7 +262,9 @@ class TestVersionHelp:
 
         result = runner.invoke(app, ["version"])
         assert result.exit_code == 0
-        assert "0.1.0" in result.stdout
+        # Check version format (0.x.x) - dynamic version check
+        from rekall import __version__
+        assert __version__ in result.stdout
 
     def test_help_shows_commands(self):
         """T045: --help should list available commands."""

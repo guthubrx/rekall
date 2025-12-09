@@ -296,16 +296,29 @@ When helping with code:
     return target
 
 
-@register("claude", "Claude Code skill", ".claude/commands/rekall.save.md", "~/.claude/commands/rekall.save.md")
+@register("claude", "Claude Code skills", ".claude/commands/rekall.md + rekall.save.md", "~/.claude/commands/rekall.md + rekall.save.md")
 def install_claude(base_path: Path, global_install: bool = False) -> Path:
-    """Install Claude Code integration (skill file)."""
-    content = '''# Capture Rekall - Mémoire Développeur
+    """Install Claude Code integration (skill files: /rekall and /rekall.save)."""
+    # Install main /rekall skill
+    if global_install:
+        claude_dir = Path.home() / ".claude" / "commands"
+    else:
+        claude_dir = base_path / ".claude" / "commands"
+
+    claude_dir.mkdir(parents=True, exist_ok=True)
+
+    # Install rekall.md (main skill)
+    rekall_skill_path = claude_dir / "rekall.md"
+    rekall_skill_path.write_text(REKALL_SKILL)
+
+    # Install rekall.save.md (capture skill)
+    content = '''# Capture Rekall - Mémoire Cognitive
 
 Tu dois capturer une connaissance dans Rekall. Suis ce workflow :
 
-## 1. Identifier le Type
+## 1. Identifier le Type et la Mémoire
 
-Analyse le contexte de la conversation et détermine le type approprié :
+Analyse le contexte de la conversation :
 
 | Type | Quand l'utiliser |
 |------|------------------|
@@ -316,12 +329,18 @@ Analyse le contexte de la conversation et détermine le type approprié :
 | `config` | Configuration technique, setup, paramétrage |
 | `reference` | Documentation, lien utile, ressource externe |
 
+| Memory Type | Quand l'utiliser |
+|-------------|------------------|
+| `episodic` | Événement spécifique (bug particulier, incident) - **défaut** |
+| `semantic` | Concept général (pattern réutilisable, best practice) |
+
 ## 2. Extraire les Informations
 
 Depuis le contexte de la conversation, extrais :
 - **Titre** : Court et descriptif (max 60 caractères)
 - **Projet** : Nom du projet concerné (depuis pwd ou contexte)
 - **Tags** : 2-5 tags pertinents en kebab-case
+- **Memory Type** : episodic (défaut) ou semantic
 - **Confiance** : 0-5 selon la source (2 par défaut)
 - **Contenu** : Description complète incluant :
   - Problème/Contexte
@@ -333,69 +352,91 @@ Depuis le contexte de la conversation, extrais :
 ## 3. Exécuter la Capture
 
 ```bash
-echo "CONTENU_MARKDOWN" | rekall add TYPE "TITRE" -p PROJET -t TAGS -c CONFIANCE
+echo "CONTENU_MARKDOWN" | rekall add TYPE "TITRE" -p PROJET -t TAGS -m MEMORY_TYPE -c CONFIANCE
 ```
 
-## 4. Confirmer
+## 4. Proposer des Liens
+
+Après la capture, cherche si des entrées similaires existent :
+
+```bash
+rekall search "KEYWORDS" --limit 5
+```
+
+Si des entrées similaires existent, propose de les lier :
+
+```bash
+rekall link NOUVEL_ID ANCIEN_ID --type related
+```
+
+Types de liens :
+- `related` - Connexion thématique
+- `supersedes` - Remplace une entrée obsolète
+- `derived_from` - Généralisé depuis épisodiques
+- `contradicts` - Information conflictuelle
+
+## 5. Confirmer
 
 Affiche :
 ```
 💾 Connaissance capturée dans Rekall :
-   Type: TYPE | Titre: "TITRE"
+   Type: TYPE | Memory: MEMORY_TYPE
+   Titre: "TITRE"
    Projet: PROJET | Tags: TAGS
-   ID: [ID retourné par rekall add]
+   ID: [ID retourné]
+
+🔗 Liens créés : X (si applicable)
 ```
 
 ## Exemple Complet
-
-Si la conversation contenait la résolution d'un bug d'import circulaire :
 
 ```bash
 echo "## Problème
 Import circulaire entre models.py et services.py causant ImportError.
 
 ## Solution
-Déplacer les types partagés dans types/shared.ts pour casser la dépendance.
+Déplacer les types partagés dans types/shared.ts.
 
 ## Code
 \\`\\`\\`python
-# Avant (circulaire)
-from models import User  # dans services.py
-from services import get_user  # dans models.py
-
 # Après (types partagés)
-from types.shared import UserType  # dans les deux
+from types.shared import UserType
 \\`\\`\\`
 
 ## Pourquoi
-Les imports circulaires se produisent quand deux modules s'importent mutuellement. La solution est d'extraire les types/interfaces partagés dans un module tiers." | rekall add bug "Fix import circulaire Python" -p mon-projet -t python,import,architecture -c 3
+Casse la dépendance circulaire." | rekall add bug "Fix import circulaire Python" -p mon-projet -t python,import,architecture -m episodic -c 3
 ```
 
 ## Commandes Utiles
 
-- `rekall search "query"` - Chercher dans la base de connaissances
-- `rekall add <type> "titre"` - Ajouter une entrée
-- `rekall show <id>` - Afficher une entrée
-- `rekall browse` - Parcourir toutes les entrées
-- `rekall export backup.rekall.zip` - Exporter la base
-- `rekall import backup.rekall.zip` - Importer une archive
+```bash
+# Recherche et consultation
+rekall search "query"                    # Full-text
+rekall search "q" --memory-type semantic # Par type mémoire
+rekall show <id>                         # Détails avec liens
+
+# Capture
+rekall add <type> "titre" -m episodic    # Ajouter épisodique
+rekall add pattern "titre" -m semantic   # Ajouter sémantique
+
+# Liens
+rekall link ID1 ID2 --type related       # Créer lien
+rekall related <id>                      # Voir liens
+
+# Généralisation (si 3+ entrées similaires)
+rekall generalize ID1 ID2 ID3            # Créer pattern sémantique
+```
 
 ---
 
-**IMPORTANT** : Cette commande `/rekall.save` est pour les captures MANUELLES. Utilise-la quand tu veux sauvegarder une connaissance issue de la conversation.
+**IMPORTANT** : `/rekall.save` est pour les captures MANUELLES. Pense à proposer des liens avec les entrées existantes !
 '''
 
-    if global_install:
-        # Global: ~/.claude/commands/
-        claude_dir = Path.home() / ".claude" / "commands"
-    else:
-        # Local: project/.claude/commands/
-        claude_dir = base_path / ".claude" / "commands"
+    rekall_save_path = claude_dir / "rekall.save.md"
+    rekall_save_path.write_text(content)
 
-    claude_dir.mkdir(parents=True, exist_ok=True)
-    target = claude_dir / "rekall.save.md"
-    target.write_text(content)
-    return target
+    # Return main skill path
+    return rekall_skill_path
 
 
 @register("copilot", "GitHub Copilot instructions", ".github/copilot-instructions.md", None)
@@ -647,65 +688,299 @@ When working on this project:
 # Speckit Integration (Complex - multiple files)
 # =============================================================================
 
-REKALL_SPECKIT_SKILL = '''# Rekall - Integration Speckit
+REKALL_SKILL = '''# Rekall - Memoire Developpeur Cognitive
 
-Ce fichier contient les workflows d'integration Rekall pour les commandes Speckit.
-Invoque `/rekall.speckit` avant les phases de planification ou apres implementation.
+Ce fichier contient les instructions pour utiliser Rekall, le systeme de memoire persistante cross-projets avec support de memoire cognitive.
 
-## Quand utiliser Rekall avec Speckit
+## Principe
 
-| Phase Speckit | Action Rekall | Commande |
-|---------------|---------------|----------|
-| `/speckit.specify` | Chercher decisions/patterns similaires | `rekall search "FEATURE"` |
-| `/speckit.plan` | Consulter patterns architecturaux | `rekall search "architecture"` |
-| `/speckit.tasks` | Estimer complexite avec bugs connus | `rekall search "TECHNOS"` |
-| `/speckit.implement` | Consulter pitfalls projet | `rekall search "PROJET" --type pitfall` |
-| `/speckit.hotfix` | Chercher bugs similaires | `rekall search "BUG"` |
-| Fin de session | Capturer connaissances | `rekall add TYPE "TITRE"` |
+- **Consulter AVANT** d'agir - chercher les connaissances existantes
+- **Capturer APRES** avoir resolu - documenter les solutions
+- **Lier** les connaissances - construire un graphe de savoir
+- **Generaliser** les patterns - transformer l'episodique en semantique
 
 ---
 
-## 1. Consultation Pre-Implementation
+## 1. Consultation Automatique (OBLIGATOIRE)
 
-**AVANT de commencer une feature/hotfix**, chercher dans Rekall :
+**AVANT de commencer** tout bug fix, feature ou refactor, tu DOIS consulter Rekall :
+
+| Contexte detecte | Commande Rekall |
+|------------------|-----------------|
+| Bug fix demande | `rekall search "bug KEYWORDS" --json --limit 5` |
+| Feature/refactor | `rekall search "pattern KEYWORDS" --json --limit 5` |
+| Choix technique | `rekall search "decision KEYWORDS" --json --limit 5` |
+| Configuration | `rekall search "config KEYWORDS" --json --limit 5` |
+
+### Extraction des Keywords
+
+Extrais de la demande utilisateur :
+- Technologies mentionnees (Python, React, SQLite...)
+- Noms de fichiers/modules
+- Descriptions d'erreur
+- Concepts techniques
+
+### Architecture Deux Audiences
+
+Tu recois des donnees JSON completes pour raisonner, puis tu presentes un resume lisible a l'humain.
+
+```
+Rekall CLI (--json) → Toi (logique) → Humain (lecture)
+```
+
+### Format JSON Recu (pour ton analyse)
+
+```json
+{
+  "query": "auth timeout",
+  "results": [{
+    "id": "01HXYZ...",
+    "type": "bug",
+    "title": "Timeout auth API",
+    "content": "## Probleme\\nTimeout 5s insuffisant...",
+    "tags": ["auth", "api", "timeout"],
+    "project": "backend-api",
+    "confidence": 4,
+    "consolidation_score": 0.89,
+    "access_count": 12,
+    "last_accessed": "2025-12-07",
+    "relevance_score": 0.85,
+    "links": {
+      "outgoing": [{"target_id": "01HABC", "type": "related"}],
+      "incoming": []
+    }
+  }],
+  "total_count": 3,
+  "context_matches": {"project": true, "tags": ["auth"]}
+}
+```
+
+### Format de Presentation a l'Humain
+
+**Si resultats trouves** - Utilise des citations inline :
+
+```
+🧠 Rekall: 3 connaissances pertinentes
+
+D'apres « Timeout auth API » [1], le timeout par defaut de 5s est
+insuffisant en production. La solution recommandee selon
+« Pattern retry backoff » [2] est d'implementer un retry exponentiel.
+
+---
+References:
+[1] 01HXYZ - bug - Timeout auth API
+[2] 01HABC - pattern - Pattern retry backoff
+[3] 01HDEF - config - Config timeout services
+```
+
+**Si aucun resultat :**
+
+```
+🧠 Rekall: Aucune connaissance trouvee pour "nouveau-sujet"
+
+Je procede sans contexte historique.
+💡 Si cette tache produit des connaissances utiles, je proposerai
+   de les capturer a la fin.
+```
+
+### Score de Pertinence
+
+Priorise les resultats selon leur `relevance_score` :
+- `> 0.7` : Detail complet dans ta reponse
+- `0.4 - 0.7` : Resume seulement
+- `< 0.4` : Ne pas mentionner
+
+---
+
+## 2. Capture Automatique (Apres Resolution)
+
+**APRES avoir resolu** un probleme, propose de capturer :
+
+| Evenement | Type suggere |
+|-----------|--------------|
+| Bug resolu | `bug` |
+| Decision technique prise | `decision` |
+| Pattern decouvert/utilise | `pattern` |
+| Piege evite | `pitfall` |
+| Config trouvee | `config` |
+| Reference web utile | `reference` |
+
+### Generation Automatique (titre, tags, type)
+
+Extrais automatiquement depuis le contexte de la conversation :
+
+**Titre** (max 60 caracteres):
+- Format: "Verbe + Objet + Contexte"
+- Exemples: "Fix timeout auth API Python", "Pattern retry avec backoff"
+
+**Tags** (2-5 tags en kebab-case):
+- Technologies: `python`, `react`, `sqlite`
+- Concepts: `auth`, `cache`, `async`
+- Fichiers: nom du module concerne
+
+**Type**: Deduis selon l'evenement (voir tableau ci-dessus)
+
+**Memory Type**:
+- `episodic` (defaut): Evenement specifique, bug particulier
+- `semantic`: Pattern reutilisable, best practice generale
+
+### Format de Proposition
+
+```
+💾 Connaissance acquise detectee
+
+Je propose de sauvegarder dans Rekall :
+
+**Titre**: Fix timeout auth API - augmenter a 30s
+**Type**: bug
+**Tags**: auth, api, timeout, python
+**Memory**: episodic
+**Confiance**: 4/5
+
+Contenu suggere:
+---
+## Probleme
+Timeout de 5s insuffisant pour l'auth API en production.
+
+## Solution
+Augmenter le timeout a 30s dans config.py ligne 42.
+
+## Contexte
+Fichier: `src/auth/client.py`
+Commit: abc1234
+---
+
+Voulez-vous :
+1. ✅ Sauvegarder tel quel
+2. ✏️ Modifier avant sauvegarde
+3. ❌ Ne pas sauvegarder
+```
+
+### Execution de la Capture
 
 ```bash
-rekall search "NOM_PROJET" --limit 10
-rekall search "TECHNOS" --type pattern --limit 5
-rekall search "NOM_PROJET" --type pitfall,bug --limit 5
+echo "CONTENU_MARKDOWN" | rekall add TYPE "TITRE" \\
+  -p PROJET \\
+  -t TAGS \\
+  --memory-type episodic \\
+  -c CONFIANCE
+```
+
+### Regles de Capture
+
+1. **Proposer UNE SEULE fois** - Si l'utilisateur refuse (option 3), ne pas re-proposer dans la meme session
+2. **Verifier avant** - Chercher si une entree similaire existe deja :
+   ```bash
+   rekall search "KEYWORDS" --limit 3
+   ```
+3. **Ne pas capturer le trivial** - Questions simples, typos, commandes basiques
+4. **Confiance par defaut**: 3/5 (ajuster selon la source)
+
+---
+
+## 3. Liens et Knowledge Graph
+
+Apres creation d'une entree, propose de la lier si similaires existent :
+
+```
+🔗 Entrees potentiellement liees detectees
+
+L'entree que vous venez de creer pourrait etre liee a :
+
+1. [type] "Titre" (ID_COURT)
+   → Similarite: X% (raison)
+
+Voulez-vous creer des liens ?
+- [1] Lier comme "related"
+- [2] Lier comme "derived_from"
+- [3] Ignorer
+```
+
+### Types de Liens
+
+| Type | Usage |
+|------|-------|
+| `related` | Connexion thematique |
+| `supersedes` | Remplace une entree obsolete |
+| `derived_from` | Generalise depuis episodiques |
+| `contradicts` | Information conflictuelle |
+
+```bash
+rekall link SOURCE_ID TARGET_ID --type TYPE
+rekall related ENTRY_ID  # Voir les liens
 ```
 
 ---
 
-## 2. Capture Post-Implementation
+## 4. Memory Types
 
-**APRES avoir termine une tache**, capturer les connaissances reusables :
+| Type | Usage |
+|------|-------|
+| `episodic` | Evenement specifique (bug, incident) - defaut |
+| `semantic` | Concept general (pattern, best practice) |
 
-| Type | Quand l'utiliser |
-|------|------------------|
-| `bug` | Bug resolu, erreur corrigee |
-| `pattern` | Code reutilisable, best practice |
-| `decision` | Choix architectural, trade-off |
-| `pitfall` | Piege a eviter, anti-pattern |
-| `config` | Configuration technique |
-| `reference` | Documentation, lien utile |
+### Generalisation
 
-```bash
-echo "## Probleme\\n...\\n## Solution\\n..." | rekall add bug "Fix: description" -p PROJET -t tags
+Si 3+ entrees episodiques similaires :
+
+```
+💡 Opportunite de generalisation
+
+Vous avez 3 entrees episodiques similaires sur "SUJET":
+- ID1 "Titre 1"
+- ID2 "Titre 2"
+- ID3 "Titre 3"
+
+Voulez-vous generaliser en pattern semantique ?
+→ `rekall generalize ID1 ID2 ID3`
 ```
 
 ---
 
-## 3. Commandes Rekall
+## 5. Commandes Rekall
 
 ```bash
-rekall search "query"           # Recherche full-text
-rekall search "q" --type bug    # Filtrer par type
-rekall add <type> "titre"       # Ajouter (stdin pour contenu)
-rekall show <id>                # Afficher details
-rekall browse                   # Parcourir les entrees
-rekall export backup.rekall.zip # Exporter archive
+# Recherche
+rekall search "query"                    # Full-text
+rekall search "q" --type bug             # Par type
+rekall search "q" --memory-type semantic # Par memory type
+
+# Ajout
+rekall add <type> "titre"                # Ajouter
+rekall add pattern "titre" --memory-type semantic  # Semantique
+
+# Liens
+rekall link ID1 ID2 --type related       # Creer lien
+rekall unlink ID1 ID2                    # Supprimer lien
+rekall related ID                        # Voir liens
+
+# Tracking
+rekall stale                             # Entrees non consultees
+rekall review                            # Session de revision
+
+# General
+rekall show <id>                         # Details
+rekall browse                            # Parcourir
+rekall export backup.rekall.zip          # Exporter
 ```
+
+---
+
+## 6. Regles de Comportement
+
+### Priorites
+
+1. **Consultation AVANT action** - Toujours chercher avant de proposer
+2. **Citation des sources** - Mentionner les IDs Rekall utilises
+3. **Capture NON intrusive** - Proposer, ne jamais forcer
+4. **Liens suggeres** - Proposer, ne jamais creer sans confirmation
+
+### Limitations
+
+- Ne PAS capturer les conversations triviales
+- Ne PAS consulter pour les questions non-techniques
+- Ne PAS creer de liens sans confirmation utilisateur
+- Respecter les refus de capture (ne pas re-proposer meme session)
 '''
 
 ARTICLE_99_CONTENT = '''
@@ -713,37 +988,49 @@ ARTICLE_99_CONTENT = '''
 
 ## Memoire Developpeur Persistante
 
-### XCIX. Rekall - Capture de Connaissances (OPTIONNEL)
+### XCIX. Rekall - Memoire Cognitive (OPTIONNEL)
 
-**Rekall** est un systeme de memoire persistante cross-projets.
+**Rekall** est un systeme de memoire cognitive persistante cross-projets avec knowledge graph.
 
 #### 1. Principe
 
-- Rechercher des solutions deja documentees avant de coder
-- Capturer les bugs resolus, patterns decouverts, decisions prises
-- Partager les connaissances entre projets
+- **Consulter AVANT** d'agir - chercher les connaissances existantes
+- **Capturer APRES** avoir resolu - documenter les solutions
+- **Lier** les connaissances - construire un graphe de savoir
+- **Reviser** regulierement - maintenir la memoire active
 
-#### 2. Declencheurs de Capture
+#### 2. Types de Memoire
 
-| Evenement | Type | Commande |
-|-----------|------|----------|
-| Bug resolu | `bug` | `rekall add bug "Titre" -p Projet -t tags` |
-| Pattern reutilisable | `pattern` | `rekall add pattern "Titre" -p Projet -t tags` |
-| Decision technique | `decision` | `rekall add decision "Titre" -p Projet -t tags` |
-| Piege a eviter | `pitfall` | `rekall add pitfall "Titre" -p Projet -t tags` |
+| Type | Usage |
+|------|-------|
+| `episodic` | Evenement specifique (bug, incident) - defaut |
+| `semantic` | Concept general (pattern, best practice) |
 
-#### 3. Commandes
+#### 3. Commandes Principales
 
 | Commande | Usage |
 |----------|-------|
-| `rekall search "query"` | Rechercher |
-| `rekall add <type> "titre"` | Ajouter |
-| `rekall show <id>` | Afficher |
-| `rekall browse` | Parcourir |
+| `rekall search "query"` | Rechercher (--memory-type pour filtrer) |
+| `rekall add <type> "titre"` | Ajouter (-m episodic/semantic) |
+| `rekall show <id>` | Afficher avec liens et consolidation |
+| `rekall link ID1 ID2` | Creer un lien (--type related/supersedes/derived_from/contradicts) |
+| `rekall related <id>` | Voir les entrees liees |
+| `rekall stale` | Entrees non consultees >30j |
+| `rekall review` | Session de revision espacee (SM-2) |
+| `rekall generalize ID1 ID2` | Creer pattern semantique depuis episodiques |
 
-#### 4. Integration Speckit
+#### 4. Types de Liens
 
-Voir `/rekall.speckit` pour les instructions detaillees.
+| Type | Usage |
+|------|-------|
+| `related` | Connexion thematique |
+| `supersedes` | Remplace une entree obsolete |
+| `derived_from` | Generalise depuis episodiques |
+| `contradicts` | Information conflictuelle |
+
+#### 5. Integration Speckit
+
+Voir `/rekall` pour les instructions detaillees de consultation automatique et capture.
 
 '''
 
@@ -764,10 +1051,14 @@ def _make_rekall_section(search_term: str, types: str) -> str:
     """Generate a Rekall consultation section."""
     return f'''### 0. Consultation Rekall (OPTIONNEL)
 
-**Voir `/rekall.speckit` pour les instructions completes.**
+**Voir `/rekall` pour les instructions completes.**
 
 ```bash
+# Recherche par type
 rekall search "{search_term}" --type {types} --limit 5
+
+# Recherche par memoire (patterns consolides)
+rekall search "{search_term}" --memory-type semantic --limit 3
 ```
 
 '''
@@ -775,28 +1066,22 @@ rekall search "{search_term}" --type {types} --limit 5
 
 @register("speckit", "Speckit workflow integration", "~/.claude/commands/ + ~/.speckit/constitution.md", None)
 def install_speckit(base_path: Path, global_install: bool = False) -> Path:
-    """Install Speckit integration (skill + article + patches).
+    """Install Speckit integration (article + patches).
 
     This integration:
-    1. Creates ~/.claude/commands/rekall.speckit.md
-    2. Adds Article XCIX (99) to ~/.speckit/constitution.md
-    3. Patches Speckit command files with Rekall consultation sections
+    1. Adds Article XCIX (99) to ~/.speckit/constitution.md
+    2. Patches Speckit command files with Rekall consultation sections
+
+    Note: The /rekall skill is installed via the Claude Code IDE integration.
 
     Returns:
-        Path to the main skill file created
+        Path to the constitution file (or commands dir if no constitution)
     """
-    import re
-
-    results = {"skill": None, "article": False, "patched": [], "skipped": []}
-
-    # 1. Install rekall.speckit.md skill
+    results = {"article": False, "patched": [], "skipped": []}
     claude_dir = Path.home() / ".claude" / "commands"
     claude_dir.mkdir(parents=True, exist_ok=True)
-    skill_path = claude_dir / "rekall.speckit.md"
-    skill_path.write_text(REKALL_SPECKIT_SKILL)
-    results["skill"] = skill_path
 
-    # 2. Add Article 99 to constitution
+    # 1. Add Article 99 to constitution
     constitution_path = Path.home() / ".speckit" / "constitution.md"
     if constitution_path.exists():
         content = constitution_path.read_text()
@@ -805,7 +1090,7 @@ def install_speckit(base_path: Path, global_install: bool = False) -> Path:
             constitution_path.write_text(new_content)
             results["article"] = True
 
-    # 3. Patch Speckit command files
+    # 2. Patch Speckit command files
     for filename, (search_term, types, insert_after) in SPECKIT_PATCHES.items():
         filepath = claude_dir / filename
         if not filepath.exists():
@@ -829,14 +1114,13 @@ def install_speckit(base_path: Path, global_install: bool = False) -> Path:
             results["skipped"].append(filename)
 
     # Print summary
-    print(f"Rekall-Speckit integration installed:")
-    print(f"  - Skill: {results['skill']}")
+    print("Rekall-Speckit integration installed:")
     print(f"  - Article 99: {'Added' if results['article'] else 'Skipped (exists or no constitution)'}")
     print(f"  - Patched: {', '.join(results['patched']) or 'None'}")
     if results["skipped"]:
         print(f"  - Skipped: {', '.join(results['skipped'])}")
 
-    return skill_path
+    return constitution_path if constitution_path.exists() else claude_dir
 
 
 def is_speckit_installed() -> bool:
@@ -857,9 +1141,6 @@ def get_speckit_status() -> dict:
     """
     claude_dir = Path.home() / ".claude" / "commands"
     status = {}
-
-    # Check skill file
-    status["skill"] = (claude_dir / "rekall.speckit.md").exists()
 
     # Check constitution article
     constitution_path = Path.home() / ".speckit" / "constitution.md"
@@ -894,11 +1175,7 @@ def get_speckit_preview(components: list[str]) -> dict[str, str]:
     claude_dir = Path.home() / ".claude" / "commands"
 
     for component in components:
-        if component == "skill":
-            # Show the skill file content
-            previews["skill"] = f"[NEW FILE] ~/.claude/commands/rekall.speckit.md\n{'─' * 50}\n{REKALL_SPECKIT_SKILL[:500]}...\n(truncated, {len(REKALL_SPECKIT_SKILL)} chars total)"
-
-        elif component == "article":
+        if component == "article":
             # Show the article content
             previews["article"] = f"[APPEND TO] ~/.speckit/constitution.md\n{'─' * 50}\n{ARTICLE_99_CONTENT}"
 
@@ -941,23 +1218,16 @@ def get_speckit_uninstall_preview(components: list[str]) -> dict[str, str]:
     claude_dir = Path.home() / ".claude" / "commands"
 
     for component in components:
-        if component == "skill":
-            skill_path = claude_dir / "rekall.speckit.md"
-            if skill_path.exists():
-                previews["skill"] = f"[DELETE] ~/.claude/commands/rekall.speckit.md"
-            else:
-                previews["skill"] = f"[SKIP] skill - not installed"
-
-        elif component == "article":
+        if component == "article":
             constitution_path = Path.home() / ".speckit" / "constitution.md"
             if constitution_path.exists():
                 content = constitution_path.read_text()
                 if "XCIX. Rekall" in content:
                     previews["article"] = f"[REMOVE FROM] ~/.speckit/constitution.md\n{'─' * 50}\n[-] Article XCIX (Rekall - Capture de Connaissances)"
                 else:
-                    previews["article"] = f"[SKIP] article - not in constitution"
+                    previews["article"] = "[SKIP] article - not in constitution"
             else:
-                previews["article"] = f"[SKIP] article - constitution not found"
+                previews["article"] = "[SKIP] article - constitution not found"
 
         elif component in SPECKIT_PATCHES:
             filepath = claude_dir / component
@@ -990,20 +1260,13 @@ def install_speckit_partial(components: list[str]) -> dict:
     Returns:
         Dict with installation results
     """
-    import re
-
     results = {"installed": [], "skipped": [], "errors": []}
     claude_dir = Path.home() / ".claude" / "commands"
     claude_dir.mkdir(parents=True, exist_ok=True)
 
     for component in components:
         try:
-            if component == "skill":
-                skill_path = claude_dir / "rekall.speckit.md"
-                skill_path.write_text(REKALL_SPECKIT_SKILL)
-                results["installed"].append("skill")
-
-            elif component == "article":
+            if component == "article":
                 constitution_path = Path.home() / ".speckit" / "constitution.md"
                 if constitution_path.exists():
                     content = constitution_path.read_text()
@@ -1058,15 +1321,7 @@ def uninstall_speckit_partial(components: list[str]) -> dict:
 
     for component in components:
         try:
-            if component == "skill":
-                skill_path = claude_dir / "rekall.speckit.md"
-                if skill_path.exists():
-                    skill_path.unlink()
-                    results["removed"].append("skill")
-                else:
-                    results["skipped"].append("skill (not installed)")
-
-            elif component == "article":
+            if component == "article":
                 constitution_path = Path.home() / ".speckit" / "constitution.md"
                 if constitution_path.exists():
                     content = constitution_path.read_text()
@@ -1130,17 +1385,11 @@ def uninstall_speckit() -> dict:
     """
     import re
 
-    results = {"skill_removed": False, "article_removed": False, "cleaned": []}
+    results = {"article_removed": False, "cleaned": []}
 
     claude_dir = Path.home() / ".claude" / "commands"
 
-    # 1. Remove skill file
-    skill_path = claude_dir / "rekall.speckit.md"
-    if skill_path.exists():
-        skill_path.unlink()
-        results["skill_removed"] = True
-
-    # 2. Remove Article XCIX from constitution
+    # 1. Remove Article XCIX from constitution
     constitution_path = Path.home() / ".speckit" / "constitution.md"
     if constitution_path.exists():
         content = constitution_path.read_text()

@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import asdict
 from datetime import datetime
-from typing import Optional
 
 from rekall.models import Entry
 
@@ -43,7 +41,7 @@ def export_markdown(entries: list[Entry]) -> str:
     """Export entries to markdown format."""
     lines = [
         "# Rekall Knowledge Export",
-        f"",
+        "",
         f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
         f"Total entries: {len(entries)}",
         "",
@@ -74,7 +72,7 @@ def export_markdown(entries: list[Entry]) -> str:
                 lines.append(f"- **Tags**: {', '.join(entry.tags)}")
             lines.append(f"- **Created**: {entry.created_at.strftime('%Y-%m-%d')}")
             if entry.status == "obsolete":
-                lines.append(f"- **Status**: OBSOLETE")
+                lines.append("- **Status**: OBSOLETE")
                 if entry.superseded_by:
                     lines.append(f"- **Replaced by**: {entry.superseded_by}")
             lines.append("")

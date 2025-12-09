@@ -16,14 +16,13 @@ Priority order (first match wins):
 from __future__ import annotations
 
 import os
+import platform
 import shutil
 import sys
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Optional
-
-import platform
 
 # On macOS, force XDG-style paths instead of ~/Library/
 # This is per spec: "XDG uniquement sur Mac, identique à Linux"

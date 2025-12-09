@@ -2,25 +2,33 @@
 
 from __future__ import annotations
 
-from typing import Optional, List, Callable
-from rich.console import Console
-from rich.panel import Panel
-from rich.table import Table
+from pathlib import Path
+from typing import List, Optional
+
 from rich import box
+from rich.console import Console
+from rich.table import Table
 from rich.text import Text
-
-from textual.app import App, ComposeResult
-from textual.widgets import Static, ListItem, ListView, Footer, Header, DataTable, RichLog, Input, Markdown
-from textual.containers import Container, Vertical, Horizontal, VerticalScroll
-from textual.binding import Binding
-from textual.reactive import reactive
 from textual import events
+from textual.app import App, ComposeResult
+from textual.binding import Binding
+from textual.containers import Container, VerticalScroll
+from textual.widgets import (
+    DataTable,
+    Footer,
+    Input,
+    ListItem,
+    ListView,
+    Markdown,
+    SelectionList,
+    Static,
+)
+from textual.widgets.selection_list import Selection
 
-from rekall import __version__
-from rekall.config import get_config, set_config, Config
+from rekall.config import get_config
 from rekall.db import Database
-from rekall.models import Entry, VALID_TYPES, generate_ulid
-from rekall.i18n import t, get_lang, set_lang, LANGUAGES, load_lang_preference
+from rekall.i18n import LANGUAGES, get_lang, load_lang_preference, set_lang, t
+from rekall.models import VALID_TYPES, Entry, generate_ulid
 
 console = Console()
 
@@ -29,18 +37,120 @@ console = Console()
 # Textual-based Menu App (cross-platform, clean alternate screen)
 # =============================================================================
 
+# Banner ASCII art
+BANNER_LINES = [
+    "        ██████╗ ███████╗██╗  ██╗ █████╗ ██╗     ██╗     ",
+    "        ██╔══██╗██╔════╝██║ ██╔╝██╔══██╗██║     ██║     ",
+    "        ██████╔╝█████╗  █████╔╝ ███████║██║     ██║     ",
+    "        ██╔══██╗██╔══╝  ██╔═██╗ ██╔══██║██║     ██║     ",
+    "        ██║  ██║███████╗██║  ██╗██║  ██║███████╗███████╗",
+    "        ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚══════╝",
+]
+
+BANNER_SUBTITLE = "Developer Knowledge Management System"
+BANNER_QUOTE = "Get your ass to Mars. Quaid... crush those bugs"
+
+
+def create_banner_container() -> Container:
+    """Create the Rekall banner with gradient effect."""
+    deep_blue = (67, 103, 205)
+    light_blue = (147, 181, 247)
+
+    gradient_lines = []
+    for line in BANNER_LINES:
+        content_start = len(line) - len(line.lstrip())
+        content = line[content_start:]
+        if not content:
+            gradient_lines.append(line)
+            continue
+
+        result = line[:content_start]
+        n = len(content)
+
+        for i, char in enumerate(content):
+            if char == ' ':
+                result += char
+                continue
+            t_val = i / max(n - 1, 1)
+            r = int(deep_blue[0] + (light_blue[0] - deep_blue[0]) * t_val)
+            g = int(deep_blue[1] + (light_blue[1] - deep_blue[1]) * t_val)
+            b = int(deep_blue[2] + (light_blue[2] - deep_blue[2]) * t_val)
+            result += f"[bold rgb({r},{g},{b})]{char}[/]"
+
+        gradient_lines.append(result)
+
+    gradient_banner = "\n".join(gradient_lines)
+    indent = "        "
+
+    return Container(
+        Static(gradient_banner, id="banner-text", markup=True),
+        Static(f"{indent}[bold white]{BANNER_SUBTITLE}[/]", id="subtitle", markup=True),
+        Static(f'{indent}[dim]"{BANNER_QUOTE}"[/]', id="quote", markup=True),
+        id="banner"
+    )
+
+
+# Theme colors (from banner gradient)
+THEME_BLUE_DEEP = "#4367CD"    # rgb(67, 103, 205)
+THEME_BLUE_LIGHT = "#93B5F7"   # rgb(147, 181, 247)
+
+# Common CSS for banner and theme
+BANNER_CSS = """
+    #banner {
+        height: auto;
+        padding: 1 0;
+    }
+
+    #banner-text {
+        text-align: left;
+        width: 100%;
+    }
+
+    #subtitle {
+        text-align: left;
+        color: $text;
+        margin-top: 0;
+    }
+
+    #quote {
+        text-align: left;
+        color: $text-muted;
+        margin-bottom: 0;
+    }
+
+    /* Theme: Use banner blue instead of yellow/warning */
+    Footer {
+        background: $surface-darken-1;
+    }
+
+    FooterKey {
+        color: #93B5F7;
+        background: transparent;
+    }
+
+    .footer-key--key {
+        color: #4367CD;
+        background: rgba(147, 181, 247, 0.2);
+    }
+
+    .footer-key--description {
+        color: #93B5F7;
+    }
+"""
+
 
 class MenuItem(ListItem):
     """A menu item with label and description."""
 
-    def __init__(self, label: str, description: str, action_key: str) -> None:
+    def __init__(self, label: str, description: str, action_key: str, label_width: int = 15) -> None:
         super().__init__()
         self.label = label
         self.description = description
         self.action_key = action_key
+        self.label_width = label_width
 
     def compose(self) -> ComposeResult:
-        yield Static(f"{self.label:<15} [dim]{self.description}[/dim]")
+        yield Static(f"{self.label:<{self.label_width}} [dim]{self.description}[/dim]")
 
 
 class MenuListView(ListView):
@@ -65,7 +175,11 @@ class MenuListView(ListView):
         if self.highlighted_child is not None:
             item = self.highlighted_child
             if isinstance(item, MenuItem):
-                self.app.exit(result=item.action_key)
+                # Convert action_key to int for index-based results
+                try:
+                    self.app.exit(result=int(item.action_key))
+                except ValueError:
+                    self.app.exit(result=item.action_key)
 
 
 class RekallMenuApp(App):
@@ -83,9 +197,9 @@ class RekallMenuApp(App):
         height: auto;
         padding: 1 2;
         margin: 1 2;
-        background: #2d4a3e;
-        border: thick #3d6a5e;
-        color: #7fcea0;
+        background: #1e2a4a;
+        border: thick #4367CD;
+        color: #93B5F7;
         text-style: bold;
         display: none;
         layer: notification;
@@ -138,6 +252,20 @@ class RekallMenuApp(App):
 
     Footer {
         background: $surface-darken-1;
+    }
+
+    FooterKey {
+        color: #93B5F7;
+        background: transparent;
+    }
+
+    .footer-key--key {
+        color: #4367CD;
+        background: rgba(147, 181, 247, 0.2);
+    }
+
+    .footer-key--description {
+        color: #93B5F7;
     }
     """
 
@@ -194,8 +322,11 @@ class RekallMenuApp(App):
             id="banner"
         )
 
+        # Calculate max label width for alignment
+        max_label_width = max(len(label) for _, label, _ in self.menu_items) + 2
+
         yield MenuListView(
-            *[MenuItem(label, desc, key) for key, label, desc in self.menu_items]
+            *[MenuItem(label, desc, key, max_label_width) for key, label, desc in self.menu_items]
         )
 
         yield Static("", id="left-notify")
@@ -226,7 +357,7 @@ class RekallMenuApp(App):
 
 
 class SimpleMenuApp(App):
-    """Simple menu app for sub-menus (without banner)."""
+    """Simple menu app for sub-menus with banner."""
 
     CSS = """
     Screen {
@@ -240,9 +371,9 @@ class SimpleMenuApp(App):
         height: auto;
         padding: 1 2;
         margin: 1 2;
-        background: #2d4a3e;
-        border: thick #3d6a5e;
-        color: #7fcea0;
+        background: #1e2a4a;
+        border: thick #4367CD;
+        color: #93B5F7;
         text-style: bold;
         display: none;
         layer: notification;
@@ -272,7 +403,7 @@ class SimpleMenuApp(App):
     ListView:focus > ListItem.--highlight {
         background: $primary 40%;
     }
-    """
+    """ + BANNER_CSS
 
     BINDINGS = [
         Binding("escape", "cancel", "Back", show=True),
@@ -286,15 +417,24 @@ class SimpleMenuApp(App):
         self.result = None
 
     def compose(self) -> ComposeResult:
+        yield create_banner_container()
+
         if self.title_text:
             yield Static(self.title_text, id="title")
 
         # Build menu items, skipping separators
         menu_items = []
+        valid_items = []
         for i, item in enumerate(self.items):
             if item.strip() and all(c in '─-═' for c in item.strip()):
                 continue
-            menu_items.append(MenuItem(item, "", str(i)))
+            valid_items.append((i, item))
+
+        # Calculate max label width for alignment
+        max_label_width = max(len(item) for _, item in valid_items) + 2 if valid_items else 15
+
+        for i, item in valid_items:
+            menu_items.append(MenuItem(item, "", str(i), max_label_width))
 
         yield MenuListView(*menu_items)
 
@@ -325,6 +465,104 @@ class SimpleMenuApp(App):
             self.exit(result=None)
 
 
+class MultiSelectApp(App):
+    """Multi-select menu app using SelectionList with banner."""
+
+    CSS = """
+    Screen {
+        background: $surface;
+    }
+
+    #left-notify {
+        dock: bottom;
+        width: auto;
+        max-width: 60;
+        height: auto;
+        padding: 1 2;
+        margin: 1 2;
+        background: #1e2a4a;
+        border: thick #4367CD;
+        color: #93B5F7;
+        text-style: bold;
+        display: none;
+        layer: notification;
+    }
+
+    #left-notify.visible {
+        display: block;
+    }
+
+    #title {
+        text-align: center;
+        padding: 1;
+        color: $primary;
+        text-style: bold;
+    }
+
+    #hint {
+        text-align: center;
+        padding: 0 1;
+        color: $text-muted;
+    }
+
+    SelectionList {
+        height: auto;
+        max-height: 15;
+        margin: 1 2;
+        background: transparent;
+        border: solid $primary;
+    }
+    """ + BANNER_CSS
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Back", show=True),
+        Binding("enter", "confirm", "Confirm", show=True),
+    ]
+
+    def __init__(self, title: str, items: List[tuple], hint: str = ""):
+        """
+        Args:
+            title: Menu title
+            items: List of (value, label) tuples
+            hint: Optional hint text
+        """
+        super().__init__()
+        self.title_text = title
+        self.items = items  # [(value, label), ...]
+        self.hint = hint
+        self.result: Optional[List] = None
+
+    def compose(self) -> ComposeResult:
+        yield create_banner_container()
+
+        if self.title_text:
+            yield Static(self.title_text, id="title")
+
+        if self.hint:
+            yield Static(self.hint, id="hint")
+
+        selections = [Selection(label, value, False) for value, label in self.items]
+        yield SelectionList(*selections)
+
+        yield Static("", id="left-notify")
+        yield Footer()
+
+    def show_left_notify(self, message: str, timeout: float = 3.0) -> None:
+        """Show a notification on the left side."""
+        notify_widget = self.query_one("#left-notify", Static)
+        notify_widget.update(message)
+        notify_widget.add_class("visible")
+        self.set_timer(timeout, lambda: notify_widget.remove_class("visible"))
+
+    def action_cancel(self) -> None:
+        self.exit(result=None)
+
+    def action_confirm(self) -> None:
+        selection_list = self.query_one(SelectionList)
+        selected = list(selection_list.selected)
+        self.exit(result=selected if selected else None)
+
+
 class BrowseApp(App):
     """Textual app for browsing entries with DataTable and detail panel."""
 
@@ -340,9 +578,9 @@ class BrowseApp(App):
         height: auto;
         padding: 1 2;
         margin: 1 2;
-        background: #2d4a3e;
-        border: thick #3d6a5e;
-        color: #7fcea0;
+        background: #1e2a4a;
+        border: thick #4367CD;
+        color: #93B5F7;
         text-style: bold;
         display: none;
         layer: notification;
@@ -352,15 +590,90 @@ class BrowseApp(App):
         display: block;
     }
 
+    #legend-modal {
+        display: none;
+        layer: modal;
+        align: center middle;
+        width: 70;
+        height: auto;
+        max-height: 85%;
+        padding: 1 2;
+        background: #1e2a4a;
+        border: thick #4367CD;
+        color: #93B5F7;
+    }
+
+    #legend-modal.visible {
+        display: block;
+    }
+
+    #legend-title {
+        text-style: bold;
+        text-align: center;
+        margin-bottom: 1;
+    }
+
+    #legend-content {
+        color: $text;
+    }
+
+    #legend-hint {
+        text-align: center;
+        color: $text-muted;
+        margin-top: 1;
+    }
+
+    #graph-overlay {
+        display: none;
+        layer: modal;
+        width: 100%;
+        height: 100%;
+        align: center middle;
+        background: rgba(0, 0, 0, 0.5);
+    }
+
+    #graph-overlay.visible {
+        display: block;
+    }
+
+    #graph-modal {
+        width: 80;
+        height: auto;
+        max-height: 80%;
+        padding: 1 2;
+        background: #1e2a4a;
+        border: thick #4367CD;
+        color: #93B5F7;
+    }
+
+    #graph-title {
+        text-style: bold;
+        text-align: center;
+        margin-bottom: 1;
+    }
+
+    #graph-content {
+        color: $text;
+    }
+
+    #graph-scroll {
+        height: auto;
+        max-height: 20;
+    }
+
+    #graph-hint {
+        text-align: center;
+        color: $text-muted;
+        margin-top: 1;
+    }
+
     #browse-container {
         height: 100%;
     }
 
-    #header-bar {
-        height: 3;
-        padding: 1 2;
-        background: $primary-darken-2;
-        text-align: center;
+    #section-title {
+        padding: 0 2;
+        margin-bottom: 1;
     }
 
     #entries-table {
@@ -463,15 +776,17 @@ class BrowseApp(App):
     Footer {
         background: $surface-darken-1;
     }
-    """
+    """ + BANNER_CSS
 
     BINDINGS = [
-        Binding("escape", "quit", "Back", show=True),
+        Binding("escape", "quit_or_close", "Back", show=True),
         Binding("q", "quit", "Quit", show=True),
         Binding("enter", "select_entry", "View", show=True),
         Binding("e", "edit_entry", "Edit", show=True),
         Binding("d", "delete_entry", "Delete", show=True),
         Binding("slash", "search", "Search", show=True),
+        Binding("question_mark", "toggle_legend", "?", show=True),
+        Binding("space", "toggle_graph", "Graph", show=True),
     ]
 
     def __init__(self, entries: list, db):
@@ -485,8 +800,9 @@ class BrowseApp(App):
         self.current_query = ""
 
     def compose(self) -> ComposeResult:
+        yield create_banner_container()
+        yield Static(f"[dim]{t('menu.browse')} ({len(self.entries)} {t('browse.entries')})[/dim]", id="section-title")
         yield Container(
-            Static(f"[bold]REKALL[/bold] - {t('menu.browse')} ({len(self.entries)} {t('browse.entries')})", id="header-bar"),
             Container(
                 DataTable(id="entries-table"),
             ),
@@ -504,6 +820,26 @@ class BrowseApp(App):
             id="browse-container",
         )
         yield Static("", id="left-notify")
+        # Legend modal (hidden by default)
+        yield Container(
+            Static(t("browse.legend_title"), id="legend-title"),
+            Static(t("browse.legend_content"), id="legend-content"),
+            Static("[dim]? ou Esc pour fermer[/dim]", id="legend-hint"),
+            id="legend-modal",
+        )
+        # Graph modal with centered overlay
+        yield Container(
+            Container(
+                Static(t("browse.graph_title"), id="graph-title"),
+                VerticalScroll(
+                    Static("", id="graph-content"),
+                    id="graph-scroll",
+                ),
+                Static("[dim]Espace ou Esc pour fermer • Clic sur ID pour naviguer[/dim]", id="graph-hint"),
+                id="graph-modal",
+            ),
+            id="graph-overlay",
+        )
 
     def show_left_notify(self, message: str, timeout: float = 3.0) -> None:
         """Show a notification on the left side."""
@@ -516,6 +852,45 @@ class BrowseApp(App):
         """Override Ctrl+C behavior to show left notification."""
         self.show_left_notify("Ctrl+Q pour quitter", 3.0)
 
+    def action_toggle_legend(self) -> None:
+        """Toggle the legend modal visibility."""
+        legend = self.query_one("#legend-modal", Container)
+        legend.toggle_class("visible")
+
+    def action_toggle_graph(self) -> None:
+        """Toggle the graph modal visibility for selected entry."""
+        graph_overlay = self.query_one("#graph-overlay", Container)
+
+        if graph_overlay.has_class("visible"):
+            graph_overlay.remove_class("visible")
+        else:
+            # Generate graph for selected entry
+            if self.selected_entry:
+                graph_output = self.db.render_graph_ascii(
+                    self.selected_entry.id,
+                    max_depth=2,
+                    show_incoming=True,
+                    show_outgoing=True,
+                    make_clickable=True,
+                )
+                graph_content = self.query_one("#graph-content", Static)
+                graph_content.update(graph_output)
+                graph_overlay.add_class("visible")
+            else:
+                self.show_left_notify("Aucune entrée sélectionnée", 2.0)
+
+    def action_quit_or_close(self) -> None:
+        """Close modals if open, otherwise quit."""
+        legend = self.query_one("#legend-modal", Container)
+        graph_overlay = self.query_one("#graph-overlay", Container)
+
+        if legend.has_class("visible"):
+            legend.remove_class("visible")
+        elif graph_overlay.has_class("visible"):
+            graph_overlay.remove_class("visible")
+        else:
+            self.app.exit()
+
     def on_mount(self) -> None:
         """Populate the DataTable with entries."""
         table = self.query_one("#entries-table", DataTable)
@@ -525,8 +900,14 @@ class BrowseApp(App):
         # Add columns
         table.add_column(t("browse.type"), width=10, key="type")
         table.add_column(t("add.project"), width=12, key="project")
-        table.add_column(t("add.title"), width=40, key="title")
-        table.add_column(t("browse.preview"), key="preview")
+        table.add_column(t("add.title"), width=50, key="title")
+        table.add_column(t("browse.created"), width=18, key="created")
+        table.add_column(t("browse.updated"), width=18, key="updated")
+        table.add_column(t("add.confidence"), width=4, key="confidence")
+        table.add_column(t("browse.access"), width=6, key="access")
+        table.add_column(t("browse.score"), width=5, key="score")
+        table.add_column(t("browse.links_in"), width=3, key="links_in")
+        table.add_column(t("browse.links_out"), width=3, key="links_out")
 
         # Add rows
         self._populate_table()
@@ -572,18 +953,25 @@ class BrowseApp(App):
 
         for i, entry in enumerate(self.entries):
             project = entry.project or "—"
-            title = entry.title[:38] + "…" if len(entry.title) > 38 else entry.title
-            preview = self._get_content_preview(entry)
+            title = entry.title[:48] + "…" if len(entry.title) > 48 else entry.title
 
-            # Highlight search term in title and preview
+            # Highlight search term in title
             title = self._highlight_text(title)
-            preview = self._highlight_text(preview)
+
+            # Get link counts
+            links_in, links_out = self.db.count_links_by_direction(entry.id)
 
             table.add_row(
                 entry.type,
                 project[:10] + "…" if len(project) > 10 else project,
                 Text.from_markup(title),
-                Text.from_markup(preview),
+                entry.created_at.strftime("%Y-%m-%d %H:%M"),
+                entry.updated_at.strftime("%Y-%m-%d %H:%M"),
+                str(entry.confidence),
+                str(entry.access_count),
+                f"{entry.consolidation_score:.2f}",
+                str(links_in),
+                str(links_out),
                 key=str(i),
             )
 
@@ -608,13 +996,37 @@ class BrowseApp(App):
         highlighted_title = self._highlight_text(entry.title)
         title_widget.update(f"[bold cyan]{highlighted_title}[/bold cyan]")
 
-        # Meta info
+        # Meta info - comprehensive
         tags_str = ", ".join(entry.tags) if entry.tags else "—"
+        project_str = entry.project or "—"
+        created_str = entry.created_at.strftime("%Y-%m-%d %H:%M")
+        updated_str = entry.updated_at.strftime("%Y-%m-%d %H:%M")
+
+        # Get link counts
+        links_in, links_out = self.db.count_links_by_direction(entry.id)
+
+        # Consolidation score color
+        score = entry.consolidation_score
+        if score >= 0.7:
+            score_color = "green"
+        elif score >= 0.4:
+            score_color = "yellow"
+        else:
+            score_color = "red"
+
         meta_lines = [
-            f"[dim]ID:[/dim] {entry.id}  "
+            f"[dim]ID:[/dim] {entry.id}",
             f"[dim]{t('browse.type')}:[/dim] {entry.type}  "
             f"[dim]{t('browse.status')}:[/dim] {entry.status}  "
+            f"[dim]{t('add.project')}:[/dim] {project_str}  "
+            f"[dim]Memory:[/dim] {entry.memory_type}",
+            f"[dim]{t('browse.created')}:[/dim] {created_str}  "
+            f"[dim]{t('browse.updated')}:[/dim] {updated_str}",
             f"[dim]{t('browse.tags')}:[/dim] {tags_str}",
+            f"[dim]{t('add.confidence')}:[/dim] {entry.confidence}/5  "
+            f"[dim]{t('browse.access')}:[/dim] {entry.access_count}  "
+            f"[dim]{t('browse.score')}:[/dim] [{score_color}]{score:.2f}[/{score_color}]  "
+            f"[dim]Links:[/dim] ←{links_in} →{links_out}",
         ]
         meta_widget.update("\n".join(meta_lines))
 
@@ -783,9 +1195,9 @@ class ResearchApp(App):
         height: auto;
         padding: 1 2;
         margin: 1 2;
-        background: #2d4a3e;
-        border: thick #3d6a5e;
-        color: #7fcea0;
+        background: #1e2a4a;
+        border: thick #4367CD;
+        color: #93B5F7;
         text-style: bold;
         display: none;
         layer: notification;
@@ -799,11 +1211,9 @@ class ResearchApp(App):
         height: 100%;
     }
 
-    #header-bar {
-        height: 3;
-        padding: 1 2;
-        background: $primary-darken-2;
-        text-align: center;
+    #section-title {
+        padding: 0 2;
+        margin-bottom: 1;
     }
 
     #files-table {
@@ -874,7 +1284,7 @@ class ResearchApp(App):
     Footer {
         background: $surface-darken-1;
     }
-    """
+    """ + BANNER_CSS
 
     BINDINGS = [
         Binding("escape", "quit", "Back", show=True),
@@ -887,8 +1297,9 @@ class ResearchApp(App):
         self.selected_file = files[0] if files else None
 
     def compose(self) -> ComposeResult:
+        yield create_banner_container()
+        yield Static(f"[dim]{t('menu.research')} ({len(self.files)} {t('research.files')})[/dim]", id="section-title")
         yield Container(
-            Static(f"[bold]REKALL[/bold] - {t('menu.research')} ({len(self.files)} {t('research.files')})", id="header-bar"),
             DataTable(id="files-table"),
             VerticalScroll(
                 Markdown("", id="content-panel"),
@@ -950,97 +1361,783 @@ class ResearchApp(App):
         self.exit(result=None)
 
 
-class TerminalMenu:
-    """Cross-platform terminal menu using Textual.
+class IDEStatusApp(App):
+    """Textual app for IDE integration - select in table, action panel below."""
 
-    Drop-in replacement for simple-term-menu's TerminalMenu.
-    Uses Textual's alternate screen for clean exit (no scrollback pollution).
-    Works on Windows, macOS, and Linux.
-    """
+    CSS = """
+    Screen {
+        background: $surface;
+    }
 
-    def __init__(
-        self,
-        entries: List[str],
-        title: str = "",
-        menu_cursor: str = "► ",
-        menu_cursor_style: tuple = None,
-        menu_highlight_style: tuple = None,
-        **kwargs
-    ):
-        self.entries = entries
-        self.title = title
+    #left-notify {
+        dock: bottom;
+        width: auto;
+        max-width: 60;
+        height: auto;
+        padding: 1 2;
+        margin: 1 2;
+        background: #1e2a4a;
+        border: thick #4367CD;
+        color: #93B5F7;
+        text-style: bold;
+        display: none;
+        layer: notification;
+    }
 
-    def show(self) -> Optional[int]:
-        """Show the menu and return selected index, or None if cancelled."""
-        if not self.entries:
-            return None
+    #left-notify.visible {
+        display: block;
+    }
 
-        app = SimpleMenuApp(self.title, self.entries)
-        result = app.run()
+    #ide-container {
+        height: auto;
+    }
 
-        # Ensure result is an int (or None)
-        if result is not None and not isinstance(result, int):
-            try:
-                result = int(result)
-            except (ValueError, TypeError):
-                result = None
-        return result
+    #status-table {
+        height: auto;
+        border: solid $primary;
+        margin: 0 1;
+    }
+
+    DataTable {
+        height: auto;
+    }
+
+    DataTable > .datatable--cursor {
+        background: $primary 40%;
+    }
+
+    DataTable:focus > .datatable--cursor {
+        background: $primary 60%;
+    }
+
+    #legend {
+        height: auto;
+        padding: 0 2;
+        color: $text-muted;
+    }
+
+    #action-panel {
+        height: auto;
+        max-height: 8;
+        border: solid #4367CD;
+        margin: 0 1;
+        padding: 0 1;
+        background: $surface-darken-1;
+        display: none;
+    }
+
+    #action-panel.visible {
+        display: block;
+    }
+
+    #action-title {
+        text-style: bold;
+        color: #93B5F7;
+        padding: 0 1;
+    }
+
+    #action-panel ListView {
+        height: auto;
+        background: transparent;
+    }
+
+    #action-panel ListItem {
+        padding: 0 1;
+    }
+
+    #action-panel ListView:focus > ListItem.--highlight {
+        background: #4367CD 30%;
+    }
+
+    Footer {
+        background: $surface-darken-1;
+    }
+    """ + BANNER_CSS
+
+    BINDINGS = [
+        Binding("escape", "back_or_quit", "Back", show=True),
+        Binding("q", "quit", "Quit", show=True),
+        Binding("enter", "select_ide", "Select", show=True),
+        Binding("l", "install_all_local", "All Local", show=True),
+        Binding("g", "install_all_global", "All Global", show=True),
+    ]
+
+    def __init__(self, ide_data: list, status: dict, stats: dict):
+        super().__init__()
+        self.ide_data = ide_data  # [(name, desc, local_target, global_target), ...]
+        self.status = status
+        self.stats = stats
+        self.result = None
+        self.selected_ide = None  # Currently selected IDE name
+        self.action_panel_visible = False
+
+    def compose(self) -> ComposeResult:
+        yield create_banner_container()
+        stats_text = f"Local: {self.stats['local_installed']} ✓ / {self.stats['local_not_installed']} ✗ | Global: {self.stats['global_installed']} ✓ / {self.stats['global_not_installed']} ✗"
+        yield Container(
+            DataTable(id="status-table"),
+            Static(f"[dim]✓ {t('ide.installed')}  ✗ {t('ide.not_installed')}  — {t('ide.not_supported')}  |  {stats_text}[/dim]", id="legend"),
+            Container(
+                Static("", id="action-title"),
+                ListView(id="action-list"),
+                id="action-panel",
+            ),
+            Footer(),
+            id="ide-container",
+        )
+        yield Static("", id="left-notify")
+
+    def on_mount(self) -> None:
+        """Populate the DataTable with IDE status."""
+        table = self.query_one("#status-table", DataTable)
+        table.cursor_type = "row"
+        table.zebra_stripes = True
+
+        # Add columns
+        table.add_column("IDE/Agent", width=14)
+        table.add_column(t("table.description"), width=30)
+        table.add_column("Local", width=8, key="local")
+        table.add_column("Global", width=8, key="global")
+
+        # Add rows with IDE name as key
+        for name, desc, local_target, global_target in self.ide_data:
+            st = self.status.get(name, {})
+
+            # Local status
+            if st.get("local"):
+                local_str = "[green]✓[/green]"
+            else:
+                local_str = "[red]✗[/red]"
+
+            # Global status
+            if st.get("supports_global"):
+                if st.get("global"):
+                    global_str = "[green]✓[/green]"
+                else:
+                    global_str = "[red]✗[/red]"
+            else:
+                global_str = "[dim]—[/dim]"
+
+            table.add_row(name, desc, local_str, global_str, key=name)
+
+        # Focus on the table
+        table.focus()
+
+    def _show_action_panel(self, ide_name: str) -> None:
+        """Show action panel for selected IDE."""
+        self.selected_ide = ide_name
+        st = self.status.get(ide_name, {})
+        has_local = st.get("local", False)
+        has_global = st.get("global", False)
+        can_global = st.get("supports_global", False)
+
+        # Update title
+        title = self.query_one("#action-title", Static)
+        title.update(f"► {ide_name}")
+
+        # Build action options
+        action_list = self.query_one("#action-list", ListView)
+        action_list.clear()
+
+        # Install/Uninstall Local
+        if has_local:
+            action_list.append(ListItem(Static(f"[red]✗[/red] {t('ide.uninstall')} Local"), id="uninstall_local"))
+        else:
+            action_list.append(ListItem(Static(f"[green]✓[/green] {t('ide.install')} Local"), id="install_local"))
+
+        # Install/Uninstall Global (if supported)
+        if can_global:
+            if has_global:
+                action_list.append(ListItem(Static(f"[red]✗[/red] {t('ide.uninstall')} Global"), id="uninstall_global"))
+            else:
+                action_list.append(ListItem(Static(f"[green]✓[/green] {t('ide.install')} Global"), id="install_global"))
+
+        action_list.append(ListItem(Static(f"[dim]← {t('common.cancel')}[/dim]"), id="cancel"))
+
+        # Show panel and focus
+        panel = self.query_one("#action-panel")
+        panel.add_class("visible")
+        self.action_panel_visible = True
+        action_list.focus()
+
+    def _hide_action_panel(self) -> None:
+        """Hide action panel and return to table."""
+        panel = self.query_one("#action-panel")
+        panel.remove_class("visible")
+        self.action_panel_visible = False
+        self.selected_ide = None
+        self.query_one("#status-table", DataTable).focus()
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        """Handle Enter on a row - show action panel."""
+        if event.row_key:
+            ide_name = str(event.row_key.value)
+            self._show_action_panel(ide_name)
+
+    def action_select_ide(self) -> None:
+        """Handle Enter key - show action panel for selected IDE."""
+        if self.action_panel_visible:
+            return  # Already in action panel
+        table = self.query_one("#status-table", DataTable)
+        if table.cursor_row is not None:
+            ide_name = self.ide_data[table.cursor_row][0]
+            self._show_action_panel(ide_name)
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        """Handle action selection from panel."""
+        if not self.action_panel_visible or not self.selected_ide:
+            return
+
+        item = event.item
+        if item.id == "cancel":
+            self._hide_action_panel()
+        elif item.id == "install_local":
+            self.result = ("install", self.selected_ide, False)
+            self.exit(result=self.result)
+        elif item.id == "install_global":
+            self.result = ("install", self.selected_ide, True)
+            self.exit(result=self.result)
+        elif item.id == "uninstall_local":
+            self.result = ("uninstall", self.selected_ide, False)
+            self.exit(result=self.result)
+        elif item.id == "uninstall_global":
+            self.result = ("uninstall", self.selected_ide, True)
+            self.exit(result=self.result)
+
+    def action_back_or_quit(self) -> None:
+        """Escape - hide panel or quit."""
+        if self.action_panel_visible:
+            self._hide_action_panel()
+        else:
+            self.exit(result=None)
+
+    def action_install_all_local(self) -> None:
+        """Install all IDEs locally."""
+        if self.action_panel_visible:
+            return
+        if self.stats['local_not_installed'] > 0:
+            self.result = ("install_all", False)
+            self.exit(result=self.result)
+        else:
+            self.show_left_notify("Tous déjà installés en local")
+
+    def action_install_all_global(self) -> None:
+        """Install all IDEs globally."""
+        if self.action_panel_visible:
+            return
+        if self.stats['global_not_installed'] > 0:
+            self.result = ("install_all", True)
+            self.exit(result=self.result)
+        else:
+            self.show_left_notify("Tous déjà installés en global")
+
+    def show_left_notify(self, message: str, timeout: float = 3.0) -> None:
+        """Show a notification on the left side."""
+        notify_widget = self.query_one("#left-notify", Static)
+        notify_widget.update(message)
+        notify_widget.add_class("visible")
+        self.set_timer(timeout, lambda: notify_widget.remove_class("visible"))
+
+    def action_help_quit(self) -> None:
+        """Override Ctrl+C behavior to show left notification."""
+        self.show_left_notify("Ctrl+Q pour quitter", 3.0)
+
+    def action_quit(self) -> None:
+        self.exit(result=None)
 
 
-# ASCII Banner for Textual (plain text, colored by CSS)
-# Each line colored with horizontal gradient
-BANNER_LINES = [
-    "        ██████╗ ███████╗██╗  ██╗ █████╗ ██╗     ██╗",
-    "        ██╔══██╗██╔════╝██║ ██╔╝██╔══██╗██║     ██║",
-    "        ██████╔╝█████╗  █████╔╝ ███████║██║     ██║",
-    "        ██╔══██╗██╔══╝  ██╔═██╗ ██╔══██║██║     ██║",
-    "        ██║  ██║███████╗██║  ██╗██║  ██║███████╗███████╗",
-    "        ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚══════╝",
-]
+class SpeckitApp(App):
+    """Textual app for Speckit integration - select in table, action panel below."""
 
+    CSS = """
+    Screen {
+        background: $surface;
+    }
 
-def _gradient_line(line: str, start_rgb: tuple, end_rgb: tuple) -> str:
-    """Apply horizontal gradient to a line of text."""
-    # Find content bounds (skip leading spaces)
-    content_start = len(line) - len(line.lstrip())
-    content = line[content_start:]
-    if not content:
-        return line
+    #left-notify {
+        dock: bottom;
+        width: auto;
+        max-width: 60;
+        height: auto;
+        padding: 1 2;
+        margin: 1 2;
+        background: #1e2a4a;
+        border: thick #4367CD;
+        color: #93B5F7;
+        text-style: bold;
+        display: none;
+        layer: notification;
+    }
 
-    result = line[:content_start]  # Keep leading spaces
-    n = len(content)
+    #left-notify.visible {
+        display: block;
+    }
 
-    for i, char in enumerate(content):
-        if char == ' ':
-            result += char
-            continue
-        # Interpolate color
-        t = i / max(n - 1, 1)
-        r = int(start_rgb[0] + (end_rgb[0] - start_rgb[0]) * t)
-        g = int(start_rgb[1] + (end_rgb[1] - start_rgb[1]) * t)
-        b = int(start_rgb[2] + (end_rgb[2] - start_rgb[2]) * t)
-        result += f"[bold rgb({r},{g},{b})]{char}[/]"
+    #speckit-container {
+        height: 1fr;
+    }
 
-    return result
+    #status-table {
+        height: auto;
+        border: solid $primary;
+        margin: 0 1;
+    }
 
+    DataTable {
+        height: auto;
+    }
 
-def get_banner() -> str:
-    """Generate banner with gradient effect."""
-    # Blue gradient: deep blue -> light blue
-    deep_blue = (67, 103, 205)   # Similar to Gemini's left blue
-    light_blue = (147, 181, 247) # Lighter blue (not white)
+    DataTable > .datatable--cursor {
+        background: $primary 40%;
+    }
 
-    lines = [_gradient_line(line, deep_blue, light_blue) for line in BANNER_LINES]
-    banner = "\n".join(lines)
+    DataTable:focus > .datatable--cursor {
+        background: $primary 60%;
+    }
 
-    subtitle = t("banner.subtitle")
-    quote = t("banner.quote")
-    return f"""
-{banner}
+    #legend {
+        height: auto;
+        padding: 0 2;
+        color: $text-muted;
+    }
 
-[bold white]            {subtitle}[/bold white]
-[dim]        {quote}[/dim]
-"""
+    #action-panel {
+        height: 1fr;
+        border: solid #4367CD;
+        margin: 0 1;
+        padding: 0 1;
+        background: $surface-darken-1;
+        display: none;
+    }
+
+    #action-panel.visible {
+        display: block;
+    }
+
+    #action-title {
+        text-style: bold;
+        color: #93B5F7;
+        padding: 0 1;
+    }
+
+    #preview-box {
+        height: 1fr;
+        border: solid $primary-darken-2;
+        margin: 0 1;
+        padding: 0 1;
+        background: $surface-darken-2;
+    }
+
+    #preview-box Markdown {
+        margin: 0;
+        padding: 0;
+    }
+
+    #preview-box MarkdownH1 {
+        color: rgb(147,181,247);
+        text-style: bold;
+        margin: 0;
+        padding: 0;
+    }
+
+    #preview-box MarkdownH2 {
+        color: rgb(127,161,227);
+        text-style: bold;
+        margin: 0;
+        padding: 0;
+    }
+
+    #preview-box MarkdownH3 {
+        color: rgb(107,141,207);
+        text-style: bold;
+        margin: 0;
+        padding: 0;
+    }
+
+    #preview-box MarkdownFence {
+        background: $surface-darken-3;
+        margin: 1 0;
+        padding: 1;
+    }
+
+    #preview-box MarkdownBlockQuote {
+        border-left: thick $primary;
+        padding-left: 1;
+        color: $text-muted;
+    }
+
+    #preview-box MarkdownTable {
+        margin: 1 0;
+        background: $surface-darken-1;
+    }
+
+    #preview-box MarkdownTHead {
+        background: $primary 30%;
+    }
+
+    #preview-box MarkdownTH {
+        color: #93B5F7;
+        text-style: bold;
+        padding: 0 1;
+    }
+
+    #preview-box MarkdownTD {
+        padding: 0 1;
+    }
+
+    #preview-box MarkdownTBody MarkdownTR:even {
+        background: $surface-darken-2;
+    }
+
+    #action-panel ListView {
+        height: auto;
+        background: transparent;
+    }
+
+    #action-panel ListItem {
+        padding: 0 1;
+    }
+
+    #action-panel ListView:focus > ListItem.--highlight {
+        background: #4367CD 30%;
+    }
+
+    Footer {
+        background: $surface-darken-1;
+    }
+    """ + BANNER_CSS
+
+    BINDINGS = [
+        Binding("escape", "back_or_quit", "Back", show=True),
+        Binding("q", "quit", "Quit", show=True),
+        Binding("enter", "select_component", "Select", show=True),
+        Binding("i", "install_all", "Install All", show=True),
+        Binding("u", "uninstall_all", "Uninstall All", show=True),
+    ]
+
+    def __init__(self, status: dict, components: list, labels: dict):
+        super().__init__()
+        self.status = status
+        self.components = components
+        self.labels = labels
+        self.result = None
+        self.selected_component = None  # Currently selected component key
+        self.action_panel_visible = False
+        # Compute stats
+        self.stats = {
+            "installed": sum(1 for c in components if status.get(c) is True),
+            "not_installed": sum(1 for c in components if status.get(c) is False),
+        }
+
+    def compose(self) -> ComposeResult:
+        yield create_banner_container()
+        stats_text = f"{t('ide.installed')}: {self.stats['installed']} ✓ | {t('ide.not_installed')}: {self.stats['not_installed']} ✗"
+        yield Container(
+            DataTable(id="status-table"),
+            Static(f"[dim]✓ {t('ide.installed')}  ✗ {t('ide.not_installed')}  ⚠ {t('speckit.file_missing')}  |  {stats_text}[/dim]", id="legend"),
+            Container(
+                Static("", id="action-title"),
+                VerticalScroll(
+                    Markdown("", id="preview-content"),
+                    id="preview-box",
+                ),
+                ListView(id="action-list"),
+                id="action-panel",
+            ),
+            Footer(),
+            id="speckit-container",
+        )
+        yield Static("", id="left-notify")
+
+    def on_mount(self) -> None:
+        """Populate the DataTable with component status."""
+        table = self.query_one("#status-table", DataTable)
+        table.cursor_type = "row"
+        table.zebra_stripes = True
+
+        # Add columns
+        table.add_column(t("speckit.component"), width=35)
+        table.add_column(t("ide.status"), width=20)
+
+        # Add rows with component key
+        for comp in self.components:
+            label = self.labels.get(comp, comp)
+            st = self.status.get(comp)
+            if st is True:
+                status_str = "[green]✓[/green]"
+            elif st is False:
+                status_str = "[red]✗[/red]"
+            else:
+                status_str = "[yellow]⚠[/yellow]"
+            table.add_row(label, status_str, key=comp)
+
+        # Focus on the table
+        table.focus()
+
+    def _format_preview_as_markdown(self, preview_text: str) -> str:
+        """Convert preview text to markdown format."""
+        lines = preview_text.split("\n")
+        md_lines = []
+
+        for line in lines:
+            # Skip header lines (already shown in action-title)
+            if line.startswith("[NEW FILE]"):
+                md_lines.append("*📄 Nouveau fichier*")
+            elif line.startswith("[APPEND TO]"):
+                md_lines.append("*📝 Ajout au fichier*")
+            elif line.startswith("[PATCH]"):
+                md_lines.append("*🔧 Patch du fichier*")
+            elif line.startswith("[DELETE]"):
+                md_lines.append("*🗑️ Suppression*")
+            elif line.startswith("[REMOVE FROM]"):
+                md_lines.append("*➖ Retrait du fichier*")
+            elif line.startswith("[SKIP]"):
+                md_lines.append(f"*⏭️ {line[6:].strip()}*")
+            elif line.startswith("─"):
+                # Separator line -> skip (just visual separator)
+                pass
+            elif line.startswith("[+]"):
+                md_lines.append(f"**➕** {line[3:].strip()}")
+            elif line.startswith("[-]"):
+                md_lines.append(f"**➖** {line[3:].strip()}")
+            elif line.startswith("(truncated"):
+                md_lines.append(f"*{line}*")
+            else:
+                md_lines.append(line)
+
+        return "\n".join(md_lines)
+
+    async def _show_action_panel(self, component: str) -> None:
+        """Show action panel for selected component with preview."""
+        from rekall.integrations import get_speckit_preview, get_speckit_uninstall_preview
+
+        self.selected_component = component
+        st = self.status.get(component)
+        label = self.labels.get(component, component)
+
+        # Update title
+        title = self.query_one("#action-title", Static)
+        title.update(f"► {label}")
+
+        # Load and display preview
+        preview_widget = self.query_one("#preview-content", Markdown)
+        if st is True:
+            # Installed -> show uninstall preview
+            previews = get_speckit_uninstall_preview([component])
+            preview_text = previews.get(component, f"*{t('speckit.preview')}...*")
+        elif st is False:
+            # Not installed -> show install preview
+            previews = get_speckit_preview([component])
+            preview_text = previews.get(component, f"*{t('speckit.preview')}...*")
+        else:
+            preview_text = f"⚠ {t('speckit.file_missing')}"
+        # Convert preview to markdown format
+        preview_md = self._format_preview_as_markdown(preview_text)
+        preview_widget.update(preview_md)
+
+        # Build action options
+        action_list = self.query_one("#action-list", ListView)
+        await action_list.clear()
+
+        if st is True:
+            # Installed -> offer uninstall
+            action_list.append(ListItem(Static(f"[red]✗[/red] {t('ide.uninstall')}"), id="uninstall"))
+        elif st is False:
+            # Not installed -> offer install
+            action_list.append(ListItem(Static(f"[green]✓[/green] {t('ide.install')}"), id="install"))
+        else:
+            # File missing -> can't do anything
+            action_list.append(ListItem(Static(f"[yellow]⚠ {t('speckit.file_missing')}[/yellow]"), id="missing"))
+
+        action_list.append(ListItem(Static(f"[dim]← {t('common.cancel')}[/dim]"), id="cancel"))
+
+        # Show panel and focus
+        panel = self.query_one("#action-panel")
+        panel.add_class("visible")
+        self.action_panel_visible = True
+        action_list.focus()
+
+    def _hide_action_panel(self) -> None:
+        """Hide action panel and return to table."""
+        panel = self.query_one("#action-panel")
+        panel.remove_class("visible")
+        self.action_panel_visible = False
+        self.selected_component = None
+        self.query_one("#status-table", DataTable).focus()
+
+    async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        """Handle Enter on a row - show/update action panel."""
+        if event.row_key:
+            component = str(event.row_key.value)
+            await self._show_action_panel(component)
+
+    async def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        """Handle row highlight (arrow keys) - update preview if panel visible."""
+        if self.action_panel_visible and event.row_key:
+            component = str(event.row_key.value)
+            # Update preview for highlighted row without changing focus
+            await self._update_preview_only(component)
+
+    async def _update_preview_only(self, component: str) -> None:
+        """Update preview content without changing focus or actions."""
+        from rekall.integrations import get_speckit_preview, get_speckit_uninstall_preview
+
+        st = self.status.get(component)
+        label = self.labels.get(component, component)
+
+        # Update title
+        title = self.query_one("#action-title", Static)
+        title.update(f"► {label}")
+
+        # Load and display preview
+        preview_widget = self.query_one("#preview-content", Markdown)
+        if st is True:
+            previews = get_speckit_uninstall_preview([component])
+            preview_text = previews.get(component, f"*{t('speckit.preview')}...*")
+        elif st is False:
+            previews = get_speckit_preview([component])
+            preview_text = previews.get(component, f"*{t('speckit.preview')}...*")
+        else:
+            preview_text = f"⚠ {t('speckit.file_missing')}"
+        preview_md = self._format_preview_as_markdown(preview_text)
+        preview_widget.update(preview_md)
+
+        # Update selected component and rebuild actions
+        self.selected_component = component
+        action_list = self.query_one("#action-list", ListView)
+        await action_list.clear()
+
+        if st is True:
+            action_list.append(ListItem(Static(f"[red]✗[/red] {t('ide.uninstall')}"), id="uninstall"))
+        elif st is False:
+            action_list.append(ListItem(Static(f"[green]✓[/green] {t('ide.install')}"), id="install"))
+        else:
+            action_list.append(ListItem(Static(f"[yellow]⚠ {t('speckit.file_missing')}[/yellow]"), id="missing"))
+
+        action_list.append(ListItem(Static(f"[dim]← {t('common.cancel')}[/dim]"), id="cancel"))
+
+    async def action_select_component(self) -> None:
+        """Handle Enter key - show action panel for selected component."""
+        if self.action_panel_visible:
+            # Panel visible - focus on action list
+            self.query_one("#action-list", ListView).focus()
+            return
+        table = self.query_one("#status-table", DataTable)
+        if table.cursor_row is not None:
+            component = self.components[table.cursor_row]
+            await self._show_action_panel(component)
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        """Handle action selection from panel - execute directly."""
+        if not self.action_panel_visible or not self.selected_component:
+            return
+
+        item = event.item
+        if item.id == "cancel":
+            self._hide_action_panel()
+        elif item.id == "missing":
+            self.show_left_notify(t("speckit.file_missing"))
+            self._hide_action_panel()
+        elif item.id == "install":
+            self._execute_action("install", self.selected_component)
+        elif item.id == "uninstall":
+            self._execute_action("uninstall", self.selected_component)
+
+    def _execute_action(self, action: str, component: str) -> None:
+        """Execute install/uninstall action and refresh table."""
+        from rekall.integrations import (
+            get_speckit_status,
+            install_speckit_partial,
+            uninstall_speckit_partial,
+        )
+
+        label = self.labels.get(component, component)
+
+        try:
+            if action == "install":
+                result = install_speckit_partial([component])
+                if result["installed"]:
+                    self.show_left_notify(f"✓ {label} {t('ide.installed').lower()}")
+                elif result["errors"]:
+                    self.show_left_notify(f"✗ {result['errors'][0]}")
+            else:
+                result = uninstall_speckit_partial([component])
+                if result["removed"]:
+                    self.show_left_notify(f"✓ {label} {t('speckit.removed').lower()}")
+                elif result["errors"]:
+                    self.show_left_notify(f"✗ {result['errors'][0]}")
+
+            # Refresh status and table
+            self.status = get_speckit_status()
+            self.stats = {
+                "installed": sum(1 for c in self.components if self.status.get(c) is True),
+                "not_installed": sum(1 for c in self.components if self.status.get(c) is False),
+            }
+            self._refresh_table()
+
+        except Exception as e:
+            self.show_left_notify(f"✗ {t('common.error')}: {e}")
+
+        self._hide_action_panel()
+
+    def _refresh_table(self) -> None:
+        """Refresh the table with updated status."""
+        table = self.query_one("#status-table", DataTable)
+        table.clear()
+
+        for comp in self.components:
+            label = self.labels.get(comp, comp)
+            st = self.status.get(comp)
+            if st is True:
+                status_str = "[green]✓[/green]"
+            elif st is False:
+                status_str = "[red]✗[/red]"
+            else:
+                status_str = "[yellow]⚠[/yellow]"
+            table.add_row(label, status_str, key=comp)
+
+        # Update legend
+        stats_text = f"{t('ide.installed')}: {self.stats['installed']} ✓ | {t('ide.not_installed')}: {self.stats['not_installed']} ✗"
+        legend = self.query_one("#legend", Static)
+        legend.update(f"[dim]✓ {t('ide.installed')}  ✗ {t('ide.not_installed')}  ⚠ {t('speckit.file_missing')}  |  {stats_text}[/dim]")
+
+    def action_back_or_quit(self) -> None:
+        """Escape - hide panel or quit."""
+        if self.action_panel_visible:
+            self._hide_action_panel()
+        else:
+            self.exit(result=None)
+
+    def action_install_all(self) -> None:
+        """Install all components."""
+        if self.action_panel_visible:
+            return
+        if self.stats['not_installed'] > 0:
+            self.result = ("install_all",)
+            self.exit(result=self.result)
+        else:
+            self.show_left_notify(t("speckit.all_installed"))
+
+    def action_uninstall_all(self) -> None:
+        """Uninstall all components."""
+        if self.action_panel_visible:
+            return
+        if self.stats['installed'] > 0:
+            self.result = ("uninstall_all",)
+            self.exit(result=self.result)
+        else:
+            self.show_left_notify(t("speckit.none_installed"))
+
+    def show_left_notify(self, message: str, timeout: float = 3.0) -> None:
+        """Show a notification on the left side."""
+        notify_widget = self.query_one("#left-notify", Static)
+        notify_widget.update(message)
+        notify_widget.add_class("visible")
+        self.set_timer(timeout, lambda: notify_widget.remove_class("visible"))
+
+    def action_quit(self) -> None:
+        self.exit(result=None)
+
 
 # Database instance
 _db: Optional[Database] = None
@@ -1054,17 +2151,6 @@ def get_db() -> Database:
         _db = Database(config.db_path)
         _db.init()
     return _db
-
-
-def clear_screen():
-    """Clear terminal screen."""
-    console.clear()
-
-
-def show_banner():
-    """Display the REKALL banner with gradient."""
-    console.print(get_banner())
-    console.print()
 
 
 class ToastApp(App):
@@ -1082,9 +2168,9 @@ class ToastApp(App):
         height: auto;
         padding: 1 2;
         margin: 1 2;
-        background: #2d4a3e;
-        border: thick #3d6a5e;
-        color: #7fcea0;
+        background: #1e2a4a;
+        border: thick #4367CD;
+        color: #93B5F7;
         text-style: bold;
     }
     """
@@ -1107,17 +2193,51 @@ def show_toast(message: str, duration: float = 1.5):
     app.run()
 
 
-def brief_pause(duration: float = 0.8):
-    """Brief pause for auto-dismissing messages."""
-    import time
-    time.sleep(duration)
+class InfoDisplayApp(App):
+    """Simple app to display info with Escape/Enter/Q to exit."""
+
+    CSS = """
+    Screen {
+        background: $surface;
+    }
+
+    #content {
+        height: 1fr;
+        padding: 1 2;
+    }
+
+    #footer-hint {
+        dock: bottom;
+        height: 1;
+        padding: 0 2;
+        color: $text-muted;
+    }
+    """ + BANNER_CSS
+
+    BINDINGS = [
+        Binding("escape", "quit", "Back", show=False),
+        Binding("enter", "quit", "Continue", show=False),
+        Binding("q", "quit", "Quit", show=False),
+    ]
+
+    def __init__(self, content: str, title: str = ""):
+        super().__init__()
+        self.content_text = content
+        self.title_text = title
+
+    def compose(self) -> ComposeResult:
+        yield create_banner_container()
+        yield Static(self.content_text, id="content", markup=True)
+        yield Static("[dim]Press Escape, Enter or Q to continue...[/dim]", id="footer-hint")
+
+    def action_quit(self) -> None:
+        self.exit()
 
 
-def press_enter_to_continue():
-    """Wait for user to press Enter."""
-    console.print()
-    console.print(f"[dim]{t('common.press_enter')}[/dim]", end="")
-    input()
+def show_info(content: str, title: str = ""):
+    """Display info screen with Escape/Enter/Q to exit."""
+    app = InfoDisplayApp(content, title)
+    app.run()
 
 
 class EscapePressed(Exception):
@@ -1127,8 +2247,8 @@ class EscapePressed(Exception):
 
 def prompt_input(label: str, required: bool = True) -> Optional[str]:
     """Prompt user for text input. Returns None if Escape pressed."""
-    from prompt_toolkit.shortcuts import PromptSession
     from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.shortcuts import PromptSession
 
     bindings = KeyBindings()
 
@@ -1158,20 +2278,12 @@ def prompt_input(label: str, required: bool = True) -> Optional[str]:
 
 
 def action_language():
-    """Change interface language."""
-    clear_screen()
-    show_banner()
-
-    console.print(f"[bold cyan]{t('language.title')}[/bold cyan]")
-    console.print()
-    console.print(f"[dim]{t('language.current')}: {LANGUAGES[get_lang()]}[/dim]")
-    console.print()
-
-    # Build language menu
-    lang_entries = []
+    """Change interface language using Textual menu."""
     lang_codes = list(LANGUAGES.keys())
     current_lang = get_lang()
 
+    # Build menu items with checkmark for current
+    lang_entries = []
     for code in lang_codes:
         name = LANGUAGES[code]
         marker = " ✓" if code == current_lang else ""
@@ -1179,61 +2291,285 @@ def action_language():
 
     lang_entries.append(f"← {t('common.back')}")
 
-    menu = TerminalMenu(
-        lang_entries,
-        menu_cursor="► ",
-        menu_cursor_style=("fg_cyan", "bold"),
-        menu_highlight_style=("fg_cyan",),
-    )
+    # Use SimpleMenuApp (Textual)
+    title = f"{t('language.title')} ({t('language.current')}: {LANGUAGES[current_lang]})"
+    app = SimpleMenuApp(title, lang_entries)
+    idx = app.run()
 
-    idx = menu.show()
-
-    if idx is None or idx == len(lang_codes):
-        # Back or Escape
+    if idx is None or idx >= len(lang_codes):
         return
 
     # Set new language
     new_lang = lang_codes[idx]
     set_lang(new_lang)
-
-    # Toast notification
     show_toast(f"✓ {t('language.changed')} {LANGUAGES[new_lang]}")
 
 
 def action_install_ide():
-    """Install IDE integration with status display and local/global choice."""
+    """Configuration & Maintenance - unified menu for setup, backup, restore, IDE."""
+    while True:
+        # Build submenu (no separators - they break index mapping)
+        submenu_options = [
+            t('maintenance.db_info'),
+            t('menu.setup'),
+            t('maintenance.create_backup'),
+            t('maintenance.restore_backup'),
+            t('ide.integrations'),
+            f"← {t('setup.back')}",
+        ]
+        actions = ["db_info", "setup", "backup", "restore", "ide", "back"]
+
+        app = SimpleMenuApp(t("menu.config"), submenu_options)
+        idx = app.run()
+
+        # SimpleMenuApp returns str or int depending on selection method
+        if idx is None:
+            return
+        idx = int(idx) if isinstance(idx, str) else idx
+
+        if idx >= len(actions) or actions[idx] == "back":
+            return
+
+        action = actions[idx]
+
+        if action == "db_info":
+            _show_db_info()
+        elif action == "setup":
+            _database_setup_submenu()
+        elif action == "backup":
+            _create_backup_tui()
+        elif action == "restore":
+            _restore_backup_tui()
+        elif action == "ide":
+            _ide_integration_submenu()
+
+
+def _database_setup_submenu():
+    """Database setup submenu (moved from action_setup)."""
     from pathlib import Path
+
+    from rekall.config import get_config
+    from rekall.paths import PathResolver
+
+    while True:
+        config = get_config()
+
+        # Detect current state
+        local_rekall = Path.cwd() / ".rekall"
+        local_db = local_rekall / "knowledge.db"
+        has_local = local_rekall.exists()
+        has_local_db = local_db.exists()
+
+        resolver = PathResolver()
+        global_paths = resolver._from_xdg()
+        global_db = global_paths.db_path if global_paths else Path.home() / ".local" / "share" / "rekall" / "knowledge.db"
+        has_global_db = global_db.exists()
+
+        # Build status info
+        global_status = "[green]✓[/green]" if has_global_db else "[dim]○[/dim]"
+        local_status = "[green]✓[/green]" if has_local_db else ("[yellow]⚠[/yellow]" if has_local else "[dim]○[/dim]")
+
+        # Build title with status
+        title = f"{t('setup.title')} | {t('setup.current_source')}: {config.paths.source.value}"
+
+        # Build dynamic menu
+        submenu_options = []
+        actions = []
+
+        if has_global_db:
+            submenu_options.append(f"{global_status} {t('setup.use_global')}")
+            actions.append("use_global")
+        else:
+            submenu_options.append(f"{global_status} {t('setup.create_global')}")
+            actions.append("create_global")
+
+        if has_local_db:
+            submenu_options.append(f"{local_status} {t('setup.use_local')}")
+            actions.append("use_local")
+        else:
+            submenu_options.append(f"{local_status} {t('setup.create_local')}")
+            actions.append("create_local")
+
+        if has_global_db and not has_local_db:
+            submenu_options.append(t("setup.copy_global_to_local"))
+            actions.append("migrate_to_local")
+        if has_local_db and not has_global_db:
+            submenu_options.append(t("setup.copy_local_to_global"))
+            actions.append("migrate_to_global")
+
+        submenu_options.append(t("setup.show_config"))
+        actions.append("show_config")
+
+        submenu_options.append(f"← {t('setup.back')}")
+        actions.append("back")
+
+        # Show menu using Textual
+        app = SimpleMenuApp(title, submenu_options)
+        idx = app.run()
+
+        if idx is None:
+            return
+        idx = int(idx) if isinstance(idx, str) else idx
+
+        if idx >= len(actions) or actions[idx] == "back":
+            return
+
+        action = actions[idx]
+        if action == "use_global":
+            show_toast("✓ Base globale déjà active")
+        elif action == "use_local":
+            show_toast("✓ Base locale déjà active")
+        elif action == "create_global":
+            _setup_global()
+        elif action == "create_local":
+            _setup_local()
+        elif action == "migrate_to_local":
+            _migrate_db(global_db, local_rekall / "knowledge.db", "GLOBAL → LOCAL")
+        elif action == "migrate_to_global":
+            _migrate_db(local_db, global_db, "LOCAL → GLOBAL")
+        elif action == "show_config":
+            _show_config_details()
+
+
+def _show_db_info():
+    """Display database information in TUI."""
+    from rekall import __release_date__, __version__
+    from rekall.backup import get_database_stats
+    from rekall.config import get_config
+    from rekall.db import CURRENT_SCHEMA_VERSION
+
+    config = get_config()
+    stats = get_database_stats(config.db_path)
+
+    if stats is None:
+        show_info(f"[yellow]{t('info.no_db')}[/yellow]\n\n{t('info.run_init')}")
+        return
+
+    schema_status = f"[green]{t('info.schema_current')}[/green]" if stats.is_current else f"[yellow]{t('info.schema_outdated')}[/yellow]"
+
+    info_text = f"""[bold]{t('info.title')}[/bold]
+
+[cyan]Rekall:[/cyan]    v{__version__} ({__release_date__})
+[cyan]Database:[/cyan]  {stats.path}
+[cyan]{t('info.schema')}:[/cyan]    v{stats.schema_version}/{CURRENT_SCHEMA_VERSION} {schema_status}
+[cyan]{t('info.entries')}:[/cyan]   {stats.total_entries} ({stats.active_entries} {t('info.active')}, {stats.obsolete_entries} {t('info.obsolete')})
+[cyan]{t('info.links')}:[/cyan]     {stats.links_count}
+[cyan]{t('info.size')}:[/cyan]      {stats.file_size_human}
+"""
+    show_info(info_text)
+
+
+def _create_backup_tui():
+    """Create backup via TUI."""
+    from rekall.backup import create_backup
+    from rekall.config import get_config
+
+    config = get_config()
+
+    if not config.db_path.exists():
+        show_toast(f"⚠ {t('backup.no_db')}")
+        return
+
+    try:
+        backup_info = create_backup(config.db_path)
+        show_toast(f"✓ {t('backup.created')}: {backup_info.path.name}", 3.0)
+    except Exception as e:
+        show_toast(f"⚠ {t('backup.error')}: {e}", 3.0)
+
+
+def _restore_backup_tui():
+    """Restore from backup via TUI with selection."""
+    from rekall.backup import get_database_stats, list_backups, restore_backup
+    from rekall.config import get_config
+
+    config = get_config()
+    backups = list_backups()
+
+    if not backups:
+        show_toast(f"⚠ {t('maintenance.no_backups')}")
+        return
+
+    # Build backup list for selection
+    backup_options = []
+    for b in backups[:10]:  # Limit to 10 most recent
+        date_str = b.timestamp.strftime("%Y-%m-%d %H:%M")
+        backup_options.append(f"{date_str}  ({b.size_human})")
+
+    backup_options.append(f"← {t('setup.back')}")
+
+    app = SimpleMenuApp(t("maintenance.select_backup"), backup_options)
+    idx = app.run()
+
+    # SimpleMenuApp returns str or int depending on selection method
+    if idx is None:
+        return
+    idx = int(idx) if isinstance(idx, str) else idx
+
+    if idx >= len(backups):
+        return
+
+    selected_backup = backups[idx]
+
+    # Show backup info
+    backup_stats = get_database_stats(selected_backup.path)
+    if backup_stats:
+        info_text = f"""[bold]{t('maintenance.confirm_restore')}[/bold]
+
+[cyan]File:[/cyan]     {selected_backup.path.name}
+[cyan]Date:[/cyan]     {selected_backup.timestamp.strftime('%Y-%m-%d %H:%M:%S')}
+[cyan]Size:[/cyan]     {selected_backup.size_human}
+[cyan]Entries:[/cyan]  {backup_stats.total_entries}
+[cyan]Links:[/cyan]    {backup_stats.links_count}
+"""
+        show_info(info_text)
+
+    # Confirm
+    confirm_options = [t("common.yes"), t("common.cancel")]
+    confirm_app = SimpleMenuApp(t("maintenance.confirm_restore"), confirm_options)
+    confirm_result = confirm_app.run()
+    if confirm_result is None:
+        return
+    confirm_idx = int(confirm_result) if isinstance(confirm_result, str) else confirm_result
+    if confirm_idx != 0:
+        return
+
+    try:
+        show_toast(f"⏳ {t('restore.safety_backup')}", 1.0)
+        success, safety = restore_backup(selected_backup.path, config.db_path)
+        if success:
+            msg = f"✓ {t('restore.success')}"
+            if safety:
+                msg += f"\n   Safety: {safety.path.name}"
+            show_toast(msg, 3.0)
+    except Exception as e:
+        show_toast(f"⚠ {e}", 3.0)
+
+
+def _ide_integration_submenu():
+    """IDE integration submenu (original action_install_ide logic)."""
+    from pathlib import Path
+
     from rekall.integrations import (
-        get_available, get_ide_status, install, uninstall_ide,
-        install_all_ide, uninstall_all_ide, supports_global
+        get_available,
+        get_ide_status,
+        install,
+        install_all_ide,
+        uninstall_ide,
     )
 
     while True:
-        clear_screen()
-        show_banner()
-
         available = get_available()
         if not available:
-            console.print(f"[yellow]{t('ide.not_supported')}[/yellow]")
-            press_enter_to_continue()
+            show_toast(f"⚠ {t('ide.not_supported')}")
             return
 
         # Get current status
         status = get_ide_status(Path.cwd())
 
-        # Display status table
-        console.print(f"[bold cyan]{t('ide.title')}[/bold cyan]")
-        console.print()
-
-        table = Table(box=box.ROUNDED, show_header=True)
-        table.add_column("IDE/Agent", style="white", min_width=12)
-        table.add_column(t("table.description"), min_width=20)
-        table.add_column(t("table.local"), no_wrap=True, justify="center")
-        table.add_column(t("table.global"), no_wrap=True, justify="center")
-
         # Filter out speckit (has its own menu)
         filtered = [(n, d, lt, gt) for n, d, lt, gt in available if n != "speckit"]
 
+        # Calculate stats
         local_installed = 0
         global_installed = 0
         local_not_installed = 0
@@ -1241,248 +2577,64 @@ def action_install_ide():
 
         for name, desc, local_target, global_target in filtered:
             st = status.get(name, {})
-
-            # Local status
             if st.get("local"):
-                local_str = "[green]✓[/green]"
                 local_installed += 1
             else:
-                local_str = "[red]✗[/red]"
                 local_not_installed += 1
-
-            # Global status
             if st.get("supports_global"):
                 if st.get("global"):
-                    global_str = "[green]✓[/green]"
                     global_installed += 1
                 else:
-                    global_str = "[red]✗[/red]"
                     global_not_installed += 1
-            else:
-                global_str = "[dim]—[/dim]"  # Not supported
 
-            table.add_row(name, desc, local_str, global_str)
+        stats = {
+            "local_installed": local_installed,
+            "global_installed": global_installed,
+            "local_not_installed": local_not_installed,
+            "global_not_installed": global_not_installed,
+        }
 
-        console.print(table)
-        console.print()
-        console.print(f"[dim]✓ {t('ide.installed')}  ✗ {t('ide.not_installed')}  — {t('ide.not_supported')}[/dim]")
-        console.print()
-        console.print(f"[dim]{t('action.project')}: {Path.cwd()}[/dim]")
-        console.print(f"[dim]Local: {local_installed} {t('ide.installed')} | Global: {global_installed} {t('ide.installed')}[/dim]")
-        console.print()
+        # Show IDEStatusApp - table with action panel below
+        app = IDEStatusApp(filtered, status, stats)
+        result = app.run()
 
-        # Build menu options
-        options = []
-        actions = []
-
-        # Bulk actions first
-        if local_not_installed > 0:
-            options.append(f"{t('ide.install_all_local')} ({local_not_installed} {t('ide.remaining')})")
-            actions.append(("install_all", False))
-
-        if global_not_installed > 0:
-            options.append(f"{t('ide.install_all_global')} ({global_not_installed} {t('ide.remaining')})")
-            actions.append(("install_all", True))
-
-        if local_installed > 0:
-            options.append(f"{t('ide.uninstall_all_local')} ({local_installed} {t('ide.installed')})")
-            actions.append(("uninstall_all", False))
-
-        if global_installed > 0:
-            options.append(f"{t('ide.uninstall_all_global')} ({global_installed} {t('ide.installed')})")
-            actions.append(("uninstall_all", True))
-
-        options.append("─" * 40)
-        actions.append((None, None))
-
-        # Individual actions - one entry per integration
-        for name, desc, local_target, global_target in filtered:
-            st = status.get(name, {})
-            has_local = st.get("local", False)
-            has_global = st.get("global", False)
-            can_global = st.get("supports_global", False)
-
-            # Build status indicator (plain text - TerminalMenu doesn't support Rich tags)
-            if has_local and has_global:
-                status_indicator = "✓ L+G"
-            elif has_local:
-                status_indicator = "✓ L"
-            elif has_global:
-                status_indicator = "✓ G"
-            else:
-                status_indicator = "○"
-
-            options.append(f"{name:<14} {status_indicator}")
-            actions.append(("manage", name))
-
-        options.append("─" * 40)
-        actions.append((None, None))
-
-        options.append(t("setup.back"))
-        actions.append(("back", None))
-
-        menu = TerminalMenu(
-            options,
-            title=f"{t('action.actions')}:",
-            menu_cursor="► ",
-            menu_cursor_style=("fg_cyan", "bold"),
-            skip_empty_entries=True,
-        )
-
-        idx = menu.show()
-        if idx is None:
+        if result is None:
             return
 
-        action, param = actions[idx]
+        action = result[0]
 
-        if action == "back":
-            return
-        elif action == "manage":
-            _manage_single_ide(param, status.get(param, {}))
+        if action == "install":
+            # Single IDE install: ("install", ide_name, global_bool)
+            _, ide_name, global_install = result
+            loc = "GLOBAL" if global_install else "LOCAL"
+            install(ide_name, Path.cwd(), global_install)
+            show_toast(f"✓ {ide_name} installé ({loc})")
+        elif action == "uninstall":
+            # Single IDE uninstall: ("uninstall", ide_name, global_bool)
+            _, ide_name, global_install = result
+            loc = "GLOBAL" if global_install else "LOCAL"
+            if uninstall_ide(ide_name, Path.cwd(), global_install):
+                show_toast(f"✓ {ide_name} désinstallé ({loc})")
+            else:
+                show_toast(f"⚠ {ide_name} n'était pas installé ({loc})")
         elif action == "install_all":
-            global_install = param
-            result = install_all_ide(Path.cwd(), global_install)
+            # Bulk install: ("install_all", global_bool)
+            global_install = result[1]
             loc = "GLOBAL" if global_install else "LOCAL"
-            console.print(f"\n[green]✓[/green] Installation {loc} terminée:")
-            if result["installed"]:
-                console.print(f"  {t('ide.installed')}: {', '.join(result['installed'])}")
-            if result.get("skipped_no_global"):
-                console.print(f"  [dim]{t('ide.not_supported')}: {', '.join(result['skipped_no_global'])}[/dim]")
-            if result["failed"]:
-                console.print(f"  [red]{t('speckit.errors')}: {', '.join(result['failed'])}[/red]")
-            press_enter_to_continue()
-        elif action == "uninstall_all":
-            global_install = param
-            loc = "GLOBAL" if global_install else "LOCAL"
-            confirm_menu = TerminalMenu(
-                [t("ide.yes_uninstall", loc=loc), t("common.cancel")],
-                title=t("ide.confirm_uninstall", loc=loc),
-                menu_cursor="► ",
-                menu_cursor_style=("fg_cyan", "bold"),
-            )
-            if confirm_menu.show() == 0:
-                result = uninstall_all_ide(Path.cwd(), global_install)
-                console.print(f"\n[green]✓[/green] {t('ide.uninstallation_complete')} {loc}:")
-                if result["removed"]:
-                    console.print(f"  {t('speckit.removed')}: {', '.join(result['removed'])}")
-                if result["skipped"]:
-                    console.print(f"  [dim]{t('ide.not_installed')}: {', '.join(result['skipped'])}[/dim]")
-                press_enter_to_continue()
-
-
-def _manage_single_ide(name: str, current_status: dict):
-    """Manage a single IDE integration - install/uninstall local/global."""
-    from pathlib import Path
-    from rekall.integrations import (
-        install, uninstall_ide, supports_global, get_ide_target_path
-    )
-
-    clear_screen()
-    show_banner()
-
-    has_local = current_status.get("local", False)
-    has_global = current_status.get("global", False)
-    can_global = current_status.get("supports_global", False)
-
-    console.print(f"[bold cyan]{t('ide.manage')}: {name}[/bold cyan]")
-    console.print()
-
-    # Show current status
-    table = Table(box=box.ROUNDED, show_header=True)
-    table.add_column(t("ide.location"), min_width=10)
-    table.add_column(t("ide.status"), min_width=15)
-    table.add_column(t("ide.path"), style="dim")
-
-    # Local row
-    local_path = get_ide_target_path(name, Path.cwd(), False)
-    if has_local:
-        table.add_row("LOCAL", f"[green]✓ {t('ide.installed')}[/green]", str(local_path))
-    else:
-        table.add_row("LOCAL", f"[dim]○ {t('ide.not_installed')}[/dim]", str(local_path))
-
-    # Global row (if supported)
-    if can_global:
-        global_path = get_ide_target_path(name, Path.cwd(), True)
-        if has_global:
-            table.add_row("GLOBAL", f"[green]✓ {t('ide.installed')}[/green]", str(global_path))
-        else:
-            table.add_row("GLOBAL", f"[dim]○ {t('ide.not_installed')}[/dim]", str(global_path))
-    else:
-        table.add_row("GLOBAL", f"[dim]— {t('ide.not_supported')}[/dim]", "")
-
-    console.print(table)
-    console.print()
-
-    # Build action menu
-    options = []
-    actions = []
-
-    # Install options
-    if not has_local:
-        options.append(t("ide.install_local"))
-        actions.append(("install", False))
-
-    if can_global and not has_global:
-        options.append(t("ide.install_global"))
-        actions.append(("install", True))
-
-    # Uninstall options
-    if has_local:
-        options.append(t("ide.uninstall_local"))
-        actions.append(("uninstall", False))
-
-    if can_global and has_global:
-        options.append(t("ide.uninstall_global"))
-        actions.append(("uninstall", True))
-
-    options.append("─" * 30)
-    actions.append((None, None))
-
-    options.append(t("action.back"))
-    actions.append(("back", None))
-
-    menu = TerminalMenu(
-        options,
-        title=f"{t('action.actions')}:",
-        menu_cursor="► ",
-        menu_cursor_style=("fg_cyan", "bold"),
-        skip_empty_entries=True,
-    )
-
-    idx = menu.show()
-    if idx is None:
-        return
-
-    action, global_install = actions[idx]
-
-    if action == "back":
-        return
-    elif action == "install":
-        target = install(name, Path.cwd(), global_install)
-        loc = "GLOBAL" if global_install else "LOCAL"
-        show_toast(f"✓ {name} installé ({loc})")
-    elif action == "uninstall":
-        loc = "GLOBAL" if global_install else "LOCAL"
-        if uninstall_ide(name, Path.cwd(), global_install):
-            show_toast(f"✓ {name} désinstallé ({loc})")
-        else:
-            show_toast(f"⚠ {name} n'était pas installé ({loc})")
+            res = install_all_ide(Path.cwd(), global_install)
+            installed_count = len(res.get("installed", []))
+            show_toast(f"✓ Installation {loc}: {installed_count} IDE(s)", 2.0)
 
 
 def action_speckit_integration():
-    """Manage Speckit integration with component selection."""
+    """Manage Speckit integration with component selection using Textual."""
     from rekall.integrations import (
-        get_speckit_status,
-        get_speckit_preview,
-        get_speckit_uninstall_preview,
-        install_speckit_partial,
-        uninstall_speckit_partial,
         SPECKIT_PATCHES,
+        get_speckit_status,
     )
 
     # Component display names
     COMPONENT_LABELS = {
-        "skill": "Skill rekall.speckit.md",
         "article": "Article XCIX (constitution)",
         "speckit.implement.md": "speckit.implement.md",
         "speckit.clarify.md": "speckit.clarify.md",
@@ -1492,270 +2644,94 @@ def action_speckit_integration():
         "speckit.hotfix.md": "speckit.hotfix.md",
     }
 
-    # All components in order
-    ALL_COMPONENTS = ["skill", "article"] + list(SPECKIT_PATCHES.keys())
+    # All components in order (skill is now installed via Claude Code IDE integration)
+    ALL_COMPONENTS = ["article"] + list(SPECKIT_PATCHES.keys())
 
     while True:
-        clear_screen()
-        show_banner()
-
         # Get current status
         status = get_speckit_status()
 
-        # Build status display
-        console.print(f"[bold cyan]{t('speckit.title')}[/bold cyan]")
-        console.print()
+        # Show SpeckitApp with status table, preview, and action panel
+        # Individual install/uninstall are executed directly in the app
+        # Only install_all/uninstall_all exit the app for bulk operations
+        app = SpeckitApp(status, ALL_COMPONENTS, COMPONENT_LABELS)
+        result = app.run()
 
-        # Status table
-        table = Table(box=box.ROUNDED, show_header=True)
-        table.add_column(t("speckit.component"), style="white", min_width=30)
-        table.add_column(t("ide.status"), no_wrap=True)
-
-        for comp in ALL_COMPONENTS:
-            label = COMPONENT_LABELS.get(comp, comp)
-            st = status.get(comp)
-            if st is True:
-                status_str = f"[green]✓ {t('ide.installed')}[/green]"
-            elif st is False:
-                status_str = f"[dim]○ {t('ide.not_installed')}[/dim]"
-            else:  # None = file doesn't exist
-                status_str = f"[yellow]⚠ {t('speckit.file_missing')}[/yellow]"
-            table.add_row(label, status_str)
-
-        console.print(table)
-        console.print()
-
-        # Main menu
-        menu_options = [
-            t("speckit.select_install"),
-            t("speckit.select_uninstall"),
-            t("speckit.install_all"),
-            t("speckit.uninstall_all"),
-            "─" * 35,
-            t("setup.back"),
-        ]
-
-        menu = TerminalMenu(
-            menu_options,
-            title=f"{t('action.actions')}:",
-            menu_cursor="► ",
-            menu_cursor_style=("fg_cyan", "bold"),
-            skip_empty_entries=True,
-        )
-
-        choice = menu.show()
-        if choice is None or choice == 5:
+        if result is None:
             return
 
-        if choice == 0:  # Select to install
-            _speckit_select_and_action(status, ALL_COMPONENTS, COMPONENT_LABELS, "install")
-        elif choice == 1:  # Select to uninstall
-            _speckit_select_and_action(status, ALL_COMPONENTS, COMPONENT_LABELS, "uninstall")
-        elif choice == 2:  # Install all
+        # Handle bulk actions (individual actions are handled in-app)
+        action = result[0]
+        if action == "install_all":
             _speckit_install_all(ALL_COMPONENTS)
-        elif choice == 3:  # Uninstall all
+        elif action == "uninstall_all":
             _speckit_uninstall_all(ALL_COMPONENTS)
 
 
-def _speckit_select_and_action(status: dict, all_components: list, labels: dict, action: str):
-    """Show multi-select menu for components, then preview and execute action."""
-    from rekall.integrations import (
-        get_speckit_preview,
-        get_speckit_uninstall_preview,
-        install_speckit_partial,
-        uninstall_speckit_partial,
-    )
+def _speckit_install_all(all_components: list):
+    """Install all components with preview using Textual."""
+    from rekall.integrations import get_speckit_preview, install_speckit_partial
 
-    clear_screen()
-    show_banner()
-
-    # Filter available components based on action
-    if action == "install":
-        available = [c for c in all_components if status.get(c) is False]
-        if not available:
-            console.print(f"[yellow]{t('speckit.all_installed')}[/yellow]")
-            brief_pause()
-            return
-        title_text = t("speckit.select_install").rstrip(".")
-    else:  # uninstall
-        available = [c for c in all_components if status.get(c) is True]
-        if not available:
-            console.print(f"[yellow]{t('speckit.none_installed')}[/yellow]")
-            brief_pause()
-            return
-        title_text = t("speckit.select_uninstall").rstrip(".")
-
-    # Build multi-select menu
-    menu_entries = [t("speckit.all_select")] + [labels.get(c, c) for c in available]
-
-    menu = TerminalMenu(
-        menu_entries,
-        title=f"{title_text} ({t('speckit.select_toggle')}):",
-        menu_cursor="► ",
-        menu_cursor_style=("fg_cyan", "bold"),
-        multi_select=True,
-        show_multi_select_hint=True,
-        multi_select_select_on_accept=False,
-        multi_select_empty_ok=False,
-    )
-
-    selected_indices = menu.show()
-    if selected_indices is None:
-        return
-
-    # Handle "All" selection
-    if isinstance(selected_indices, tuple):
-        selected_indices = list(selected_indices)
-    elif isinstance(selected_indices, int):
-        selected_indices = [selected_indices]
-
-    # Map indices to components (accounting for "All" at index 0)
-    if 0 in selected_indices:
-        selected_components = available  # All selected
-    else:
-        selected_components = [available[i - 1] for i in selected_indices if i > 0]
-
-    if not selected_components:
-        console.print(f"[yellow]{t('speckit.none_selected')}[/yellow]")
-        brief_pause()
-        return
-
-    # Show preview
-    clear_screen()
-    show_banner()
-
-    console.print(f"[bold]{t('speckit.preview')} - {action.upper()}[/bold]")
-    console.print()
-
-    if action == "install":
-        previews = get_speckit_preview(selected_components)
-    else:
-        previews = get_speckit_uninstall_preview(selected_components)
-
-    for comp in selected_components:
-        preview = previews.get(comp, f"[?] {comp}")
-        console.print(Panel(preview, title=labels.get(comp, comp), border_style="cyan"))
-        console.print()
+    # Build preview text
+    previews = get_speckit_preview(all_components)
+    preview_lines = [f"[bold]{t('speckit.preview')} - {t('speckit.install_all').upper()}[/bold]", ""]
+    for comp, preview in previews.items():
+        preview_lines.append(f"[cyan]{comp}:[/cyan] {preview.split(chr(10))[0]}")
+    show_info("\n".join(preview_lines))
 
     # Confirm
-    confirm_menu = TerminalMenu(
-        [t("speckit.yes_action", action=action, count=len(selected_components)), t("common.cancel")],
-        title=t("speckit.apply_changes"),
-        menu_cursor="► ",
-        menu_cursor_style=("fg_cyan", "bold"),
-    )
-
-    if confirm_menu.show() != 0:
+    confirm_options = [t("speckit.yes_install_all"), t("common.cancel")]
+    app = SimpleMenuApp(t("speckit.apply_changes"), confirm_options)
+    if app.run() != 0:
         return
 
     # Execute
     try:
-        if action == "install":
-            result = install_speckit_partial(selected_components)
-            console.print(f"\n[green]✓[/green] {t('ide.installation_complete')}!")
-            if result["installed"]:
-                console.print(f"  {t('ide.installed')}: {', '.join(result['installed'])}")
-            if result["skipped"]:
-                console.print(f"  [dim]{t('speckit.skipped')}: {', '.join(result['skipped'])}[/dim]")
-        else:
-            result = uninstall_speckit_partial(selected_components)
-            console.print(f"\n[green]✓[/green] {t('ide.uninstallation_complete')}!")
-            if result["removed"]:
-                console.print(f"  {t('speckit.removed')}: {', '.join(result['removed'])}")
-            if result["skipped"]:
-                console.print(f"  [dim]{t('speckit.skipped')}: {', '.join(result['skipped'])}[/dim]")
-
-        if result.get("errors"):
-            console.print(f"  [red]{t('speckit.errors')}: {', '.join(result['errors'])}[/red]")
-
-    except Exception as e:
-        console.print(f"\n[red]✗ Error: {e}[/red]")
-
-    press_enter_to_continue()
-
-
-def _speckit_install_all(all_components: list):
-    """Install all components with preview."""
-    from rekall.integrations import get_speckit_preview, install_speckit_partial
-
-    clear_screen()
-    show_banner()
-
-    console.print(f"[bold]{t('speckit.preview')} - {t('speckit.install_all').upper()}[/bold]")
-    console.print()
-
-    previews = get_speckit_preview(all_components)
-    for comp, preview in previews.items():
-        console.print(f"[cyan]{comp}:[/cyan] {preview.split(chr(10))[0]}")  # First line only
-
-    console.print()
-
-    confirm_menu = TerminalMenu(
-        [t("speckit.yes_install_all"), t("common.cancel")],
-        title=t("speckit.apply_changes"),
-        menu_cursor="► ",
-        menu_cursor_style=("fg_cyan", "bold"),
-    )
-
-    if confirm_menu.show() != 0:
-        return
-
-    try:
         result = install_speckit_partial(all_components)
-        console.print(f"\n[green]✓[/green] {t('ide.installation_complete')}!")
+        result_lines = [f"[green]✓[/green] {t('ide.installation_complete')}!"]
         if result["installed"]:
-            console.print(f"  {t('ide.installed')}: {', '.join(result['installed'])}")
+            result_lines.append(f"  {t('ide.installed')}: {', '.join(result['installed'])}")
         if result["skipped"]:
-            console.print(f"  [dim]{t('speckit.skipped')}: {', '.join(result['skipped'])}[/dim]")
+            result_lines.append(f"  [dim]{t('speckit.skipped')}: {', '.join(result['skipped'])}[/dim]")
         if result["errors"]:
-            console.print(f"  [red]{t('speckit.errors')}: {', '.join(result['errors'])}[/red]")
+            result_lines.append(f"  [red]{t('speckit.errors')}: {', '.join(result['errors'])}[/red]")
+        show_info("\n".join(result_lines))
     except Exception as e:
-        console.print(f"\n[red]✗ {t('common.error')}: {e}[/red]")
-
-    press_enter_to_continue()
+        show_info(f"[red]✗ {t('common.error')}: {e}[/red]")
 
 
 def _speckit_uninstall_all(all_components: list):
-    """Uninstall all components with preview."""
+    """Uninstall all components with preview using Textual."""
     from rekall.integrations import get_speckit_uninstall_preview, uninstall_speckit_partial
 
-    clear_screen()
-    show_banner()
-
-    console.print(f"[bold]{t('speckit.preview')} - {t('speckit.uninstall_all').upper()}[/bold]")
-    console.print()
-
+    # Build preview text
     previews = get_speckit_uninstall_preview(all_components)
+    preview_lines = [f"[bold]{t('speckit.preview')} - {t('speckit.uninstall_all').upper()}[/bold]", ""]
     for comp, preview in previews.items():
-        console.print(f"[cyan]{comp}:[/cyan] {preview.split(chr(10))[0]}")  # First line only
+        preview_lines.append(f"[cyan]{comp}:[/cyan] {preview.split(chr(10))[0]}")
+    preview_lines.append("")
+    preview_lines.append(f"[dim]{t('speckit.note_regex')}[/dim]")
+    show_info("\n".join(preview_lines))
 
-    console.print()
-    console.print(f"[dim]{t('speckit.note_regex')}[/dim]")
-    console.print()
-
-    confirm_menu = TerminalMenu(
-        [t("speckit.yes_uninstall_all"), t("common.cancel")],
-        title=t("speckit.remove_integration"),
-        menu_cursor="► ",
-        menu_cursor_style=("fg_cyan", "bold"),
-    )
-
-    if confirm_menu.show() != 0:
+    # Confirm
+    confirm_options = [t("speckit.yes_uninstall_all"), t("common.cancel")]
+    app = SimpleMenuApp(t("speckit.remove_integration"), confirm_options)
+    if app.run() != 0:
         return
 
+    # Execute
     try:
         result = uninstall_speckit_partial(all_components)
-        console.print(f"\n[green]✓[/green] {t('ide.uninstallation_complete')}!")
+        result_lines = [f"[green]✓[/green] {t('ide.uninstallation_complete')}!"]
         if result["removed"]:
-            console.print(f"  {t('speckit.removed')}: {', '.join(result['removed'])}")
+            result_lines.append(f"  {t('speckit.removed')}: {', '.join(result['removed'])}")
         if result["skipped"]:
-            console.print(f"  [dim]{t('speckit.skipped')}: {', '.join(result['skipped'])}[/dim]")
+            result_lines.append(f"  [dim]{t('speckit.skipped')}: {', '.join(result['skipped'])}[/dim]")
         if result["errors"]:
-            console.print(f"  [red]{t('speckit.errors')}: {', '.join(result['errors'])}[/red]")
+            result_lines.append(f"  [red]{t('speckit.errors')}: {', '.join(result['errors'])}[/red]")
+        show_info("\n".join(result_lines))
     except Exception as e:
-        console.print(f"\n[red]✗ {t('common.error')}: {e}[/red]")
-
-    press_enter_to_continue()
+        show_info(f"[red]✗ {t('common.error')}: {e}[/red]")
 
 
 def action_research():
@@ -1764,47 +2740,32 @@ def action_research():
     research_dir = Path(__file__).parent / "research"
 
     if not research_dir.exists():
-        clear_screen()
-        show_banner()
-        console.print(f"[yellow]{t('research.no_files')}[/yellow]")
-        brief_pause()
+        show_toast(f"⚠ {t('research.no_files')}")
         return
 
     files = sorted(research_dir.glob("*.md"))
     if not files:
-        clear_screen()
-        show_banner()
-        console.print(f"[yellow]{t('research.no_files')}[/yellow]")
-        brief_pause()
+        show_toast(f"⚠ {t('research.no_files')}")
         return
 
-    # Run the Research app
+    # Run the Research app (Textual)
     app = ResearchApp(files)
     app.run()
 
 
 def action_add_entry():
     """Add a new knowledge entry."""
-    clear_screen()
-    show_banner()
+    # Select type using Textual menu
+    type_options = list(VALID_TYPES) + [f"← {t('common.back')}"]
+    app = SimpleMenuApp(t('add.type'), type_options)
+    idx = app.run()
 
-    # Select type
-    type_options = list(VALID_TYPES) + [t("setup.back")]
-    menu = TerminalMenu(
-        type_options,
-        title=f"{t('add.type')}:",
-        menu_cursor="► ",
-        menu_cursor_style=("fg_cyan", "bold"),
-    )
-
-    idx = menu.show()
     if idx is None or idx == len(type_options) - 1:
         return
 
-    entry_type = type_options[idx]
-    console.print(f"[cyan]{t('add.type')}:[/cyan] {entry_type}\n")
+    entry_type = VALID_TYPES[idx]
 
-    # Get title
+    # Get title (still uses prompt_toolkit for now)
     title = prompt_input(t("add.title"))
     if not title:
         return
@@ -1816,15 +2777,10 @@ def action_add_entry():
     # Get project
     project = prompt_input(t("add.project"), required=False)
 
-    # Get confidence
+    # Get confidence using Textual menu
     conf_options = ["1 - Very Low", "2 - Low", "3 - Medium", "4 - High", "5 - Very High"]
-    conf_menu = TerminalMenu(
-        conf_options,
-        title=f"{t('add.confidence')}:",
-        menu_cursor="► ",
-        menu_cursor_style=("fg_cyan", "bold"),
-    )
-    conf_idx = conf_menu.show()
+    conf_app = SimpleMenuApp(t('add.confidence'), conf_options)
+    conf_idx = conf_app.run()
     confidence = (conf_idx + 1) if conf_idx is not None else 3
 
     # Create entry
@@ -1844,9 +2800,7 @@ def action_add_entry():
 
 def action_search():
     """Search knowledge base."""
-    clear_screen()
-    show_banner()
-
+    # Get search query (still uses prompt_toolkit for now)
     query = prompt_input(t("search.query"))
     if not query:
         return
@@ -1855,22 +2809,13 @@ def action_search():
     results = db.search(query, limit=20)
 
     if not results:
-        console.print(f"[yellow]{t('search.no_results')}[/yellow]")
-        brief_pause()
+        show_toast(f"⚠ {t('search.no_results')}")
         return
 
-    # Display results
-    table = Table(title=f"{t('search.results_for')}: {query}", box=box.ROUNDED)
-    table.add_column("ID", style="dim", width=12)
-    table.add_column(t("browse.type"), width=10)
-    table.add_column(t("add.title"), min_width=30)
-
-    for result in results:
-        entry = result.entry
-        table.add_row(entry.id[:12] + "...", entry.type, entry.title)
-
-    console.print(table)
-    press_enter_to_continue()
+    # Display results using BrowseApp (Textual)
+    entries = [r.entry for r in results]
+    app = BrowseApp(entries, db)
+    app.run()
 
 
 def action_browse():
@@ -1879,133 +2824,106 @@ def action_browse():
     entries = db.list_all(limit=100)
 
     if not entries:
-        clear_screen()
-        show_banner()
-        console.print(f"[yellow]{t('browse.no_entries')}[/yellow]")
-        brief_pause()
+        show_toast(f"⚠ {t('browse.no_entries')}")
         return
 
     while True:
-        # Run the browse app
+        # Run the browse app (Textual)
         app = BrowseApp(entries, db)
         result = app.run()
 
         if result is None:
-            # User pressed Escape or Q - exit browse
             return
 
         action, entry = result
 
         if action == "view":
             _show_entry_detail(entry)
-            # Refresh entries after viewing (might have been edited)
             entries = db.list_all(limit=100)
             if not entries:
-                clear_screen()
-                show_banner()
-                console.print(f"[yellow]{t('browse.no_entries')}[/yellow]")
-                brief_pause()
+                show_toast(f"⚠ {t('browse.no_entries')}")
                 return
         elif action == "edit":
-            clear_screen()
-            show_banner()
             _edit_entry(entry)
             entries = db.list_all(limit=100)
             if not entries:
                 return
         elif action == "delete":
-            clear_screen()
-            show_banner()
             if _delete_entry(entry):
                 entries = db.list_all(limit=100)
                 if not entries:
-                    clear_screen()
-                    show_banner()
-                    console.print(f"[yellow]{t('browse.no_entries')}[/yellow]")
-                    brief_pause()
+                    show_toast(f"⚠ {t('browse.no_entries')}")
                     return
 
 
 def _show_entry_detail(entry):
-    """Display entry details with navigation options."""
+    """Display entry details with navigation options using Textual."""
     while True:
-        clear_screen()
-        show_banner()
-
-        # Display details
-        console.print(Panel(f"[bold]{entry.title}[/bold]", border_style="cyan"))
-        console.print()
-        console.print(f"[cyan]{t('browse.id')}:[/cyan]         {entry.id}")
-        console.print(f"[cyan]{t('browse.type')}:[/cyan]       {entry.type}")
-        console.print(f"[cyan]{t('browse.status')}:[/cyan]     {entry.status}")
-        console.print(f"[cyan]{t('browse.confidence')}:[/cyan] {'★' * entry.confidence}{'☆' * (5 - entry.confidence)}")
+        # Build detail content
+        stars = '★' * entry.confidence + '☆' * (5 - entry.confidence)
+        lines = [
+            f"[bold cyan]━━━ {entry.title} ━━━[/bold cyan]",
+            "",
+            f"[cyan]{t('browse.id')}:[/cyan]         {entry.id}",
+            f"[cyan]{t('browse.type')}:[/cyan]       {entry.type}",
+            f"[cyan]{t('browse.status')}:[/cyan]     {entry.status}",
+            f"[cyan]{t('browse.confidence')}:[/cyan] {stars}",
+        ]
         if entry.tags:
-            console.print(f"[cyan]{t('browse.tags')}:[/cyan]       {', '.join(entry.tags)}")
+            lines.append(f"[cyan]{t('browse.tags')}:[/cyan]       {', '.join(entry.tags)}")
         if entry.project:
-            console.print(f"[cyan]{t('add.project')}:[/cyan]    {entry.project}")
-        console.print(f"[cyan]{t('browse.created')}:[/cyan]    {entry.created_at.strftime('%Y-%m-%d %H:%M')}")
-        console.print(f"[cyan]{t('browse.updated')}:[/cyan]    {entry.updated_at.strftime('%Y-%m-%d %H:%M')}")
+            lines.append(f"[cyan]{t('add.project')}:[/cyan]    {entry.project}")
+        lines.append(f"[cyan]{t('browse.created')}:[/cyan]    {entry.created_at.strftime('%Y-%m-%d %H:%M')}")
+        lines.append(f"[cyan]{t('browse.updated')}:[/cyan]    {entry.updated_at.strftime('%Y-%m-%d %H:%M')}")
 
         if entry.content:
-            console.print()
-            console.print(f"[cyan]{t('browse.content')}:[/cyan]")
-            console.print(Panel(entry.content, border_style="dim"))
+            lines.extend(["", f"[cyan]{t('browse.content')}:[/cyan]", entry.content])
 
-        console.print()
+        # Show details using Textual
+        show_info("\n".join(lines))
 
-        # Action menu
+        # Action menu using Textual
         action_options = [
-            t("browse.back_to_list"),
-            "─" * 20,
+            f"← {t('browse.back_to_list')}",
             t("browse.edit_entry"),
             t("browse.delete_entry"),
         ]
-        action_menu = TerminalMenu(
-            action_options,
-            title=f"{t('action.actions')}:",
-            menu_cursor="► ",
-            menu_cursor_style=("fg_cyan", "bold"),
-            skip_empty_entries=True,
-        )
-
-        action_idx = action_menu.show()
+        app = SimpleMenuApp(t('action.actions'), action_options)
+        action_idx = app.run()
 
         if action_idx is None or action_idx == 0:
-            return  # Back to list
-        elif action_idx == 2:
+            return
+        elif action_idx == 1:
             _edit_entry(entry)
-            return  # Return to list after edit
-        elif action_idx == 3:
+            return
+        elif action_idx == 2:
             if _delete_entry(entry):
-                return  # Return to list after delete
+                return
 
 
 def _edit_entry(entry):
-    """Edit an existing entry."""
-    console.print(f"\n[cyan]{t('edit.title')}[/cyan]")
-    console.print(f"[dim]({t('edit.keep_current')})[/dim]\n")
-
+    """Edit an existing entry (uses prompt_toolkit for inputs)."""
     # Edit title
-    new_title = prompt_input(f"{t('add.title')} [{entry.title}]")
+    new_title = prompt_input(f"{t('add.title')} [{entry.title}]", required=False)
     if new_title:
         entry.title = new_title
 
     # Edit content
-    console.print(f"[dim]{t('edit.current_content')}: {entry.content[:100]}{'...' if len(entry.content or '') > 100 else ''}[/dim]")
-    new_content = prompt_input(t("edit.new_content"))
+    content_preview = (entry.content[:50] + '...') if entry.content and len(entry.content) > 50 else (entry.content or '')
+    new_content = prompt_input(f"{t('edit.new_content')} [{content_preview}]", required=False)
     if new_content:
         entry.content = new_content
 
     # Edit project
-    new_project = prompt_input(f"{t('add.project')} [{entry.project or t('edit.none')}]")
+    new_project = prompt_input(f"{t('add.project')} [{entry.project or '-'}]", required=False)
     if new_project:
         entry.project = new_project if new_project != "-" else None
 
     # Edit tags
-    current_tags = ", ".join(entry.tags) if entry.tags else t("edit.none")
-    new_tags = prompt_input(f"{t('browse.tags')} [{current_tags}]")
+    current_tags = ", ".join(entry.tags) if entry.tags else "-"
+    new_tags = prompt_input(f"{t('browse.tags')} [{current_tags}]", required=False)
     if new_tags:
-        entry.tags = [t.strip() for t in new_tags.split(",") if t.strip()]
+        entry.tags = [tag.strip() for tag in new_tags.split(",") if tag.strip()]
 
     # Save
     db = get_db()
@@ -2014,15 +2932,13 @@ def _edit_entry(entry):
 
 
 def _delete_entry(entry) -> bool:
-    """Delete an entry with confirmation. Returns True if deleted."""
-    confirm_menu = TerminalMenu(
-        [t("common.no"), t("common.yes")],
-        title=t("browse.confirm_delete", title=entry.title),
-        menu_cursor="► ",
-        menu_cursor_style=("fg_red", "bold"),
-    )
+    """Delete an entry with confirmation using Textual. Returns True if deleted."""
+    title = f"{t('browse.confirm_delete', title=entry.title[:30])}"
+    options = [t("common.no"), t("common.yes")]
+    app = SimpleMenuApp(title, options)
+    idx = app.run()
 
-    if confirm_menu.show() == 1:
+    if idx == 1:
         db = get_db()
         db.delete(entry.id)
         show_toast(f"✓ {t('browse.deleted')}")
@@ -2031,10 +2947,7 @@ def _delete_entry(entry) -> bool:
 
 
 def action_show():
-    """Show entry details by ID."""
-    clear_screen()
-    show_banner()
-
+    """Show entry details by ID using Textual."""
     entry_id = prompt_input(t("show.entry_id"))
     if not entry_id:
         return
@@ -2043,36 +2956,37 @@ def action_show():
     entry = db.get(entry_id)
 
     if not entry:
-        console.print(f"[red]{t('show.not_found')}: {entry_id}[/red]")
-        press_enter_to_continue()
+        show_toast(f"⚠ {t('show.not_found')}: {entry_id}")
         return
 
-    # Display details
-    console.print(Panel(f"[bold]{entry.title}[/bold]", border_style="cyan"))
-    console.print(f"[cyan]{t('browse.id')}:[/cyan] {entry.id}")
-    console.print(f"[cyan]{t('browse.type')}:[/cyan] {entry.type}")
-    console.print(f"[cyan]{t('browse.status')}:[/cyan] {entry.status}")
-    console.print(f"[cyan]{t('browse.confidence')}:[/cyan] {'★' * entry.confidence}{'☆' * (5 - entry.confidence)}")
+    # Build and display details using Textual
+    stars = '★' * entry.confidence + '☆' * (5 - entry.confidence)
+    lines = [
+        f"[bold cyan]━━━ {entry.title} ━━━[/bold cyan]",
+        "",
+        f"[cyan]{t('browse.id')}:[/cyan] {entry.id}",
+        f"[cyan]{t('browse.type')}:[/cyan] {entry.type}",
+        f"[cyan]{t('browse.status')}:[/cyan] {entry.status}",
+        f"[cyan]{t('browse.confidence')}:[/cyan] {stars}",
+    ]
     if entry.tags:
-        console.print(f"[cyan]{t('browse.tags')}:[/cyan] {', '.join(entry.tags)}")
+        lines.append(f"[cyan]{t('browse.tags')}:[/cyan] {', '.join(entry.tags)}")
     if entry.project:
-        console.print(f"[cyan]{t('add.project')}:[/cyan] {entry.project}")
+        lines.append(f"[cyan]{t('add.project')}:[/cyan] {entry.project}")
     if entry.content:
-        console.print(f"\n[cyan]{t('browse.content')}:[/cyan]\n{entry.content}")
+        lines.extend(["", f"[cyan]{t('browse.content')}:[/cyan]", entry.content])
 
-    press_enter_to_continue()
+    show_info("\n".join(lines))
 
 
 def action_setup():
-    """Setup / Configuration submenu - choose installation location."""
+    """Setup / Configuration submenu using Textual."""
     from pathlib import Path
+
     from rekall.config import get_config
-    from rekall.paths import PathResolver, PathSource, init_local_project
+    from rekall.paths import PathResolver
 
     while True:
-        clear_screen()
-        show_banner()
-
         config = get_config()
 
         # Detect current state
@@ -2082,91 +2996,60 @@ def action_setup():
         has_local_db = local_db.exists()
 
         resolver = PathResolver()
-        global_paths = resolver._from_xdg()  # Get XDG paths directly
+        global_paths = resolver._from_xdg()
         global_db = global_paths.db_path if global_paths else Path.home() / ".local" / "share" / "rekall" / "knowledge.db"
         has_global_db = global_db.exists()
 
-        # Show current config
-        console.print(f"[bold cyan]{t('setup.title')}[/bold cyan]")
-        console.print()
-        console.print(f"[cyan]{t('setup.current_source')}:[/cyan] {config.paths.source.value}")
-        console.print(f"[cyan]{t('setup.active_db')}:[/cyan] {config.db_path}")
-        console.print()
+        # Build status info
+        global_status = "[green]✓[/green]" if has_global_db else "[dim]○[/dim]"
+        local_status = "[green]✓[/green]" if has_local_db else ("[yellow]⚠[/yellow]" if has_local else "[dim]○[/dim]")
 
-        # Show status of both locations
-        if has_global_db:
-            console.print(f"[green]✓[/green] {t('setup.global_db')}: {global_db}")
-        else:
-            console.print(f"[dim]○ {t('setup.global_db')}: {global_db} ({t('setup.not_created')})[/dim]")
+        # Build title with status
+        title = f"{t('setup.title')} | {t('setup.current_source')}: {config.paths.source.value}"
 
-        if has_local_db:
-            console.print(f"[green]✓[/green] {t('setup.local_db')}: {local_db}")
-        elif has_local:
-            console.print(f"[yellow]⚠[/yellow] .rekall/ exists but no DB: {local_rekall}")
-        else:
-            console.print(f"[dim]○ {t('setup.local_db')}: {local_rekall} ({t('setup.not_created')})[/dim]")
-        console.print()
-
-        # Build dynamic menu based on state
+        # Build dynamic menu
         submenu_options = []
         actions = []
 
-        # Option 1: Global
         if has_global_db:
-            submenu_options.append(t("setup.use_global"))
-            actions.append(("use_global", None))
+            submenu_options.append(f"{global_status} {t('setup.use_global')}")
+            actions.append("use_global")
         else:
-            submenu_options.append(t("setup.create_global"))
-            actions.append(("create_global", None))
+            submenu_options.append(f"{global_status} {t('setup.create_global')}")
+            actions.append("create_global")
 
-        # Option 2: Local
         if has_local_db:
-            submenu_options.append(t("setup.use_local"))
-            actions.append(("use_local", None))
+            submenu_options.append(f"{local_status} {t('setup.use_local')}")
+            actions.append("use_local")
         else:
-            submenu_options.append(t("setup.create_local"))
-            actions.append(("create_local", None))
+            submenu_options.append(f"{local_status} {t('setup.create_local')}")
+            actions.append("create_local")
 
-        # Option 3: Migration (if both exist or one exists)
         if has_global_db and not has_local_db:
             submenu_options.append(t("setup.copy_global_to_local"))
-            actions.append(("migrate_to_local", None))
+            actions.append("migrate_to_local")
         if has_local_db and not has_global_db:
             submenu_options.append(t("setup.copy_local_to_global"))
-            actions.append(("migrate_to_global", None))
-
-        submenu_options.append("─" * 35)
-        actions.append((None, None))
+            actions.append("migrate_to_global")
 
         submenu_options.append(t("setup.show_config"))
-        actions.append(("show_config", None))
+        actions.append("show_config")
 
-        submenu_options.append("─" * 35)
-        actions.append((None, None))
+        submenu_options.append(f"← {t('setup.back')}")
+        actions.append("back")
 
-        submenu_options.append(t("setup.back"))
-        actions.append(("back", None))
+        # Show menu using Textual
+        app = SimpleMenuApp(title, submenu_options)
+        idx = app.run()
 
-        menu = TerminalMenu(
-            submenu_options,
-            title="Actions:",
-            menu_cursor="► ",
-            menu_cursor_style=("fg_cyan", "bold"),
-            skip_empty_entries=True,
-        )
-
-        idx = menu.show()
-        if idx is None:
+        if idx is None or actions[idx] == "back":
             return
 
-        action, _ = actions[idx]
-
-        if action == "back":
-            return
-        elif action == "use_global":
-            show_toast(f"✓ Base globale déjà active")
+        action = actions[idx]
+        if action == "use_global":
+            show_toast("✓ Base globale déjà active")
         elif action == "use_local":
-            show_toast(f"✓ Base locale déjà active")
+            show_toast("✓ Base locale déjà active")
         elif action == "create_global":
             _setup_global()
         elif action == "create_local":
@@ -2180,36 +3063,24 @@ def action_setup():
 
 
 def _migrate_db(source: Path, dest: Path, direction: str):
-    """Copy database from source to destination."""
+    """Copy database from source to destination using Textual."""
     import shutil
 
-    clear_screen()
-    show_banner()
+    # Show info about migration
+    info = f"[bold]Migration {direction}[/bold]\n\n[cyan]Source:[/cyan] {source}\n[cyan]Destination:[/cyan] {dest}"
+    show_info(info)
 
-    console.print(f"[bold]Migration {direction}[/bold]")
-    console.print()
-    console.print(f"[cyan]Source:[/cyan] {source}")
-    console.print(f"[cyan]Destination:[/cyan] {dest}")
-    console.print()
-
+    # Confirm
     if dest.exists():
-        console.print("[yellow]⚠ La destination existe déjà ![/yellow]")
-        confirm_menu = TerminalMenu(
-            ["Écraser la destination", "Annuler"],
-            menu_cursor="► ",
-            menu_cursor_style=("fg_cyan", "bold"),
-        )
-        if confirm_menu.show() != 0:
-            return
+        title = "⚠ La destination existe déjà"
+        options = ["Écraser la destination", "Annuler"]
     else:
-        confirm_menu = TerminalMenu(
-            [f"Oui, copier la base", "Annuler"],
-            title="Confirmer la copie ?",
-            menu_cursor="► ",
-            menu_cursor_style=("fg_cyan", "bold"),
-        )
-        if confirm_menu.show() != 0:
-            return
+        title = "Confirmer la copie ?"
+        options = ["Oui, copier la base", "Annuler"]
+
+    app = SimpleMenuApp(title, options)
+    if app.run() != 0:
+        return
 
     # Create destination directory if needed
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -2217,132 +3088,89 @@ def _migrate_db(source: Path, dest: Path, direction: str):
     # Copy database
     shutil.copy2(source, dest)
 
-    console.print(f"\n[green]✓[/green] Base copiée: {dest}")
-
     # If migrating to local, also install commands
     if "LOCAL" in direction:
-        _install_local_commands(dest.parent.parent)  # .rekall -> project root
+        _install_local_commands(dest.parent.parent)
 
-    press_enter_to_continue()
+    show_toast(f"✓ Base copiée: {dest}", 2.0)
 
 
 def _setup_global():
-    """Initialize global XDG database."""
-    from rekall.paths import PathResolver
+    """Initialize global XDG database using Textual."""
     from rekall.db import Database
+    from rekall.paths import PathResolver
 
-    clear_screen()
-    show_banner()
-
-    # Resolve XDG paths
     resolver = PathResolver()
     paths = resolver.resolve()
 
-    console.print("[bold]Installation Globale (XDG)[/bold]")
-    console.print()
-    console.print(f"[cyan]Config:[/cyan]  {paths.config_dir}")
-    console.print(f"[cyan]Data:[/cyan]    {paths.data_dir}")
-    console.print(f"[cyan]Cache:[/cyan]   {paths.cache_dir}")
-    console.print(f"[cyan]DB:[/cyan]      {paths.db_path}")
-    console.print()
+    # Show info
+    info = f"[bold]Installation Globale (XDG)[/bold]\n\n[cyan]Config:[/cyan]  {paths.config_dir}\n[cyan]Data:[/cyan]    {paths.data_dir}\n[cyan]Cache:[/cyan]   {paths.cache_dir}\n[cyan]DB:[/cyan]      {paths.db_path}"
+    show_info(info)
 
     if paths.db_path.exists():
-        console.print("[yellow]⚠ La base de données existe déjà.[/yellow]")
-        console.print()
-
-        confirm_menu = TerminalMenu(
-            ["Ouvrir la base existante", "Annuler"],
-            menu_cursor="► ",
-            menu_cursor_style=("fg_cyan", "bold"),
-        )
-        if confirm_menu.show() != 0:
-            return
+        title = "⚠ La base de données existe déjà"
+        options = ["Ouvrir la base existante", "Annuler"]
     else:
-        # Confirm creation
-        confirm_menu = TerminalMenu(
-            ["Oui, créer la base globale", "Annuler"],
-            title="Créer la base de données ?",
-            menu_cursor="► ",
-            menu_cursor_style=("fg_cyan", "bold"),
-        )
-        if confirm_menu.show() != 0:
-            return
+        title = "Créer la base de données ?"
+        options = ["Oui, créer la base globale", "Annuler"]
 
-        # Create directories
+    app = SimpleMenuApp(title, options)
+    if app.run() != 0:
+        return
+
+    if not paths.db_path.exists():
         paths.config_dir.mkdir(parents=True, exist_ok=True)
         paths.data_dir.mkdir(parents=True, exist_ok=True)
         paths.cache_dir.mkdir(parents=True, exist_ok=True)
 
-    # Initialize DB
     db = Database(paths.db_path)
     db.init()
     db.close()
 
-    show_toast(f"✓ Base globale initialisée", 2.0)
+    show_toast("✓ Base globale initialisée", 2.0)
 
 
 def _setup_local():
-    """Initialize local project database."""
+    """Initialize local project database using Textual."""
     from pathlib import Path
-    from rekall.paths import init_local_project
 
-    clear_screen()
-    show_banner()
+    from rekall.paths import init_local_project
 
     cwd = Path.cwd()
     local_dir = cwd / ".rekall"
 
-    console.print("[bold]Installation Locale (Projet)[/bold]")
-    console.print()
-    console.print(f"[cyan]Dossier:[/cyan]  {local_dir}")
-    console.print(f"[cyan]DB:[/cyan]       {local_dir / 'knowledge.db'}")
-    console.print()
+    # Show info
+    info = f"[bold]Installation Locale (Projet)[/bold]\n\n[cyan]Dossier:[/cyan]  {local_dir}\n[cyan]DB:[/cyan]       {local_dir / 'knowledge.db'}"
+    show_info(info)
 
     if local_dir.exists():
-        console.print("[yellow]⚠ Le dossier .rekall/ existe déjà.[/yellow]")
-        console.print()
-
-        confirm_menu = TerminalMenu(
-            ["Ouvrir la base existante", "Annuler"],
-            menu_cursor="► ",
-            menu_cursor_style=("fg_cyan", "bold"),
-        )
-        if confirm_menu.show() != 0:
+        title = "⚠ Le dossier .rekall/ existe déjà"
+        options = ["Ouvrir la base existante", "Annuler"]
+        app = SimpleMenuApp(title, options)
+        if app.run() != 0:
             return
     else:
-        console.print("[dim]Un fichier .gitignore sera créé avec des suggestions.[/dim]")
-        console.print()
+        title = "Versionner la base dans Git ?"
+        options = [
+            "Versionner la DB (partage équipe)",
+            "Exclure la DB du Git (données locales)",
+            "Annuler",
+        ]
+        app = SimpleMenuApp(title, options)
+        git_choice = app.run()
 
-        # Ask about git versioning
-        git_menu = TerminalMenu(
-            [
-                "Versionner la DB (partage équipe)",
-                "Exclure la DB du Git (données locales)",
-                "Annuler",
-            ],
-            title="Versionner la base dans Git ?",
-            menu_cursor="► ",
-            menu_cursor_style=("fg_cyan", "bold"),
-        )
-
-        git_choice = git_menu.show()
         if git_choice is None or git_choice == 2:
             return
 
         exclude_db = (git_choice == 1)
-
-        # Create local project
         init_local_project(cwd, exclude_db_from_git=exclude_db)
-
-        # Copy rekall.save.md command to local .claude/commands/
         _install_local_commands(cwd)
 
-    show_toast(f"✓ Projet local initialisé", 2.0)
+    show_toast("✓ Projet local initialisé", 2.0)
 
 
 def _install_local_commands(project_path: Path):
     """Install rekall commands to project's .claude/commands/."""
-    from pathlib import Path
 
     # Source: global command
     global_cmd = Path.home() / ".claude" / "commands" / "rekall.save.md"
@@ -2352,7 +3180,7 @@ def _install_local_commands(project_path: Path):
     local_cmd = local_cmd_dir / "rekall.save.md"
 
     if not global_cmd.exists():
-        console.print("[yellow]⚠ rekall.save.md global non trouvé, commande locale non installée.[/yellow]")
+        show_toast("⚠ rekall.save.md global non trouvé, commande locale non installée.")
         return
 
     # Create directory if needed
@@ -2361,22 +3189,21 @@ def _install_local_commands(project_path: Path):
     # Copy command
     local_cmd.write_text(global_cmd.read_text())
 
-    console.print(f"[green]✓[/green] Commande /rekall.save installée: {local_cmd}")
+    show_toast(f"✓ Commande /rekall.save installée: {local_cmd}")
 
 
 def _show_config_details():
     """Show detailed configuration."""
-    from rekall.config import get_config
     import os
+    from io import StringIO
 
-    clear_screen()
-    show_banner()
+    from rich.console import Console as RichConsole
+
+    from rekall.config import get_config
 
     config = get_config()
 
-    console.print("[bold]Configuration Détaillée[/bold]")
-    console.print()
-
+    # Build table content
     table = Table(box=box.ROUNDED)
     table.add_column("Paramètre", style="cyan")
     table.add_column("Valeur")
@@ -2392,16 +3219,21 @@ def _show_config_details():
     table.add_row("XDG_CONFIG_HOME", os.environ.get("XDG_CONFIG_HOME", "(non défini)"))
     table.add_row("XDG_DATA_HOME", os.environ.get("XDG_DATA_HOME", "(non défini)"))
 
-    console.print(table)
-    press_enter_to_continue()
+    # Capture table as string
+    string_io = StringIO()
+    temp_console = RichConsole(file=string_io, force_terminal=True, width=100)
+    temp_console.print("[bold]Configuration Détaillée[/bold]")
+    temp_console.print()
+    temp_console.print(table)
+    content = string_io.getvalue()
+
+    # Show in Textual app
+    show_info(content)
 
 
 def action_export_import():
-    """Export / Import submenu."""
+    """Export / Import submenu using Textual."""
     while True:
-        clear_screen()
-        show_banner()
-
         submenu_options = [
             t("export.archive"),
             t("export.markdown"),
@@ -2410,17 +3242,11 @@ def action_export_import():
             t("import.archive"),
             t("import.external_db"),
             "─" * 30,
-            t("setup.back"),
+            f"← {t('setup.back')}",
         ]
-        menu = TerminalMenu(
-            submenu_options,
-            title="Export / Import:",
-            menu_cursor="► ",
-            menu_cursor_style=("fg_cyan", "bold"),
-            skip_empty_entries=True,
-        )
+        app = SimpleMenuApp("Export / Import", submenu_options)
+        idx = app.run()
 
-        idx = menu.show()
         if idx is None or idx == 7:  # Back or Escape
             return
 
@@ -2437,8 +3263,9 @@ def action_export_import():
 
 
 def _do_export_rekall():
-    """Export to .rekall.zip archive."""
+    """Export to .rekall.zip archive using Textual."""
     from pathlib import Path
+
     from rekall.archive import RekallArchive
 
     filename = prompt_input(t("import.filename"))
@@ -2449,8 +3276,7 @@ def _do_export_rekall():
     entries = db.list_all(limit=100000)
 
     if not entries:
-        console.print(f"[yellow]{t('import.no_entries')}[/yellow]")
-        brief_pause()
+        show_toast(f"⚠ {t('import.no_entries')}")
         return
 
     output_path = Path(f"{filename}.rekall.zip")
@@ -2459,8 +3285,9 @@ def _do_export_rekall():
 
 
 def _do_export_text(fmt: str):
-    """Export to text format (md or json)."""
+    """Export to text format (md or json) using Textual."""
     from pathlib import Path
+
     from rekall import exporters
 
     filename = prompt_input(t("import.output_filename", fmt=fmt))
@@ -2471,8 +3298,7 @@ def _do_export_text(fmt: str):
     entries = db.list_all(limit=100000)
 
     if not entries:
-        console.print(f"[yellow]{t('import.no_entries')}[/yellow]")
-        brief_pause()
+        show_toast(f"⚠ {t('import.no_entries')}")
         return
 
     output_path = Path(f"{filename}.{fmt}")
@@ -2487,8 +3313,9 @@ def _do_export_text(fmt: str):
 
 
 def _do_import_rekall():
-    """Import from .rekall.zip archive."""
+    """Import from .rekall.zip archive using Textual."""
     from pathlib import Path
+
     from rekall.archive import RekallArchive
     from rekall.sync import ImportExecutor, build_import_plan
 
@@ -2498,47 +3325,47 @@ def _do_import_rekall():
 
     archive_path = Path(filepath)
     if not archive_path.exists():
-        console.print(f"[red]{t('import.file_not_found')}: {filepath}[/red]")
-        press_enter_to_continue()
+        show_info(f"[red]{t('import.file_not_found')}: {filepath}[/red]")
         return
 
     # Open and validate
     archive = RekallArchive.open(archive_path)
     if archive is None:
-        console.print(f"[red]{t('import.invalid_archive')}: {filepath}[/red]")
-        press_enter_to_continue()
+        show_info(f"[red]{t('import.invalid_archive')}: {filepath}[/red]")
         return
 
     validation = archive.validate()
     if not validation.valid:
-        console.print(f"[red]{t('import.validation_failed')}:[/red]")
+        error_lines = [f"[red]{t('import.validation_failed')}:[/red]"]
         for error in validation.errors:
-            console.print(f"  - {error}")
-        press_enter_to_continue()
+            error_lines.append(f"  - {error}")
+        show_info("\n".join(error_lines))
         return
 
-    # Show info
+    # Build info text
     manifest = archive.get_manifest()
-    console.print(f"\n[cyan]{t('import.archive_info')}:[/cyan]")
-    console.print(f"  {t('import.version')}: {manifest.format_version}")
-    console.print(f"  {t('browse.created')}: {manifest.created_at.strftime('%Y-%m-%d %H:%M')}")
-    console.print(f"  {t('import.entries')}: {manifest.stats.entries_count}")
-    console.print()
+    info_lines = [
+        f"[cyan]{t('import.archive_info')}:[/cyan]",
+        f"  {t('import.version')}: {manifest.format_version}",
+        f"  {t('browse.created')}: {manifest.created_at.strftime('%Y-%m-%d %H:%M')}",
+        f"  {t('import.entries')}: {manifest.stats.entries_count}",
+        "",
+    ]
 
     # Build plan
     db = get_db()
     imported_entries = archive.get_entries()
     plan = build_import_plan(db, imported_entries)
 
-    # Show preview
+    # Add preview
     executor = ImportExecutor(db)
     preview = executor.preview(plan)
-    console.print(preview)
-    console.print()
+    info_lines.append(preview)
+
+    show_info("\n".join(info_lines))
 
     if plan.total == 0:
-        console.print(f"[yellow]{t('import.nothing_to_import')}[/yellow]")
-        brief_pause()
+        show_toast(f"⚠ {t('import.nothing_to_import')}")
         return
 
     # Choose strategy
@@ -2548,14 +3375,9 @@ def _do_import_rekall():
         t("import.merge_conflicts"),
         t("import.cancel"),
     ]
-    strategy_menu = TerminalMenu(
-        strategy_options,
-        title=f"{t('import.conflict_strategy')}:",
-        menu_cursor="► ",
-        menu_cursor_style=("fg_cyan", "bold"),
-    )
+    strategy_app = SimpleMenuApp(t("import.conflict_strategy"), strategy_options)
+    strategy_idx = strategy_app.run()
 
-    strategy_idx = strategy_menu.show()
     if strategy_idx is None or strategy_idx == 3:
         return
 
@@ -2570,30 +3392,28 @@ def _do_import_rekall():
     result = executor.execute(plan, strategy=strategy)
 
     if result.success:
-        console.print()
-        console.print(f"[green]✓ {t('import.success')}[/green]")
-        console.print(f"  {t('import.added')}: {result.added}")
+        result_lines = [f"[green]✓ {t('import.success')}[/green]"]
+        result_lines.append(f"  {t('import.added')}: {result.added}")
         if result.replaced:
-            console.print(f"  {t('import.replaced')}: {result.replaced}")
+            result_lines.append(f"  {t('import.replaced')}: {result.replaced}")
         if result.merged:
-            console.print(f"  {t('import.merged')}: {result.merged}")
-        console.print(f"  {t('import.skipped')}: {result.skipped}")
+            result_lines.append(f"  {t('import.merged')}: {result.merged}")
+        result_lines.append(f"  {t('import.skipped')}: {result.skipped}")
         if result.backup_path:
-            console.print(f"  {t('import.backup')}: {result.backup_path}")
+            result_lines.append(f"  {t('import.backup')}: {result.backup_path}")
+        show_info("\n".join(result_lines))
     else:
-        console.print(f"[red]{t('import.failed')}:[/red]")
+        error_lines = [f"[red]{t('import.failed')}:[/red]"]
         for error in result.errors:
-            console.print(f"  - {error}")
-
-    press_enter_to_continue()
+            error_lines.append(f"  - {error}")
+        show_info("\n".join(error_lines))
 
 
 def _do_import_external_db():
-    """Import from an external knowledge.db file."""
+    """Import from an external knowledge.db file using Textual."""
     from pathlib import Path
-    from rekall.sync import (
-        ImportExecutor, build_import_plan, load_entries_from_external_db
-    )
+
+    from rekall.sync import ImportExecutor, build_import_plan, load_entries_from_external_db
 
     filepath = prompt_input(t("import.external_db_path"))
     if not filepath:
@@ -2601,48 +3421,47 @@ def _do_import_external_db():
 
     db_path = Path(filepath).expanduser()
     if not db_path.exists():
-        console.print(f"[red]{t('import.file_not_found')}: {filepath}[/red]")
-        press_enter_to_continue()
+        show_info(f"[red]{t('import.file_not_found')}: {filepath}[/red]")
         return
 
     # Load entries from external DB
     try:
         imported_entries = load_entries_from_external_db(db_path)
     except ValueError as e:
-        console.print(f"[red]{t('common.error')}: {e}[/red]")
-        press_enter_to_continue()
+        show_info(f"[red]{t('common.error')}: {e}[/red]")
         return
 
     if not imported_entries:
-        console.print(f"[yellow]{t('import.no_entries_external')}[/yellow]")
-        brief_pause()
+        show_toast(f"⚠ {t('import.no_entries_external')}")
         return
 
-    # Show info
-    console.print(f"\n[cyan]{t('import.external_db')}:[/cyan]")
-    console.print(f"  {t('import.file')}: {db_path}")
-    console.print(f"  {t('import.entries')}: {len(imported_entries)}")
+    # Build info text
+    info_lines = [
+        f"[cyan]{t('import.external_db')}:[/cyan]",
+        f"  {t('import.file')}: {db_path}",
+        f"  {t('import.entries')}: {len(imported_entries)}",
+    ]
 
     # Group by type
     types_count = {}
     for entry in imported_entries:
         types_count[entry.type] = types_count.get(entry.type, 0) + 1
-    console.print(f"  {t('import.types')}: {', '.join(f'{tp}({c})' for tp, c in types_count.items())}")
-    console.print()
+    info_lines.append(f"  {t('import.types')}: {', '.join(f'{tp}({c})' for tp, c in types_count.items())}")
+    info_lines.append("")
 
     # Build plan
     db = get_db()
     plan = build_import_plan(db, imported_entries)
 
-    # Show preview
+    # Add preview
     executor = ImportExecutor(db)
     preview = executor.preview(plan)
-    console.print(preview)
-    console.print()
+    info_lines.append(preview)
+
+    show_info("\n".join(info_lines))
 
     if plan.total == 0:
-        console.print(f"[yellow]{t('import.nothing_to_import')}[/yellow]")
-        brief_pause()
+        show_toast(f"⚠ {t('import.nothing_to_import')}")
         return
 
     # Choose strategy
@@ -2652,14 +3471,9 @@ def _do_import_external_db():
         t("import.merge_conflicts"),
         t("import.cancel"),
     ]
-    strategy_menu = TerminalMenu(
-        strategy_options,
-        title=f"{t('import.conflict_strategy')}:",
-        menu_cursor="► ",
-        menu_cursor_style=("fg_cyan", "bold"),
-    )
+    strategy_app = SimpleMenuApp(t("import.conflict_strategy"), strategy_options)
+    strategy_idx = strategy_app.run()
 
-    strategy_idx = strategy_menu.show()
     if strategy_idx is None or strategy_idx == 3:
         return
 
@@ -2674,22 +3488,21 @@ def _do_import_external_db():
     result = executor.execute(plan, strategy=strategy)
 
     if result.success:
-        console.print()
-        console.print(f"[green]✓ {t('import.success')}[/green]")
-        console.print(f"  {t('import.added')}: {result.added}")
+        result_lines = [f"[green]✓ {t('import.success')}[/green]"]
+        result_lines.append(f"  {t('import.added')}: {result.added}")
         if result.replaced:
-            console.print(f"  {t('import.replaced')}: {result.replaced}")
+            result_lines.append(f"  {t('import.replaced')}: {result.replaced}")
         if result.merged:
-            console.print(f"  {t('import.merged')}: {result.merged}")
-        console.print(f"  {t('import.skipped')}: {result.skipped}")
+            result_lines.append(f"  {t('import.merged')}: {result.merged}")
+        result_lines.append(f"  {t('import.skipped')}: {result.skipped}")
         if result.backup_path:
-            console.print(f"  {t('import.backup')}: {result.backup_path}")
+            result_lines.append(f"  {t('import.backup')}: {result.backup_path}")
+        show_info("\n".join(result_lines))
     else:
-        console.print(f"[red]{t('import.failed')}:[/red]")
+        error_lines = [f"[red]{t('import.failed')}:[/red]"]
         for error in result.errors:
-            console.print(f"  - {error}")
-
-    press_enter_to_continue()
+            error_lines.append(f"  - {error}")
+        show_info("\n".join(error_lines))
 
 
 # =============================================================================
@@ -2700,8 +3513,7 @@ def _do_import_external_db():
 # Map action keys to functions
 ACTION_MAP = {
     "language": None,  # Will be set to action_language
-    "setup": None,
-    "install_ide": None,
+    "config": None,    # Unified config & maintenance
     "speckit": None,
     "research": None,
     "add": None,
@@ -2717,8 +3529,7 @@ def get_menu_items():
     """Build menu items for RekallMenuApp."""
     return [
         ("language", t("menu.language"), t("menu.language.desc")),
-        ("setup", t("menu.setup"), t("menu.setup.desc")),
-        ("install_ide", t("menu.install_ide"), t("menu.install_ide.desc")),
+        ("config", t("menu.config"), t("menu.config.desc")),
         ("speckit", t("menu.speckit"), t("menu.speckit.desc")),
         ("research", t("menu.research"), t("menu.research.desc")),
         ("add", t("menu.add"), t("menu.add.desc")),
@@ -2737,8 +3548,7 @@ def run_tui():
     # Map action keys to functions
     actions = {
         "language": action_language,
-        "setup": action_setup,
-        "install_ide": action_install_ide,
+        "config": action_install_ide,  # Unified config & maintenance menu
         "speckit": action_speckit_integration,
         "research": action_research,
         "add": action_add_entry,
@@ -2774,10 +3584,7 @@ def run_tui():
             except KeyboardInterrupt:
                 continue
             except Exception as e:
-                console.print(f"\n[red]✗ {t('common.error')}: {e}[/red]")
-                input("\nPress Enter to continue...")
-
-    console.print(f"[dim]{t('common.goodbye')}[/dim]")
+                show_info(f"[red]✗ {t('common.error')}: {e}[/red]")
 
 
 if __name__ == "__main__":

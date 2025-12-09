@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
 from pathlib import Path
-import json
 
 # Supported languages with their display names
 LANGUAGES = {
@@ -55,18 +53,32 @@ TRANSLATIONS = {
         "ar": "تكوين موقع قاعدة البيانات",
     },
     "menu.install_ide": {
-        "en": "Install IDE",
-        "fr": "Install IDE",
-        "es": "Instalar IDE",
-        "zh": "安装IDE",
-        "ar": "تثبيت IDE",
+        "en": "Installation & Maintenance",
+        "fr": "Installation & Maintenance",
+        "es": "Instalación y Mantenimiento",
+        "zh": "安装和维护",
+        "ar": "التثبيت والصيانة",
     },
     "menu.install_ide.desc": {
-        "en": "Cursor/Claude integrations...",
-        "fr": "Intégrations Cursor/Claude...",
-        "es": "Integraciones Cursor/Claude...",
-        "zh": "Cursor/Claude集成...",
-        "ar": "تكاملات Cursor/Claude...",
+        "en": "IDE, backup, restore...",
+        "fr": "IDE, backup, restaurer...",
+        "es": "IDE, backup, restaurar...",
+        "zh": "IDE、备份、恢复...",
+        "ar": "IDE، نسخ احتياطي، استعادة...",
+    },
+    "menu.config": {
+        "en": "Configuration & Maintenance",
+        "fr": "Configuration & Maintenance",
+        "es": "Configuración y Mantenimiento",
+        "zh": "配置和维护",
+        "ar": "التكوين والصيانة",
+    },
+    "menu.config.desc": {
+        "en": "Setup, backup, restore, IDE...",
+        "fr": "Config, backup, restaurer, IDE...",
+        "es": "Config, backup, restaurar, IDE...",
+        "zh": "设置、备份、恢复、IDE...",
+        "ar": "إعداد، نسخ احتياطي، استعادة، IDE...",
     },
     "menu.speckit": {
         "en": "Speckit",
@@ -854,6 +866,27 @@ TRANSLATIONS = {
         "zh": "{name} 未安装在 {loc}",
         "ar": "{name} لم يكن مثبتاً في {loc}",
     },
+    "ide.integrations": {
+        "en": "IDE Integrations",
+        "fr": "Intégrations IDE",
+        "es": "Integraciones IDE",
+        "zh": "IDE集成",
+        "ar": "تكاملات IDE",
+    },
+    "ide.install": {
+        "en": "Install",
+        "fr": "Installer",
+        "es": "Instalar",
+        "zh": "安装",
+        "ar": "تثبيت",
+    },
+    "ide.uninstall": {
+        "en": "Uninstall",
+        "fr": "Désinstaller",
+        "es": "Desinstalar",
+        "zh": "卸载",
+        "ar": "إلغاء التثبيت",
+    },
 
     # ==========================================================================
     # Speckit
@@ -984,6 +1017,20 @@ TRANSLATIONS = {
         "zh": "已删除",
         "ar": "تمت الإزالة",
     },
+    "speckit.yes_install": {
+        "en": "Yes, install",
+        "fr": "Oui, installer",
+        "es": "Sí, instalar",
+        "zh": "是，安装",
+        "ar": "نعم، تثبيت",
+    },
+    "speckit.yes_uninstall": {
+        "en": "Yes, uninstall",
+        "fr": "Oui, désinstaller",
+        "es": "Sí, desinstalar",
+        "zh": "是，卸载",
+        "ar": "نعم، إلغاء تثبيت",
+    },
     "speckit.yes_install_all": {
         "en": "Yes, install all",
         "fr": "Oui, tout installer",
@@ -1083,7 +1130,7 @@ TRANSLATIONS = {
         "zh": "创建于",
         "ar": "تم الإنشاء",
     },
-    "browse.updated": {
+    "browse.updated_at": {
         "en": "Updated",
         "fr": "Modifié",
         "es": "Actualizado",
@@ -1117,6 +1164,140 @@ TRANSLATIONS = {
         "es": "Vista previa",
         "zh": "预览",
         "ar": "معاينة",
+    },
+    "browse.access": {
+        "en": "Access",
+        "fr": "Accès",
+        "es": "Acceso",
+        "zh": "访问",
+        "ar": "الوصول",
+    },
+    "browse.score": {
+        "en": "Score",
+        "fr": "Score",
+        "es": "Puntuación",
+        "zh": "分数",
+        "ar": "النتيجة",
+    },
+    "browse.links_in": {
+        "en": "In",
+        "fr": "In",
+        "es": "Ent",
+        "zh": "入",
+        "ar": "داخل",
+    },
+    "browse.links_out": {
+        "en": "Out",
+        "fr": "Out",
+        "es": "Sal",
+        "zh": "出",
+        "ar": "خارج",
+    },
+    "browse.legend_title": {
+        "en": "Column Legend",
+        "fr": "Légende des colonnes",
+        "es": "Leyenda de columnas",
+        "zh": "列说明",
+        "ar": "دليل الأعمدة",
+    },
+    "browse.graph_title": {
+        "en": "Knowledge Graph",
+        "fr": "Graphe de connexions",
+        "es": "Grafo de conexiones",
+        "zh": "知识图谱",
+        "ar": "رسم المعرفة",
+    },
+    "browse.legend_content": {
+        "en": """[bold]─── Identification ───[/bold]
+[cyan]Type[/cyan]      bug, pattern, decision, pitfall, config, reference
+[cyan]Project[/cyan]   Associated project name
+[cyan]Title[/cyan]     Entry title (truncated in table)
+
+[bold]─── Timestamps ───[/bold]
+[cyan]Created[/cyan]   When the entry was first created
+[cyan]Updated[/cyan]   Last modification date
+
+[bold]─── Cognitive Metrics ───[/bold]
+[cyan]Conf[/cyan]      Confidence level 0-5 (how reliable is this?)
+[cyan]Access[/cyan]    Number of times you consulted this entry
+[cyan]Score[/cyan]     Consolidation score 0.00-1.00
+            [red]< 0.40[/red] fragile  [yellow]0.40-0.70[/yellow] moderate  [green]> 0.70[/green] solid
+
+[bold]─── Knowledge Graph ───[/bold]
+[cyan]In[/cyan]        Incoming links (other entries reference this one)
+[cyan]Out[/cyan]       Outgoing links (this entry references others)""",
+        "fr": """[bold]─── Identification ───[/bold]
+[cyan]Type[/cyan]      bug, pattern, decision, pitfall, config, reference
+[cyan]Projet[/cyan]    Nom du projet associé
+[cyan]Titre[/cyan]     Titre de l'entrée (tronqué dans le tableau)
+
+[bold]─── Dates ───[/bold]
+[cyan]Créé[/cyan]      Date de création de l'entrée
+[cyan]Modifié[/cyan]   Date de dernière modification
+
+[bold]─── Métriques cognitives ───[/bold]
+[cyan]Conf[/cyan]      Niveau de confiance 0-5 (fiabilité de l'info)
+[cyan]Accès[/cyan]     Nombre de fois que tu as consulté cette entrée
+[cyan]Score[/cyan]     Score de consolidation 0.00-1.00
+            [red]< 0.40[/red] fragile  [yellow]0.40-0.70[/yellow] modéré  [green]> 0.70[/green] solide
+
+[bold]─── Knowledge Graph ───[/bold]
+[cyan]In[/cyan]        Liens entrants (autres entrées qui référencent celle-ci)
+[cyan]Out[/cyan]       Liens sortants (entrées référencées par celle-ci)""",
+        "es": """[bold]─── Identificación ───[/bold]
+[cyan]Tipo[/cyan]      bug, pattern, decision, pitfall, config, reference
+[cyan]Proyecto[/cyan]  Nombre del proyecto asociado
+[cyan]Título[/cyan]    Título de la entrada
+
+[bold]─── Fechas ───[/bold]
+[cyan]Creado[/cyan]    Fecha de creación
+[cyan]Actual.[/cyan]   Fecha de última actualización
+
+[bold]─── Métricas cognitivas ───[/bold]
+[cyan]Conf[/cyan]      Nivel de confianza 0-5
+[cyan]Acceso[/cyan]    Número de consultas
+[cyan]Punt.[/cyan]     Puntuación de consolidación 0.00-1.00
+            [red]< 0.40[/red] frágil  [yellow]0.40-0.70[/yellow] moderado  [green]> 0.70[/green] sólido
+
+[bold]─── Knowledge Graph ───[/bold]
+[cyan]Ent[/cyan]       Enlaces entrantes
+[cyan]Sal[/cyan]       Enlaces salientes""",
+        "zh": """[bold]─── 标识 ───[/bold]
+[cyan]类型[/cyan]      bug, pattern, decision, pitfall, config, reference
+[cyan]项目[/cyan]      关联项目名称
+[cyan]标题[/cyan]      条目标题
+
+[bold]─── 时间戳 ───[/bold]
+[cyan]创建[/cyan]      创建日期
+[cyan]更新[/cyan]      最后更新日期
+
+[bold]─── 认知指标 ───[/bold]
+[cyan]信任[/cyan]      信任级别 0-5
+[cyan]访问[/cyan]      访问次数
+[cyan]分数[/cyan]      巩固分数 0.00-1.00
+            [red]< 0.40[/red] 脆弱  [yellow]0.40-0.70[/yellow] 中等  [green]> 0.70[/green] 稳固
+
+[bold]─── 知识图谱 ───[/bold]
+[cyan]入[/cyan]        入链接
+[cyan]出[/cyan]        出链接""",
+        "ar": """[bold]─── التعريف ───[/bold]
+[cyan]النوع[/cyan]     bug, pattern, decision, pitfall, config, reference
+[cyan]المشروع[/cyan]   اسم المشروع المرتبط
+[cyan]العنوان[/cyan]   عنوان الإدخال
+
+[bold]─── التواريخ ───[/bold]
+[cyan]إنشاء[/cyan]     تاريخ الإنشاء
+[cyan]تحديث[/cyan]     تاريخ آخر تحديث
+
+[bold]─── المقاييس المعرفية ───[/bold]
+[cyan]ثقة[/cyan]       مستوى الثقة 0-5
+[cyan]وصول[/cyan]      عدد مرات الوصول
+[cyan]نتيجة[/cyan]     نتيجة التوحيد 0.00-1.00
+            [red]< 0.40[/red] هش  [yellow]0.40-0.70[/yellow] معتدل  [green]> 0.70[/green] صلب
+
+[bold]─── رسم المعرفة ───[/bold]
+[cyan]داخل[/cyan]      روابط واردة
+[cyan]خارج[/cyan]      روابط صادرة""",
     },
 
     # ==========================================================================
@@ -1664,7 +1845,7 @@ TRANSLATIONS = {
         "zh": "外部knowledge.db路径",
         "ar": "مسار knowledge.db الخارجي",
     },
-    "import.external_db": {
+    "import.external_db_label": {
         "en": "External database",
         "fr": "Base externe",
         "es": "Base externa",
@@ -1691,6 +1872,538 @@ TRANSLATIONS = {
         "es": "No hay entradas en la base externa.",
         "zh": "外部数据库中没有条目。",
         "ar": "لا توجد إدخالات في قاعدة البيانات الخارجية.",
+    },
+
+    # ==========================================================================
+    # Links (Cognitive Memory)
+    # ==========================================================================
+    "link.created": {
+        "en": "Created link",
+        "fr": "Lien créé",
+        "es": "Enlace creado",
+        "zh": "已创建链接",
+        "ar": "تم إنشاء الرابط",
+    },
+    "link.deleted": {
+        "en": "Deleted {count} link(s)",
+        "fr": "{count} lien(s) supprimé(s)",
+        "es": "{count} enlace(s) eliminado(s)",
+        "zh": "已删除 {count} 个链接",
+        "ar": "تم حذف {count} رابط(روابط)",
+    },
+    "link.not_found": {
+        "en": "No links found",
+        "fr": "Aucun lien trouvé",
+        "es": "No se encontraron enlaces",
+        "zh": "未找到链接",
+        "ar": "لم يتم العثور على روابط",
+    },
+    "link.related_to": {
+        "en": "Related to",
+        "fr": "Lié à",
+        "es": "Relacionado con",
+        "zh": "相关于",
+        "ar": "مرتبط بـ",
+    },
+    "link.outgoing": {
+        "en": "Outgoing",
+        "fr": "Sortants",
+        "es": "Salientes",
+        "zh": "出站",
+        "ar": "الصادرة",
+    },
+    "link.incoming": {
+        "en": "Incoming",
+        "fr": "Entrants",
+        "es": "Entrantes",
+        "zh": "入站",
+        "ar": "الواردة",
+    },
+    "link.total": {
+        "en": "Total: {count} links",
+        "fr": "Total : {count} liens",
+        "es": "Total: {count} enlaces",
+        "zh": "共计：{count} 个链接",
+        "ar": "المجموع: {count} روابط",
+    },
+    "link.type.related": {
+        "en": "related",
+        "fr": "lié",
+        "es": "relacionado",
+        "zh": "相关",
+        "ar": "مرتبط",
+    },
+    "link.type.supersedes": {
+        "en": "supersedes",
+        "fr": "remplace",
+        "es": "reemplaza",
+        "zh": "替代",
+        "ar": "يحل محل",
+    },
+    "link.type.derived_from": {
+        "en": "derived from",
+        "fr": "dérivé de",
+        "es": "derivado de",
+        "zh": "源于",
+        "ar": "مشتق من",
+    },
+    "link.type.contradicts": {
+        "en": "contradicts",
+        "fr": "contredit",
+        "es": "contradice",
+        "zh": "矛盾",
+        "ar": "يناقض",
+    },
+
+    # ==========================================================================
+    # Memory Types (Cognitive Memory)
+    # ==========================================================================
+    "memory.episodic": {
+        "en": "episodic",
+        "fr": "épisodique",
+        "es": "episódico",
+        "zh": "情景记忆",
+        "ar": "عرضي",
+    },
+    "memory.semantic": {
+        "en": "semantic",
+        "fr": "sémantique",
+        "es": "semántico",
+        "zh": "语义记忆",
+        "ar": "دلالي",
+    },
+    "memory.consolidation": {
+        "en": "Consolidation",
+        "fr": "Consolidation",
+        "es": "Consolidación",
+        "zh": "巩固度",
+        "ar": "التوحيد",
+    },
+    "memory.access_count": {
+        "en": "Access count",
+        "fr": "Nombre d'accès",
+        "es": "Número de accesos",
+        "zh": "访问次数",
+        "ar": "عدد الوصول",
+    },
+    "memory.last_accessed": {
+        "en": "Last accessed",
+        "fr": "Dernier accès",
+        "es": "Último acceso",
+        "zh": "最后访问",
+        "ar": "آخر وصول",
+    },
+
+    # ==========================================================================
+    # Stale Entries (Cognitive Memory)
+    # ==========================================================================
+    "stale.title": {
+        "en": "Stale entries",
+        "fr": "Entrées obsolètes",
+        "es": "Entradas obsoletas",
+        "zh": "陈旧条目",
+        "ar": "إدخالات قديمة",
+    },
+    "stale.no_stale": {
+        "en": "No stale entries",
+        "fr": "Aucune entrée obsolète",
+        "es": "No hay entradas obsoletas",
+        "zh": "没有陈旧条目",
+        "ar": "لا توجد إدخالات قديمة",
+    },
+    "stale.not_accessed_days": {
+        "en": "not accessed in {days}+ days",
+        "fr": "non consulté depuis {days}+ jours",
+        "es": "no accedido en {days}+ días",
+        "zh": "{days}+ 天未访问",
+        "ar": "لم يتم الوصول إليه منذ {days}+ يوم",
+    },
+    "stale.status.fragile": {
+        "en": "fragile",
+        "fr": "fragile",
+        "es": "frágil",
+        "zh": "脆弱",
+        "ar": "هش",
+    },
+    "stale.status.fading": {
+        "en": "fading",
+        "fr": "s'estompe",
+        "es": "desvaneciéndose",
+        "zh": "淡化中",
+        "ar": "يتلاشى",
+    },
+    "stale.need_attention": {
+        "en": "{count} entries need attention",
+        "fr": "{count} entrées nécessitent attention",
+        "es": "{count} entradas necesitan atención",
+        "zh": "{count} 条目需要关注",
+        "ar": "{count} إدخالات تحتاج اهتمام",
+    },
+
+    # ==========================================================================
+    # Review (Spaced Repetition)
+    # ==========================================================================
+    "review.title": {
+        "en": "Review session",
+        "fr": "Session de révision",
+        "es": "Sesión de repaso",
+        "zh": "复习会话",
+        "ar": "جلسة مراجعة",
+    },
+    "review.entries_due": {
+        "en": "{count} entries due",
+        "fr": "{count} entrées à réviser",
+        "es": "{count} entradas pendientes",
+        "zh": "{count} 条目待复习",
+        "ar": "{count} إدخالات مستحقة",
+    },
+    "review.no_entries_due": {
+        "en": "No entries due for review!",
+        "fr": "Aucune entrée à réviser !",
+        "es": "¡No hay entradas para repasar!",
+        "zh": "没有需要复习的条目！",
+        "ar": "لا توجد إدخالات للمراجعة!",
+    },
+    "review.rate_recall": {
+        "en": "Rate your recall",
+        "fr": "Notez votre rappel",
+        "es": "Califique su recuerdo",
+        "zh": "评估您的记忆",
+        "ar": "قيّم تذكرك",
+    },
+    "review.forgot": {
+        "en": "Forgot",
+        "fr": "Oublié",
+        "es": "Olvidado",
+        "zh": "忘记",
+        "ar": "نسيت",
+    },
+    "review.hard": {
+        "en": "Hard",
+        "fr": "Difficile",
+        "es": "Difícil",
+        "zh": "困难",
+        "ar": "صعب",
+    },
+    "review.good": {
+        "en": "Good",
+        "fr": "Bien",
+        "es": "Bien",
+        "zh": "良好",
+        "ar": "جيد",
+    },
+    "review.easy": {
+        "en": "Easy",
+        "fr": "Facile",
+        "es": "Fácil",
+        "zh": "容易",
+        "ar": "سهل",
+    },
+    "review.perfect": {
+        "en": "Perfect",
+        "fr": "Parfait",
+        "es": "Perfecto",
+        "zh": "完美",
+        "ar": "ممتاز",
+    },
+    "review.next_review": {
+        "en": "Next review: in {days} days",
+        "fr": "Prochaine révision : dans {days} jours",
+        "es": "Próximo repaso: en {days} días",
+        "zh": "下次复习：{days} 天后",
+        "ar": "المراجعة التالية: خلال {days} يوم",
+    },
+    "review.overdue": {
+        "en": "Overdue: {days} days",
+        "fr": "En retard : {days} jours",
+        "es": "Atrasado: {days} días",
+        "zh": "逾期：{days} 天",
+        "ar": "متأخر: {days} يوم",
+    },
+    "review.complete": {
+        "en": "Review complete!",
+        "fr": "Révision terminée !",
+        "es": "¡Repaso completado!",
+        "zh": "复习完成！",
+        "ar": "اكتملت المراجعة!",
+    },
+    "review.reviewed": {
+        "en": "Reviewed: {count} entries",
+        "fr": "Révisé : {count} entrées",
+        "es": "Repasado: {count} entradas",
+        "zh": "已复习：{count} 条目",
+        "ar": "تمت مراجعة: {count} إدخالات",
+    },
+    "review.average_recall": {
+        "en": "Average recall: {rating}/5",
+        "fr": "Rappel moyen : {rating}/5",
+        "es": "Recuerdo promedio: {rating}/5",
+        "zh": "平均记忆评分：{rating}/5",
+        "ar": "متوسط التذكر: {rating}/5",
+    },
+    "review.session_ended": {
+        "en": "Review session ended.",
+        "fr": "Session de révision terminée.",
+        "es": "Sesión de repaso terminada.",
+        "zh": "复习会话已结束。",
+        "ar": "انتهت جلسة المراجعة.",
+    },
+
+    # ==========================================================================
+    # Generalize (Cognitive Memory)
+    # ==========================================================================
+    "generalize.title": {
+        "en": "Generalization",
+        "fr": "Généralisation",
+        "es": "Generalización",
+        "zh": "泛化",
+        "ar": "التعميم",
+    },
+    "generalize.analyzing": {
+        "en": "Analyzing {count} episodic entries...",
+        "fr": "Analyse de {count} entrées épisodiques...",
+        "es": "Analizando {count} entradas episódicas...",
+        "zh": "分析 {count} 个情景条目...",
+        "ar": "تحليل {count} إدخالات عرضية...",
+    },
+    "generalize.patterns_found": {
+        "en": "Common patterns found",
+        "fr": "Patterns communs trouvés",
+        "es": "Patrones comunes encontrados",
+        "zh": "发现共同模式",
+        "ar": "تم العثور على أنماط مشتركة",
+    },
+    "generalize.draft": {
+        "en": "Draft semantic entry",
+        "fr": "Brouillon d'entrée sémantique",
+        "es": "Borrador de entrada semántica",
+        "zh": "语义条目草稿",
+        "ar": "مسودة إدخال دلالي",
+    },
+    "generalize.create_confirm": {
+        "en": "Create this entry?",
+        "fr": "Créer cette entrée ?",
+        "es": "¿Crear esta entrada?",
+        "zh": "创建此条目？",
+        "ar": "هل تريد إنشاء هذا الإدخال؟",
+    },
+    "generalize.min_entries": {
+        "en": "Need at least 2 entries to generalize",
+        "fr": "Besoin d'au moins 2 entrées pour généraliser",
+        "es": "Se necesitan al menos 2 entradas para generalizar",
+        "zh": "需要至少 2 个条目才能泛化",
+        "ar": "تحتاج إلى إدخالين على الأقل للتعميم",
+    },
+
+    # ==========================================================================
+    # Database Maintenance
+    # ==========================================================================
+    "info.title": {
+        "en": "Database Information",
+        "fr": "Informations de la base",
+        "es": "Información de la base",
+        "zh": "数据库信息",
+        "ar": "معلومات قاعدة البيانات",
+    },
+    "info.no_db": {
+        "en": "No database found.",
+        "fr": "Aucune base trouvée.",
+        "es": "No se encontró la base.",
+        "zh": "未找到数据库。",
+        "ar": "لم يتم العثور على قاعدة بيانات.",
+    },
+    "info.run_init": {
+        "en": "Run 'rekall init' to create one.",
+        "fr": "Lancez 'rekall init' pour en créer une.",
+        "es": "Ejecute 'rekall init' para crear una.",
+        "zh": "运行 'rekall init' 创建数据库。",
+        "ar": "شغّل 'rekall init' لإنشاء واحدة.",
+    },
+    "info.schema": {
+        "en": "Schema",
+        "fr": "Schéma",
+        "es": "Esquema",
+        "zh": "架构",
+        "ar": "المخطط",
+    },
+    "info.schema_current": {
+        "en": "(current)",
+        "fr": "(actuel)",
+        "es": "(actual)",
+        "zh": "(当前)",
+        "ar": "(الحالي)",
+    },
+    "info.schema_outdated": {
+        "en": "(outdated - run init)",
+        "fr": "(obsolète - lancer init)",
+        "es": "(obsoleto - ejecutar init)",
+        "zh": "(过时 - 运行 init)",
+        "ar": "(قديم - شغّل init)",
+    },
+    "info.entries": {
+        "en": "Entries",
+        "fr": "Entrées",
+        "es": "Entradas",
+        "zh": "条目",
+        "ar": "الإدخالات",
+    },
+    "info.active": {
+        "en": "active",
+        "fr": "actives",
+        "es": "activas",
+        "zh": "活跃",
+        "ar": "نشط",
+    },
+    "info.obsolete": {
+        "en": "obsolete",
+        "fr": "obsolètes",
+        "es": "obsoletas",
+        "zh": "过时",
+        "ar": "قديم",
+    },
+    "info.links": {
+        "en": "Links",
+        "fr": "Liens",
+        "es": "Enlaces",
+        "zh": "链接",
+        "ar": "الروابط",
+    },
+    "info.size": {
+        "en": "Size",
+        "fr": "Taille",
+        "es": "Tamaño",
+        "zh": "大小",
+        "ar": "الحجم",
+    },
+    "backup.created": {
+        "en": "Backup created",
+        "fr": "Backup créé",
+        "es": "Backup creado",
+        "zh": "备份已创建",
+        "ar": "تم إنشاء النسخة الاحتياطية",
+    },
+    "backup.size": {
+        "en": "Size",
+        "fr": "Taille",
+        "es": "Tamaño",
+        "zh": "大小",
+        "ar": "الحجم",
+    },
+    "backup.no_db": {
+        "en": "No database to backup.",
+        "fr": "Aucune base à sauvegarder.",
+        "es": "No hay base para respaldar.",
+        "zh": "没有要备份的数据库。",
+        "ar": "لا توجد قاعدة بيانات للنسخ الاحتياطي.",
+    },
+    "backup.error": {
+        "en": "Backup failed",
+        "fr": "Backup échoué",
+        "es": "Backup fallido",
+        "zh": "备份失败",
+        "ar": "فشل النسخ الاحتياطي",
+    },
+    "restore.safety_backup": {
+        "en": "Creating safety backup before restore...",
+        "fr": "Création backup de sécurité avant restauration...",
+        "es": "Creando backup de seguridad antes de restaurar...",
+        "zh": "恢复前创建安全备份...",
+        "ar": "إنشاء نسخة احتياطية آمنة قبل الاستعادة...",
+    },
+    "restore.saved": {
+        "en": "Saved",
+        "fr": "Sauvegardé",
+        "es": "Guardado",
+        "zh": "已保存",
+        "ar": "تم الحفظ",
+    },
+    "restore.success": {
+        "en": "Database restored from",
+        "fr": "Base restaurée depuis",
+        "es": "Base restaurada desde",
+        "zh": "数据库已从以下位置恢复",
+        "ar": "تم استعادة قاعدة البيانات من",
+    },
+    "restore.invalid": {
+        "en": "Invalid backup file (integrity check failed).",
+        "fr": "Fichier backup invalide (échec vérification intégrité).",
+        "es": "Archivo backup inválido (falló verificación de integridad).",
+        "zh": "无效的备份文件（完整性检查失败）。",
+        "ar": "ملف النسخ الاحتياطي غير صالح (فشل فحص السلامة).",
+    },
+    "restore.not_found": {
+        "en": "Backup file not found",
+        "fr": "Fichier backup introuvable",
+        "es": "Archivo backup no encontrado",
+        "zh": "未找到备份文件",
+        "ar": "ملف النسخ الاحتياطي غير موجود",
+    },
+    "restore.unchanged": {
+        "en": "Current database unchanged.",
+        "fr": "Base actuelle inchangée.",
+        "es": "Base actual sin cambios.",
+        "zh": "当前数据库未更改。",
+        "ar": "قاعدة البيانات الحالية لم تتغير.",
+    },
+
+    # ==========================================================================
+    # TUI Maintenance Menu
+    # ==========================================================================
+    "menu.maintenance": {
+        "en": "Installation & Maintenance",
+        "fr": "Installation & Maintenance",
+        "es": "Instalación y Mantenimiento",
+        "zh": "安装和维护",
+        "ar": "التثبيت والصيانة",
+    },
+    "menu.maintenance.desc": {
+        "en": "Setup, backup, restore...",
+        "fr": "Config, backup, restaurer...",
+        "es": "Config, backup, restaurar...",
+        "zh": "设置、备份、恢复...",
+        "ar": "إعداد، نسخ احتياطي، استعادة...",
+    },
+    "maintenance.db_info": {
+        "en": "Database Info",
+        "fr": "Infos base de données",
+        "es": "Info base de datos",
+        "zh": "数据库信息",
+        "ar": "معلومات قاعدة البيانات",
+    },
+    "maintenance.create_backup": {
+        "en": "Create Backup",
+        "fr": "Créer un backup",
+        "es": "Crear backup",
+        "zh": "创建备份",
+        "ar": "إنشاء نسخة احتياطية",
+    },
+    "maintenance.restore_backup": {
+        "en": "Restore from Backup",
+        "fr": "Restaurer depuis backup",
+        "es": "Restaurar desde backup",
+        "zh": "从备份恢复",
+        "ar": "الاستعادة من نسخة احتياطية",
+    },
+    "maintenance.select_backup": {
+        "en": "Select backup to restore",
+        "fr": "Sélectionner backup à restaurer",
+        "es": "Seleccionar backup a restaurar",
+        "zh": "选择要恢复的备份",
+        "ar": "اختر النسخة الاحتياطية للاستعادة",
+    },
+    "maintenance.no_backups": {
+        "en": "No backups found.",
+        "fr": "Aucun backup trouvé.",
+        "es": "No se encontraron backups.",
+        "zh": "未找到备份。",
+        "ar": "لم يتم العثور على نسخ احتياطية.",
+    },
+    "maintenance.confirm_restore": {
+        "en": "Restore this backup?",
+        "fr": "Restaurer ce backup ?",
+        "es": "¿Restaurar este backup?",
+        "zh": "恢复此备份？",
+        "ar": "استعادة هذه النسخة الاحتياطية؟",
     },
 }
 
