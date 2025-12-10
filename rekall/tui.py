@@ -14,6 +14,7 @@ from rich.text import Text
 from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from textual.message import Message
 from textual.containers import Container, VerticalScroll
 from textual.widgets import (
     DataTable,
@@ -154,7 +155,15 @@ class MenuItem(ListItem):
         self.label_width = label_width
 
     def compose(self) -> ComposeResult:
-        yield Static(f"{self.label:<{self.label_width}} [dim]{self.description}[/dim]")
+        if self.action_key == "__section__":
+            # Section header: ── TITRE ──
+            yield Static(f"[bold cyan]{self.label}[/]")
+        elif self.action_key == "__spacer__":
+            # Empty line
+            yield Static("")
+        else:
+            # Normal item
+            yield Static(f"{self.label:<{self.label_width}} [dim]{self.description}[/dim]")
 
 
 class MenuListView(ListView):
@@ -179,8 +188,8 @@ class MenuListView(ListView):
         if self.highlighted_child is not None:
             item = self.highlighted_child
             if isinstance(item, MenuItem):
-                # Skip non-selectable items (headers and spacers)
-                if item.action_key in ("__header__", "__spacer__"):
+                # Skip non-selectable items (headers, spacers, box borders)
+                if item.action_key.startswith("__"):
                     return
                 # Convert action_key to int for index-based results
                 try:
@@ -329,8 +338,12 @@ class RekallMenuApp(App):
             id="banner"
         )
 
-        # Calculate max label width for alignment
-        max_label_width = max(len(label) for _, label, _ in self.menu_items) + 2
+        # Calculate max label width for alignment (exclude special elements)
+        selectable_items = [
+            (key, label, desc) for key, label, desc in self.menu_items
+            if not key.startswith("__")
+        ]
+        max_label_width = max(len(label) for _, label, _ in selectable_items) + 2
 
         yield MenuListView(
             *[MenuItem(label, desc, key, max_label_width) for key, label, desc in self.menu_items]
@@ -593,6 +606,117 @@ class MultiSelectApp(App):
         selection_list = self.query_one(SelectionList)
         selected = list(selection_list.selected)
         self.exit(result=selected if selected else None)
+
+
+# =============================================================================
+# Delete Confirmation Overlay Widget
+# =============================================================================
+
+
+class DeleteConfirmOverlay(Container):
+    """Overlay for confirming entry deletion with link count warning."""
+
+    DEFAULT_CSS = """
+    DeleteConfirmOverlay {
+        layer: modal;
+        align: center middle;
+        width: auto;
+        height: auto;
+        background: transparent;
+    }
+
+    DeleteConfirmOverlay #delete-confirm-box {
+        background: $surface;
+        border: thick $error;
+        padding: 1 2;
+        width: auto;
+        max-width: 60;
+        height: auto;
+    }
+
+    DeleteConfirmOverlay #delete-title {
+        text-style: bold;
+        color: $error;
+        text-align: center;
+        margin-bottom: 1;
+    }
+
+    DeleteConfirmOverlay #delete-links-warning {
+        color: $warning;
+        text-align: center;
+        margin-bottom: 1;
+    }
+
+    DeleteConfirmOverlay #delete-buttons {
+        align: center middle;
+        height: auto;
+        margin-top: 1;
+    }
+
+    DeleteConfirmOverlay .delete-button {
+        margin: 0 1;
+        min-width: 16;
+    }
+
+    DeleteConfirmOverlay .delete-button:focus {
+        background: $primary;
+    }
+    """
+
+    BINDINGS = [
+        Binding("y", "confirm_delete", "Yes", show=False),
+        Binding("n", "cancel_delete", "No", show=False),
+        Binding("escape", "cancel_delete", "Cancel", show=False),
+    ]
+
+    def __init__(
+        self,
+        entry_title: str,
+        entry_id: str,
+        link_count: int = 0,
+        **kwargs,
+    ) -> None:
+        super().__init__(**kwargs)
+        self.entry_title = entry_title[:30] + "..." if len(entry_title) > 30 else entry_title
+        self.entry_id = entry_id
+        self.link_count = link_count
+
+    def compose(self) -> ComposeResult:
+        with Container(id="delete-confirm-box"):
+            yield Static(
+                t("browse.confirm_delete", title=self.entry_title),
+                id="delete-title",
+            )
+            if self.link_count > 0:
+                yield Static(
+                    t("browse.links_warning", count=self.link_count),
+                    id="delete-links-warning",
+                )
+            with Container(id="delete-buttons"):
+                yield Static(
+                    f"[bold red][ {t('browse.confirm_yes')} ][/]  [dim][ {t('browse.confirm_no')} ][/]",
+                    id="delete-button-hint",
+                )
+
+    class DeleteConfirmed(Message):
+        """Message sent when deletion is confirmed."""
+
+        def __init__(self, entry_id: str) -> None:
+            super().__init__()
+            self.entry_id = entry_id
+
+    class DeleteCancelled(Message):
+        """Message sent when deletion is cancelled."""
+
+        pass
+
+    def action_confirm_delete(self) -> None:
+        """Confirm deletion and notify parent."""
+        self.post_message(self.DeleteConfirmed(self.entry_id))
+
+    def action_cancel_delete(self) -> None:
+        """Cancel deletion and remove overlay."""
+        self.post_message(self.DeleteCancelled())
 
 
 class BrowseApp(App):
@@ -1245,9 +1369,23 @@ class BrowseApp(App):
             self.exit(result=("edit", self.selected_entry))
 
     def action_delete_entry(self) -> None:
-        """Delete selected entry."""
-        if self.selected_entry:
-            self.exit(result=("delete", self.selected_entry))
+        """Delete selected entry with in-app confirmation overlay."""
+        if not self.selected_entry:
+            return
+
+        # Count links for warning
+        from rekall.db import get_db
+        db = get_db()
+        link_count = db.count_links(self.selected_entry.id)
+
+        # Show confirmation overlay
+        overlay = DeleteConfirmOverlay(
+            entry_title=self.selected_entry.title,
+            entry_id=self.selected_entry.id,
+            link_count=link_count,
+        )
+        self.mount(overlay)
+        overlay.focus()
 
     def action_add_entry(self) -> None:
         """Add a new entry (optionally pre-linked to selected entry)."""
@@ -1336,6 +1474,52 @@ class BrowseApp(App):
         self.entries = filtered if filtered else self.all_entries
         self._refresh_table(self.entries)
         self._update_header(f"{len(filtered)} {t('search.results_found')}" if filtered else t('search.no_results'))
+
+    def on_delete_confirm_overlay_delete_confirmed(
+        self, message: DeleteConfirmOverlay.DeleteConfirmed
+    ) -> None:
+        """Handle deletion confirmation from overlay."""
+        from rekall.db import get_db
+
+        # Remove overlay first
+        overlay = self.query_one(DeleteConfirmOverlay)
+        overlay.remove()
+
+        # Delete entry
+        db = get_db()
+        try:
+            db.delete(message.entry_id)
+            show_toast(f"✓ {t('browse.deleted')}")
+
+            # Refresh entries list
+            self.all_entries = db.list_all(limit=100)
+            self.entries = self.all_entries
+            self._refresh_table(self.entries)
+
+            # Handle empty list case
+            if not self.entries:
+                self._update_header(t('browse.no_entries'))
+            else:
+                self._update_header()
+
+            # Focus table
+            table = self.query_one("#entries-table", DataTable)
+            table.focus()
+
+        except Exception as e:
+            show_toast(f"✗ {t('browse.delete_error')}: {e}")
+
+    def on_delete_confirm_overlay_delete_cancelled(
+        self, message: DeleteConfirmOverlay.DeleteCancelled
+    ) -> None:
+        """Handle deletion cancellation from overlay."""
+        # Remove overlay
+        overlay = self.query_one(DeleteConfirmOverlay)
+        overlay.remove()
+
+        # Focus table
+        table = self.query_one("#entries-table", DataTable)
+        table.focus()
 
     def _update_header(self, suffix: str = None) -> None:
         """Update header bar text."""
@@ -2806,24 +2990,21 @@ def action_install_ide():
             menu_options.append(f"  → {t('setup.copy_local_to_global')}")
             actions.append("migrate_to_global")
 
-        # Spacer + FEATURES section
+        # Spacer + INTEGRATIONS section
         menu_options.append("")
         actions.append(None)
-        menu_options.append("─── FEATURES ───")
+        menu_options.append("─── INTEGRATIONS ───")
         actions.append(None)
 
-        menu_options.append(f"  {emb_icon} {t('embeddings.configure')}")
-        actions.append("configure_embeddings")
+        menu_options.append(f"  ⚙ Intégration IDE")
+        actions.append("ide")
 
         # MCP Server status
         mcp_icon = "[green]✓[/green]" if _check_mcp_deps() else "[dim]○[/dim]"
-        menu_options.append(f"  {mcp_icon} MCP Server")
+        menu_options.append(f"  {mcp_icon} Installation MCP")
         actions.append("configure_mcp")
 
-        menu_options.append(f"  ⚙ {t('ide.integrations')}")
-        actions.append("ide")
-
-        menu_options.append(f"  📦 {t('menu.speckit')}")
+        menu_options.append(f"  📦 Intégration Speckit")
         actions.append("speckit")
 
         # Spacer + SETTINGS section (Feature 007)
@@ -2832,19 +3013,23 @@ def action_install_ide():
         menu_options.append("─── SETTINGS ───")
         actions.append(None)
 
-        # Context mode display
+        # Smart Embeddings subsection
+        menu_options.append(f"  {emb_icon} Smart Embeddings")
+        actions.append("configure_embeddings")
+
+        # Context mode display (indented under Smart Embeddings)
         mode_display = {
-            "required": "[green]required[/green] (strict)",
-            "recommended": "[yellow]recommended[/yellow] (warns)",
-            "optional": "[dim]optional[/dim] (permissive)",
+            "required": "[green]required[/green]",
+            "recommended": "[yellow]recommended[/yellow]",
+            "optional": "[dim]optional[/dim]",
         }
         current_mode = config.smart_embeddings_context_mode
-        menu_options.append(f"  📋 Context mode: {mode_display.get(current_mode, current_mode)}")
+        menu_options.append(f"      └─ Context: {mode_display.get(current_mode, current_mode)}")
         actions.append("settings_context_mode")
 
-        # Max context size display
+        # Max context size display (indented under Smart Embeddings)
         size_kb = config.max_context_size // 1024
-        menu_options.append(f"  📏 Max context size: {size_kb} KB")
+        menu_options.append(f"      └─ Max size: {size_kb} KB")
         actions.append("settings_max_context_size")
 
         # Spacer + ABOUT section
@@ -3355,12 +3540,8 @@ def action_browse():
             entries = db.list_all(limit=100)
             if not entries:
                 return
-        elif action == "delete":
-            if _delete_entry(entry):
-                entries = db.list_all(limit=100)
-                if not entries:
-                    show_toast(f"⚠ {t('browse.no_entries')}")
-                    return
+        # Note: "delete" action is now handled in-app via DeleteConfirmOverlay
+        # and no longer returns a result to this loop
         elif action == "add":
             # Add new entry, optionally pre-link to selected entry
             _add_entry_with_links(db, pre_link_entry=entry)
@@ -5192,11 +5373,21 @@ ACTION_MAP = {
 def get_menu_items():
     """Build menu items for RekallMenuApp."""
     return [
+        # Section 1: Général
+        ("__section__", "GÉNÉRAL", ""),
         ("language", t("menu.language"), t("menu.language.desc")),
         ("config", t("menu.config"), t("menu.config.desc")),
-        ("research", t("menu.research"), t("menu.research.desc")),
         ("browse", t("menu.browse"), t("menu.browse.desc")),
+        ("__spacer__", "", ""),
+        # Section 2: Recherche
+        ("__section__", "RECHERCHE", ""),
+        ("research", t("menu.research"), t("menu.research.desc")),
+        ("__spacer__", "", ""),
+        # Section 3: Données
+        ("__section__", "DONNÉES", ""),
         ("export", t("menu.export"), t("menu.export.desc")),
+        ("__spacer__", "", ""),
+        # Section 4: Quitter
         ("quit", t("menu.quit"), t("menu.quit.desc")),
     ]
 

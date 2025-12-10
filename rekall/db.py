@@ -918,6 +918,21 @@ class Database:
         self.conn.commit()
         return cursor.rowcount
 
+    def count_links(self, entry_id: str) -> int:
+        """Count total links for an entry (incoming + outgoing).
+
+        Args:
+            entry_id: Entry ULID
+
+        Returns:
+            Total number of links (source + target)
+        """
+        cursor = self.conn.execute(
+            "SELECT COUNT(*) FROM links WHERE source_id = ? OR target_id = ?",
+            (entry_id, entry_id),
+        )
+        return cursor.fetchone()[0]
+
     def get_related_entries(
         self,
         entry_id: str,
