@@ -41,8 +41,8 @@ htmlcov/
 *.swo
 *~
 
-# Personal notes
-docs/
+# Personal research notes (keep public docs)
+docs/research-*.md
 
 # SQLite
 *.db

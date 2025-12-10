@@ -1,24 +1,45 @@
+<div align="center">
+
+<!-- LOGO: Uncomment when logo.png is ready
+<img src="docs/images/logo.png" alt="Rekall Logo" width="120">
+-->
+
 # Rekall
 
-```
-        ██████╗ ███████╗██╗  ██╗ █████╗ ██╗     ██╗
-        ██╔══██╗██╔════╝██║ ██╔╝██╔══██╗██║     ██║
-        ██████╔╝█████╗  █████╔╝ ███████║██║     ██║
-        ██╔══██╗██╔══╝  ██╔═██╗ ██╔══██║██║     ██║
-        ██║  ██║███████╗██║  ██╗██║  ██║███████╗███████╗
-        ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚══════╝
-```
+**Your developer knowledge, instantly recalled.**
 
-<p align="center">
+<p>
   <img src="https://img.shields.io/badge/100%25-Local-blue?style=flat-square" alt="100% Local">
   <img src="https://img.shields.io/badge/No_API_Keys-green?style=flat-square" alt="No API Keys">
   <img src="https://img.shields.io/badge/MCP-Compatible-purple?style=flat-square" alt="MCP Compatible">
   <img src="https://img.shields.io/badge/Python-3.9+-yellow?style=flat-square" alt="Python 3.9+">
 </p>
 
-> *"Get your ass to Mars. Quaid... crush those bugs"*
+*"Get your ass to Mars. Quaid... crush those bugs"*
+
+[Documentation](#contents) · [Install](#getting-started) · [MCP Integration](#mcp-server-works-with-any-ai-assistant)
 
 **Translations:** [Français](README.fr.md) | [Español](README.es.md) | [Deutsch](README.de.md) | [中文](README.zh-CN.md)
+
+</div>
+
+---
+
+## Contents
+
+- [TL;DR](#tldr)
+- [The Problem](#youve-already-solved-this-problem)
+- [The Solution](#what-if-your-ai-assistant-remembered-for-you)
+- [How It Works](#how-it-works-in-practice)
+- [Interface](#the-interface)
+- [What It Automates](#what-rekall-does-for-you)
+- [Entry Types](#what-can-you-capture)
+- [Privacy](#100-local-100-yours)
+- [Getting Started](#getting-started)
+- [MCP Server](#mcp-server-works-with-any-ai-assistant)
+- [Speckit Integration](#speckit-integration)
+- [Under the Hood](#under-the-hood-how-search-works) *(technical)*
+- [Built on Science](#built-on-science) *(research)*
 
 ---
 
@@ -608,10 +629,12 @@ Entries you access often and recently have high consolidation (stable knowledge)
 
 | Resource | Description |
 |----------|-------------|
-| `rekall --help` | Full command reference |
-| `rekall version` | Version and database info |
-| `rekall changelog` | What's new |
-| [CHANGELOG.md](CHANGELOG.md) | Detailed release history |
+| [Getting Started](docs/getting-started.md) | Installation and first steps |
+| [CLI Reference](docs/usage.md) | Complete command documentation |
+| [MCP Integration](docs/mcp-integration.md) | Connect to AI assistants |
+| [Architecture](docs/architecture.md) | Technical diagrams and internals |
+| [Contributing](CONTRIBUTING.md) | How to contribute |
+| [Changelog](CHANGELOG.md) | Release history |
 
 ---
 
