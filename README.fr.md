@@ -11,71 +11,208 @@
 
 > *"Get your ass to Mars. Quaid... crush those bugs"*
 
-**Arrêtez de perdre vos connaissances. Commencez à vous en souvenir.**
-
-Rekall est un système de gestion des connaissances pour développeurs avec **mémoire cognitive** et **recherche sémantique**. Il ne se contente pas de stocker vos connaissances — il vous aide à vous en *souvenir* et à les *retrouver* comme le fait votre cerveau.
-
-[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](CHANGELOG.md)
-[![Python](https://img.shields.io/badge/python-3.9+-green.svg)](https://python.org)
-[![License](https://img.shields.io/badge/license-MIT-brightgreen.svg)](LICENSE)
-
 **Traductions :** [English](README.md) | [Español](README.es.md) | [Deutsch](README.de.md) | [中文](README.zh-CN.md)
 
 ---
 
-## Pourquoi Rekall ?
+## Tu as déjà résolu ce problème.
 
-```
-Vous (il y a 3 mois)          Vous (aujourd'hui)
-     │                           │
-     ▼                           ▼
-┌─────────────┐           ┌─────────────┐
-│ Fix bug X   │           │ Même bug X  │
-│ 2h recherche│           │ repart de   │
-│ Trouvé !    │           │ zéro...     │
-└─────────────┘           └─────────────┘
-     │                           │
-     ▼                           ▼
-   (perdu)                   (2h encore)
-```
+Il y a trois mois, tu as passé deux heures à débuguer une erreur cryptique. Tu as trouvé la solution. Tu es passé à autre chose.
 
-**Vous avez déjà résolu ça.** Mais où était cette solution déjà ?
+Aujourd'hui, la même erreur apparaît. Tu la regardes. Elle te dit quelque chose. Mais où était cette solution déjà ?
 
-Avec Rekall :
+Tu repars de zéro. Encore deux heures de perdues.
 
-```
-┌─────────────────────────────────────────┐
-│ $ rekall search "import circulaire"     │
-│                                         │
-│ [1] bug: Fix: import circulaire models  │
-│     Score: ████████░░ 85%               │
-│     Situation: Cycle d'import entre     │
-│                user.py et profile.py    │
-│     Solution: Extraire types partagés   │
-│               vers types/common.py      │
-└─────────────────────────────────────────┘
-```
-
-**Trouvé en 5 secondes. Pas de cloud. Pas d'abonnement.**
+**Ça arrive à tous les développeurs.** Selon les études, les entreprises du Fortune 500 perdent 31,5 milliards de dollars par an parce que les leçons apprises ne sont jamais capturées. Pas par négligence — mais parce qu'on est humains, et les humains oublient.
 
 ---
 
-## Fonctionnalités
+## Et si ton assistant IA se souvenait pour toi ?
 
-| Fonctionnalité | Description |
-|----------------|-------------|
-| **Recherche sémantique** | Trouver par le sens, pas seulement les mots-clés |
-| **Contexte structuré** | Capturer situation, solution et mots-clés |
-| **Graphe de connaissances** | Lier les entrées entre elles |
-| **Mémoire cognitive** | Distinguer épisodes et patterns |
-| **Répétition espacée** | Réviser à intervalles optimaux |
-| **Serveur MCP** | Intégration agents IA (Claude, etc.) |
-| **100% Local** | Vos données ne quittent jamais votre machine |
-| **Interface TUI** | Belle interface terminal avec Textual |
+Imagine : tu demandes à Claude ou Cursor de corriger un bug. Avant d'écrire une seule ligne de code, il consulte ta base de connaissances personnelle :
+
+```
+🔍 Recherche dans tes connaissances...
+
+2 entrées pertinentes trouvées :
+
+[1] bug: Erreur CORS sur Safari (85% de correspondance)
+    "Ajouter credentials: include et les bons headers Access-Control"
+    → Tu as résolu ça il y a 3 mois
+
+[2] pattern: Gestion des requêtes cross-origin (72% de correspondance)
+    "Toujours tester sur Safari - il est plus strict sur CORS"
+    → Pattern extrait de 4 bugs similaires
+```
+
+Ton assistant IA a maintenant du contexte. Il sait ce qui a marché avant. Il ne va pas réinventer la roue — il va construire sur ton expérience passée.
+
+**C'est ça, Rekall.**
 
 ---
 
-## Installation
+## Un second cerveau qui pense comme toi
+
+Rekall n'est pas juste une appli de notes. Il est construit sur le fonctionnement réel de la mémoire humaine :
+
+### Tes connaissances, connectées
+
+Quand tu résous quelque chose, les connaissances liées remontent automatiquement. Tu as corrigé un bug de timeout ? Rekall te montre les trois autres problèmes de timeout que tu as résolus et le pattern de retry que tu en as extrait.
+
+```
+              ┌──────────────┐
+              │ Auth Timeout │
+              │ (aujourd'hui)│
+              └──────┬───────┘
+                     │ similaire à...
+        ┌────────────┼────────────┐
+        ▼            ▼            ▼
+  ┌──────────┐ ┌──────────┐ ┌──────────┐
+  │ DB #47   │ │ API #52  │ │ Cache #61│
+  │(2 semaines)│ │ (1 mois) │ │ (3 mois) │
+  └────┬─────┘ └────┬─────┘ └──────────┘
+       └──────┬─────┘
+              ▼
+     ┌─────────────────┐
+     │ PATTERN: Retry  │
+     │ avec backoff    │
+     └─────────────────┘
+```
+
+### Les événements deviennent sagesse
+
+Chaque bug que tu corriges est un **épisode** — un événement spécifique avec son contexte. Mais des patterns émergent. Après avoir corrigé trois bugs de timeout similaires, Rekall t'aide à extraire le **principe** : "Toujours ajouter du retry avec backoff exponentiel pour les APIs externes."
+
+Les épisodes sont la matière première. Les patterns sont la connaissance réutilisable.
+
+### Les connaissances oubliées refont surface
+
+Rekall suit ce que tu consultes et quand. Une connaissance que tu n'as pas touchée depuis des mois ? Il te la rappellera avant qu'elle ne s'efface complètement. Pense à ça comme de la répétition espacée pour ton cerveau de dev.
+
+---
+
+## Comment ça marche en pratique
+
+### 1. Capture tes connaissances au fil du travail
+
+Après avoir résolu quelque chose de compliqué, capture-le en 10 secondes :
+
+```bash
+rekall add bug "CORS échoue sur Safari" --context-interactive
+```
+
+Rekall demande : *Que se passait-il ? Qu'est-ce qui a corrigé ? Quels mots-clés devraient déclencher cette entrée ?*
+
+```
+> Situation: Safari bloque les requêtes même avec les headers CORS
+> Solution: Ajouter credentials: 'include' et Allow-Origin explicite
+> Mots-clés: cors, safari, cross-origin, fetch, credentials
+```
+
+C'est fait. Ton futur toi te remerciera.
+
+### 2. Cherche par le sens, pas juste les mots-clés
+
+Tu ne te souviens plus si tu avais appelé ça "CORS" ou "cross-origin" ? Peu importe.
+
+```bash
+rekall search "navigateur qui bloque mes appels API"
+```
+
+Rekall comprend le sens. Il trouve les entrées pertinentes même quand tes mots ne correspondent pas exactement.
+
+### 3. Laisse ton assistant IA l'utiliser
+
+Connecte Rekall à Claude, Cursor, ou tout IA compatible MCP :
+
+```bash
+rekall mcp  # Démarre le serveur
+```
+
+Maintenant ton IA consulte tes connaissances avant chaque correction. Il cite tes solutions passées. Il propose d'en sauvegarder de nouvelles. Tes connaissances s'accumulent au fil du temps.
+
+---
+
+## L'interface
+
+### Interface terminal
+```bash
+rekall  # Lance l'interface visuelle
+```
+
+```
+┌─ Rekall ────────────────────────────────────────────────┐
+│  🔍 Recherche: cors safari                              │
+├─────────────────────────────────────────────────────────┤
+│                                                         │
+│  [1] bug: CORS échoue sur Safari           85% ██████   │
+│      safari, cors, fetch  •  il y a 3 mois              │
+│      "Ajouter credentials: include..."                  │
+│                                                         │
+│  [2] pattern: Gestion cross-origin         72% █████    │
+│      architecture  •  il y a 1 mois                     │
+│      "Safari est plus strict sur CORS"                  │
+│                                                         │
+│  [3] reference: Guide CORS MDN             68% ████     │
+│      docs, mdn  •  il y a 6 mois                        │
+│                                                         │
+├─────────────────────────────────────────────────────────┤
+│  [/] Recherche  [a] Ajouter  [Enter] Voir  [q] Quitter  │
+└─────────────────────────────────────────────────────────┘
+```
+
+### Ligne de commande
+```bash
+rekall add bug "Fix: null pointer dans auth" -t auth,null
+rekall search "erreur authentification"
+rekall show 01HX7...
+rekall link 01HX7 01HY2 --type related
+rekall review  # Session de répétition espacée
+```
+
+---
+
+## Qu'est-ce que tu peux capturer ?
+
+| Type | Pour | Exemple |
+|------|------|---------|
+| `bug` | Problèmes résolus | "CORS Safari avec credentials" |
+| `pattern` | Approches réutilisables | "Retry avec backoff exponentiel" |
+| `decision` | Pourquoi X plutôt que Y | "PostgreSQL plutôt que MongoDB pour ce projet" |
+| `pitfall` | Erreurs à éviter | "Jamais de SELECT * en production" |
+| `config` | Config qui marche | "Config debug Python VS Code" |
+| `reference` | Docs/liens utiles | "Cette réponse StackOverflow là" |
+| `snippet` | Code à garder | "Fonction debounce générique" |
+| `til` | Apprentissages rapides | "Git rebase -i peut réordonner les commits" |
+
+---
+
+## 100% local. 100% à toi.
+
+```
+Ta machine
+     │
+     ▼
+┌─────────────────────────────────────┐
+│  ~/.local/share/rekall/             │
+│                                     │
+│  Tout reste ici.                    │
+│  Pas de cloud. Pas de compte.       │
+│  Pas de tracking.                   │
+│                                     │
+└─────────────────────────────────────┘
+     │
+     ▼
+  Nulle part ailleurs. Jamais.
+```
+
+Tes connaissances t'appartiennent. Rekall ne téléphone pas à la maison. Il ne nécessite pas de compte. Il marche hors ligne. Ton historique de debug, tes décisions d'architecture, ta sagesse durement acquise — tout privé, tout local.
+
+---
+
+## Pour commencer
+
+### Installation
 
 ```bash
 # Avec uv (recommandé)
@@ -83,345 +220,76 @@ uv tool install git+https://github.com/guthubrx/rekall.git
 
 # Avec pipx
 pipx install git+https://github.com/guthubrx/rekall.git
-
-# Vérifier l'installation
-rekall version
 ```
+
+### Essaie
+
+```bash
+# Ajoute ta première entrée
+rekall add bug "Mon premier bug capturé" -t test
+
+# Recherche-la
+rekall search "premier"
+
+# Ouvre l'interface visuelle
+rekall
+```
+
+### Connecte ton assistant IA
+
+Pour Claude Code, Cursor, ou tout outil compatible MCP :
+
+```bash
+rekall mcp  # Expose Rekall à ton IA
+```
+
+Maintenant ton IA peut chercher dans tes connaissances, suggérer des liens, et aider à capturer de nouvelles entrées — le tout automatiquement.
 
 ---
 
-## Démarrage rapide
+## Basé sur la science
 
-### 1. Capturer une connaissance avec contexte
+Rekall n'est pas juste pratique — il est construit sur la recherche en sciences cognitives :
 
-```bash
-# Entrée simple
-rekall add bug "Fix: import circulaire dans models" -t python,import
+- **Les graphes de connaissances** améliorent la précision de récupération de 20% (les connaissances connectées sont plus faciles à trouver)
+- **La répétition espacée** améliore la rétention de 6-9% (réviser au bon moment compte)
+- **Mémoire épisodique vs sémantique** — c'est comme ça que ton cerveau organise vraiment l'information
+- **La localisation de bugs basée sur l'historique** montre que les fichiers avec des bugs passés ont plus de chances d'en avoir de nouveaux
 
-# Avec contexte structuré (recommandé)
-rekall add bug "Fix: import circulaire" --context-interactive
-# > Situation: Cycle d'import entre user.py et profile.py
-# > Solution: Extraire types partagés vers types/common.py
-# > Mots-clés: circulaire, import, cycle, refactor
-```
-
-### 2. Rechercher sémantiquement
-
-```bash
-# Recherche textuelle
-rekall search "import circulaire"
-
-# Recherche sémantique (trouve concepts similaires)
-rekall search "cycle dépendance module" --semantic
-
-# Par mots-clés
-rekall search --keywords "import,cycle"
-```
-
-### 3. Explorer dans le TUI
-
-```bash
-rekall          # Lancer l'interface interactive
-```
-
-```
-┌─ Rekall ──────────────────────────────────────────────┐
-│  Recherche: import circulaire                         │
-├───────────────────────────────────────────────────────┤
-│  [1] bug: Fix: import circulaire models    85% █████  │
-│      python, import | 2024-12-10                      │
-│                                                       │
-│  [2] pattern: Injection de dépendances     72% ████   │
-│      architecture | 2024-11-15                        │
-├───────────────────────────────────────────────────────┤
-│  [/] Recherche  [a] Ajouter  [Enter] Voir  [s] Config │
-└───────────────────────────────────────────────────────┘
-```
+On a lu les papiers de recherche pour que tu n'aies pas à le faire. Puis on a construit un outil qui les applique.
 
 ---
 
-## Contexte structuré
+## En savoir plus
 
-Chaque entrée peut avoir un contexte riche qui la rend trouvable :
-
-```bash
-rekall add bug "Erreur CORS sur Safari" --context-json '{
-  "situation": "Safari bloque les requêtes cross-origin malgré les headers CORS",
-  "solution": "Ajouter credentials: include et les bons headers Access-Control",
-  "trigger_keywords": ["cors", "safari", "cross-origin", "credentials"]
-}'
-```
-
-Ou en mode interactif :
-
-```bash
-rekall add bug "Erreur CORS sur Safari" --context-interactive
-```
-
-Cela capture :
-- **Situation** : Que se passait-il ? Quels étaient les symptômes ?
-- **Solution** : Qu'est-ce qui a corrigé ? Quelle était la cause racine ?
-- **Mots-clés** : Mots déclencheurs pour retrouver ça plus tard
-
----
-
-## Recherche sémantique
-
-Rekall utilise des embeddings locaux pour trouver par le sens :
-
-```bash
-# Activer la recherche sémantique
-rekall embeddings --status      # Vérifier le statut
-rekall embeddings --migrate     # Générer embeddings pour entrées existantes
-
-# Rechercher par le sens
-rekall search "timeout authentification" --semantic
-```
-
-La recherche combine :
-- **Recherche plein texte** (50%) - Correspondance exacte de mots-clés
-- **Similarité sémantique** (30%) - Correspondance par le sens
-- **Correspondance mots-clés** (20%) - Mots-clés du contexte structuré
-
----
-
-## Graphe de connaissances
-
-Connectez les entrées liées pour construire un réseau de connaissances :
-
-```
-              ┌──────────────────┐
-              │  Timeout Auth    │
-              │  (Bug #1)        │
-              └────────┬─────────┘
-                       │ related
-          ┌────────────┼────────────┐
-          ▼            ▼            ▼
-    ┌──────────┐ ┌──────────┐ ┌──────────┐
-    │ Timeout  │ │ Timeout  │ │ Timeout  │
-    │ DB #2    │ │ API #3   │ │ Cache #4 │
-    └────┬─────┘ └────┬─────┘ └──────────┘
-         │            │
-         └─────┬──────┘
-               │ derived_from
-               ▼
-    ┌────────────────────────────┐
-    │   PATTERN: Retry Backoff   │
-    │   (Connaissance généralisée)│
-    └────────────────────────────┘
-```
-
-```bash
-rekall link 01HXYZ 01HABC                      # Créer un lien
-rekall link 01HXYZ 01HABC --type supersedes    # Avec type de relation
-rekall related 01HXYZ                          # Voir les connexions
-rekall graph 01HXYZ                            # Visualisation ASCII
-```
-
-**Types de liens :** `related`, `supersedes`, `derived_from`, `contradicts`
-
----
-
-## Mémoire cognitive
-
-Comme votre cerveau, Rekall distingue deux types de mémoire :
-
-### Mémoire épisodique (Ce qui s'est passé)
-Événements spécifiques avec contexte complet :
-```bash
-rekall add bug "Timeout auth sur API prod 15/12" --memory-type episodic
-```
-
-### Mémoire sémantique (Ce que vous avez appris)
-Patterns abstraits et principes :
-```bash
-rekall add pattern "Toujours ajouter retry backoff pour APIs externes" --memory-type semantic
-```
-
-### Généralisation
-Extraire des patterns de plusieurs épisodes :
-```bash
-rekall generalize 01HA 01HB 01HC --title "Pattern retry pour timeouts"
-```
-
----
-
-## Répétition espacée
-
-Révisez vos connaissances à intervalles optimaux avec l'algorithme SM-2 :
-
-```bash
-rekall review              # Démarrer session de révision
-rekall review --limit 10   # Réviser 10 entrées
-rekall stale               # Trouver connaissances oubliées (30+ jours)
-rekall stale --days 7      # Seuil personnalisé
-```
-
-Échelle de notation :
-- **1** = Complètement oublié
-- **3** = Rappelé avec effort
-- **5** = Rappel parfait
-
----
-
-## Serveur MCP (Intégration IA)
-
-Rekall inclut un serveur MCP pour l'intégration avec les assistants IA :
-
-```bash
-# Démarrer le serveur MCP
-rekall mcp
-
-# Ou configurer dans Claude Desktop / Claude Code
-```
-
-**Outils disponibles :**
-- `rekall_search` - Rechercher dans la base
-- `rekall_add` - Ajouter des entrées
-- `rekall_show` - Obtenir détails d'une entrée
-- `rekall_link` - Connecter des entrées
-- `rekall_suggest` - Obtenir suggestions basées sur embeddings
-
----
-
-## Intégrations IDE
-
-```bash
-rekall install claude     # Claude Code
-rekall install cursor     # Cursor AI
-rekall install copilot    # GitHub Copilot
-rekall install windsurf   # Windsurf
-rekall install cline      # Cline
-rekall install zed        # Zed
-rekall install gemini     # Gemini CLI
-rekall install continue   # Continue.dev
-```
-
-L'assistant IA va :
-1. Chercher dans Rekall avant de résoudre les problèmes
-2. Citer vos solutions passées dans ses réponses
-3. Suggérer de capturer les nouvelles connaissances après les corrections
-
----
-
-## Migration & Maintenance
-
-```bash
-rekall version             # Afficher version + info schéma
-rekall changelog           # Afficher historique des versions
-rekall migrate             # Mettre à jour le schéma DB (avec backup)
-rekall migrate --dry-run   # Prévisualiser les changements
-rekall migrate --enrich-context  # Ajouter contexte structuré aux anciennes entrées
-```
-
----
-
-## Types d'entrées
-
-| Type | Usage | Exemple |
-|------|-------|---------|
-| `bug` | Bugs corrigés | "Fix: erreur CORS sur Safari" |
-| `pattern` | Bonnes pratiques | "Pattern: Repository pattern pour DB" |
-| `decision` | Choix d'architecture | "Decision: Utiliser Redis pour sessions" |
-| `pitfall` | Erreurs à éviter | "Pitfall: Ne pas utiliser SELECT *" |
-| `config` | Astuces de config | "Config: Debug Python dans VS Code" |
-| `reference` | Docs externes | "Ref: Documentation React Hooks" |
-| `snippet` | Blocs de code | "Snippet: Fonction debounce" |
-| `til` | Apprentissages rapides | "TIL: Git rebase -i pour squash" |
-
----
-
-## Données & Confidentialité
-
-**100% local. Zéro cloud.**
-
-```
-Votre machine
-     │
-     ▼
-┌─────────────────────────────────────┐
-│  ~/.local/share/rekall/             │
-│  ├── rekall.db    (SQLite + FTS5)   │
-│  ├── config.toml  (Paramètres)      │
-│  └── backups/     (Sauvegardes auto)│
-└─────────────────────────────────────┘
-     │
-     ▼
-  Nulle part ailleurs
-```
-
-| Plateforme | Emplacement |
-|------------|-------------|
-| Linux | `~/.local/share/rekall/` |
-| macOS | `~/Library/Application Support/rekall/` |
-| Windows | `%APPDATA%\rekall\` |
-
-### Partage d'équipe
-
-```bash
-rekall init --local   # Crée .rekall/ dans le projet
-git add .rekall/      # Commit pour partager avec l'équipe
-```
-
-### Export & Sauvegarde
-
-```bash
-rekall export backup.rekall.zip                    # Sauvegarde complète
-rekall export frontend.zip --project frontend      # Filtré
-rekall import backup.rekall.zip --dry-run          # Prévisualiser l'import
-```
-
----
-
-## Référence des commandes
-
-| Commande | Description |
-|----------|-------------|
-| `rekall` | TUI interactif |
-| `rekall add <type> "titre"` | Capturer une connaissance |
-| `rekall search "requête"` | Rechercher des entrées |
-| `rekall search --semantic` | Recherche sémantique |
-| `rekall search --keywords` | Recherche par mots-clés |
-| `rekall search --json` | Sortie JSON pour IA |
-| `rekall show <id>` | Détails entrée + score |
-| `rekall browse` | Parcourir toutes les entrées |
-| `rekall link <a> <b>` | Connecter des entrées |
-| `rekall unlink <a> <b>` | Supprimer connexion |
-| `rekall related <id>` | Afficher entrées liées |
-| `rekall graph <id>` | Visualisation graphe ASCII |
-| `rekall stale` | Entrées oubliées |
-| `rekall review` | Session de répétition espacée |
-| `rekall generalize <ids>` | Épisodes vers Pattern |
-| `rekall deprecate <id>` | Marquer obsolète |
-| `rekall export <fichier>` | Exporter la base |
-| `rekall import <fichier>` | Importer archive |
-| `rekall install <ide>` | Intégration IDE |
-| `rekall embeddings` | Gérer embeddings sémantiques |
-| `rekall mcp` | Démarrer serveur MCP |
-| `rekall version` | Version et info schéma |
-| `rekall changelog` | Historique des versions |
-| `rekall migrate` | Mettre à jour la base |
+| Ressource | Description |
+|-----------|-------------|
+| `rekall --help` | Référence complète des commandes |
+| `rekall version` | Version et info base de données |
+| `rekall changelog` | Quoi de neuf |
+| [CHANGELOG.md](CHANGELOG.md) | Historique détaillé des versions |
 
 ---
 
 ## Prérequis
 
 - Python 3.9+
-- Aucun service externe
-- Aucun internet requis (sauf téléchargement optionnel du modèle d'embedding)
-- Aucun compte nécessaire
+- C'est tout. Pas de services cloud. Pas de clés API (sauf si tu veux la recherche sémantique). Pas de compte.
 
 ---
 
 ## Licence
 
-MIT
+MIT — Fais-en ce que tu veux.
 
 ---
 
-**Arrêtez de perdre vos connaissances. Commencez à vous en souvenir.**
+<p align="center">
+<strong>Arrête de perdre tes connaissances. Commence à te souvenir.</strong>
+<br><br>
 
 ```bash
 uv tool install git+https://github.com/guthubrx/rekall.git
 rekall
 ```
+</p>
