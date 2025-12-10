@@ -2,10 +2,8 @@
 
 from pathlib import Path
 
-import pytest
-from typer.testing import CliRunner
-
 from conftest import make_config_with_db_path
+from typer.testing import CliRunner
 
 runner = CliRunner()
 

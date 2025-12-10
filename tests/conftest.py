@@ -1,16 +1,19 @@
 """Pytest fixtures for Rekall tests."""
 
-import sqlite3
-import tempfile
 from pathlib import Path
 
 import pytest
 
 
-def make_config_with_db_path(db_path: Path):
-    """Create a Config with custom db_path using ResolvedPaths."""
+def make_config_with_db_path(db_path: Path, context_mode: str = "required"):
+    """Create a Config with custom db_path using ResolvedPaths.
+
+    Args:
+        db_path: Path to the database file
+        context_mode: Context mode ("required", "recommended", "optional")
+    """
     from rekall.config import Config
-    from rekall.paths import ResolvedPaths, PathSource
+    from rekall.paths import PathSource, ResolvedPaths
 
     paths = ResolvedPaths(
         config_dir=db_path.parent,
@@ -19,7 +22,9 @@ def make_config_with_db_path(db_path: Path):
         db_path=db_path,
         source=PathSource.CLI,
     )
-    return Config(paths=paths)
+    config = Config(paths=paths)
+    config.smart_embeddings_context_mode = context_mode
+    return config
 
 
 @pytest.fixture

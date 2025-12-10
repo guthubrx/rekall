@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 import sqlite3
+import zlib
 from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
 
 from rekall.models import (
+    Embedding,
     Entry,
     Link,
     ReviewItem,
     SearchResult,
+    StructuredContext,
+    Suggestion,
     calculate_consolidation_score,
     generate_ulid,
 )
@@ -23,8 +27,13 @@ from rekall.models import (
 #   0 = Initial schema (entries, tags, FTS5)
 #   1 = Cognitive memory fields (memory_type, access tracking, spaced repetition)
 #   2 = Links table for knowledge graph
+#   3 = Smart embeddings (embeddings, suggestions, metadata tables)
+#   4 = Context compression (context_compressed column for verification)
+#   5 = Link reason (reason column for justification)
+#   6 = Structured context (context_structured JSON column for disambiguation)
+#   7 = Unified context (context_blob compressed + keywords index table)
 
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 7
 
 # Migrations dict: version -> list of SQL statements
 # Each migration upgrades from version N-1 to version N
@@ -65,6 +74,72 @@ MIGRATIONS: dict[int, list[str]] = {
         "CREATE INDEX IF NOT EXISTS idx_links_target ON links(target_id)",
         "CREATE INDEX IF NOT EXISTS idx_links_type ON links(relation_type)",
     ],
+    3: [
+        # Embeddings table for semantic vectors
+        """CREATE TABLE IF NOT EXISTS embeddings (
+            id TEXT PRIMARY KEY,
+            entry_id TEXT NOT NULL,
+            embedding_type TEXT NOT NULL,
+            vector BLOB NOT NULL,
+            dimensions INTEGER NOT NULL,
+            model_name TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (entry_id) REFERENCES entries(id) ON DELETE CASCADE,
+            CHECK (embedding_type IN ('summary', 'context')),
+            CHECK (dimensions IN (128, 384, 768)),
+            UNIQUE(entry_id, embedding_type)
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_embeddings_entry ON embeddings(entry_id)",
+        "CREATE INDEX IF NOT EXISTS idx_embeddings_type ON embeddings(embedding_type)",
+        # Suggestions table for link/generalize proposals
+        """CREATE TABLE IF NOT EXISTS suggestions (
+            id TEXT PRIMARY KEY,
+            suggestion_type TEXT NOT NULL,
+            entry_ids TEXT NOT NULL,
+            reason TEXT,
+            score REAL NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at TEXT NOT NULL,
+            resolved_at TEXT,
+            CHECK (suggestion_type IN ('link', 'generalize')),
+            CHECK (status IN ('pending', 'accepted', 'rejected')),
+            CHECK (score >= 0.0 AND score <= 1.0)
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_suggestions_status ON suggestions(status)",
+        "CREATE INDEX IF NOT EXISTS idx_suggestions_type ON suggestions(suggestion_type)",
+        "CREATE INDEX IF NOT EXISTS idx_suggestions_created ON suggestions(created_at)",
+        # Metadata table for system configuration
+        """CREATE TABLE IF NOT EXISTS metadata (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )""",
+    ],
+    4: [
+        # Context compression for verification (zlib compressed text)
+        "ALTER TABLE entries ADD COLUMN context_compressed BLOB",
+    ],
+    5: [
+        # Link reason for justification (helps AI understand intent)
+        "ALTER TABLE links ADD COLUMN reason TEXT",
+    ],
+    6: [
+        # Structured context JSON for disambiguation (Feature 006)
+        "ALTER TABLE entries ADD COLUMN context_structured TEXT",
+        # Index for keyword search on structured context
+        "CREATE INDEX IF NOT EXISTS idx_entries_context ON entries(context_structured)",
+    ],
+    7: [
+        # Unified context: compressed JSON blob (Feature 007)
+        "ALTER TABLE entries ADD COLUMN context_blob BLOB",
+        # Keywords index table for fast search (replaces LIKE on JSON)
+        """CREATE TABLE IF NOT EXISTS context_keywords (
+            entry_id TEXT NOT NULL,
+            keyword TEXT NOT NULL,
+            FOREIGN KEY (entry_id) REFERENCES entries(id) ON DELETE CASCADE,
+            PRIMARY KEY (entry_id, keyword)
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_context_keywords ON context_keywords(keyword)",
+    ],
 }
 
 # Expected columns for schema verification (Option C - hybrid)
@@ -72,10 +147,12 @@ EXPECTED_ENTRY_COLUMNS = {
     "id", "title", "content", "type", "project", "confidence",
     "status", "superseded_by", "created_at", "updated_at",
     "memory_type", "last_accessed", "access_count", "consolidation_score",
-    "next_review", "review_interval", "ease_factor",
+    "next_review", "review_interval", "ease_factor", "context_compressed",
+    "context_structured",  # Feature 006: Structured context JSON
+    "context_blob",  # Feature 007: Compressed structured context
 }
 
-EXPECTED_TABLES = {"entries", "tags", "links", "entries_fts"}
+EXPECTED_TABLES = {"entries", "tags", "links", "entries_fts", "embeddings", "suggestions", "metadata", "context_keywords"}
 
 
 # SQL statements for schema creation
@@ -159,6 +236,34 @@ END;
 """
 
 # Note: Links table is created via MIGRATIONS[2] for proper versioning
+
+
+# =============================================================================
+# Context Compression Helpers
+# =============================================================================
+
+def compress_context(text: str) -> bytes:
+    """Compress text context using zlib.
+
+    Args:
+        text: Text to compress
+
+    Returns:
+        Compressed bytes (typically 70-85% smaller for text)
+    """
+    return zlib.compress(text.encode("utf-8"), level=6)
+
+
+def decompress_context(data: bytes) -> str:
+    """Decompress context back to text.
+
+    Args:
+        data: Compressed bytes
+
+    Returns:
+        Original text
+    """
+    return zlib.decompress(data).decode("utf-8")
 
 
 class Database:
@@ -670,6 +775,7 @@ class Database:
         source_id: str,
         target_id: str,
         relation_type: str = "related",
+        reason: Optional[str] = None,
     ) -> Link:
         """Create a link between two entries.
 
@@ -677,6 +783,7 @@ class Database:
             source_id: Source entry ULID
             target_id: Target entry ULID
             relation_type: Type of relation (default "related")
+            reason: Justification for the link (helps AI understand intent)
 
         Returns:
             Created Link object
@@ -695,13 +802,14 @@ class Database:
             source_id=source_id,
             target_id=target_id,
             relation_type=relation_type,
+            reason=reason,
         )
 
         try:
             self.conn.execute(
                 """
-                INSERT INTO links (id, source_id, target_id, relation_type, created_at)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO links (id, source_id, target_id, relation_type, created_at, reason)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     link.id,
@@ -709,6 +817,7 @@ class Database:
                     link.target_id,
                     link.relation_type,
                     link.created_at.isoformat(),
+                    link.reason,
                 ),
             )
             self.conn.commit()
@@ -755,6 +864,7 @@ class Database:
                         target_id=row["target_id"],
                         relation_type=row["relation_type"],
                         created_at=datetime.fromisoformat(row["created_at"]),
+                        reason=row["reason"],
                     )
                 )
 
@@ -773,6 +883,7 @@ class Database:
                         target_id=row["target_id"],
                         relation_type=row["relation_type"],
                         created_at=datetime.fromisoformat(row["created_at"]),
+                        reason=row["reason"],
                     )
                 )
 
@@ -877,7 +988,8 @@ class Database:
         max_depth: int = 2,
         show_incoming: bool = True,
         show_outgoing: bool = True,
-    ) -> str:
+        make_clickable: bool = False,
+    ) -> str | tuple[str, list[str]]:
         """Render entry connections as ASCII tree.
 
         Args:
@@ -885,9 +997,11 @@ class Database:
             max_depth: Maximum depth to traverse (default 2)
             show_incoming: Show incoming links (← referenced by)
             show_outgoing: Show outgoing links (→ references to)
+            make_clickable: Add navigation numbers [1]-[9] to connections
 
         Returns:
-            ASCII art representation of the connection graph
+            If make_clickable=False: ASCII art string
+            If make_clickable=True: Tuple of (ASCII art string, list of navigable IDs)
         """
         entry = self.get(entry_id, update_access=False)
         if not entry:
@@ -902,26 +1016,43 @@ class Database:
         lines.append("")
         visited.add(entry_id)
 
+        # Track IDs for navigation (when make_clickable=True)
+        nav_ids: list[str] = []
+        nav_counter = [0]  # Use list to allow mutation in nested function
+
+        # Helper to format ID with optional number
+        def format_id(eid: str) -> str:
+            if make_clickable and nav_counter[0] < 9:
+                nav_counter[0] += 1
+                nav_ids.append(eid)
+                return f"[cyan bold][{nav_counter[0]}][/cyan bold] [dim]{eid}[/dim]"
+            return f"[dim]({eid})[/dim]"
+
         # Collect all connections
-        connections: list[tuple[str, str, str, str]] = []  # (direction, type, id, title)
+        # (direction, type, id, title, reason)
+        connections: list[tuple[str, str, str, str, Optional[str]]] = []
 
         if show_outgoing:
             outgoing = self.get_links(entry_id, direction="outgoing")
             for link in outgoing:
                 target = self.get(link.target_id, update_access=False)
                 if target:
-                    connections.append(("→", link.relation_type, target.id, target.title))
+                    connections.append(
+                        ("→", link.relation_type, target.id, target.title, link.reason)
+                    )
 
         if show_incoming:
             incoming = self.get_links(entry_id, direction="incoming")
             for link in incoming:
                 source = self.get(link.source_id, update_access=False)
                 if source:
-                    connections.append(("←", link.relation_type, source.id, source.title))
+                    connections.append(
+                        ("←", link.relation_type, source.id, source.title, link.reason)
+                    )
 
         # Render connections
         total = len(connections)
-        for i, (direction, rel_type, conn_id, conn_title) in enumerate(connections):
+        for i, (direction, rel_type, conn_id, conn_title, reason) in enumerate(connections):
             is_last = (i == total - 1)
             prefix = "╰" if is_last else "├"
             branch = "  " if is_last else "│ "
@@ -941,20 +1072,27 @@ class Database:
                 f" {prefix}─{dir_symbol} [{rel_style}] {rel_type} [/{rel_style}] "
                 f"[bold]{conn_title[:40]}[/bold]"
             )
-            lines.append(f" {branch}  [dim]({conn_id})[/dim]")
+            lines.append(f" {branch}  {format_id(conn_id)}")
+            # Show reason if available
+            if reason:
+                lines.append(f" {branch}  [dim italic]→ {reason}[/dim italic]")
 
             # Recurse if depth allows
             if max_depth > 1 and conn_id not in visited:
                 visited.add(conn_id)
                 sub_lines = self._render_subtree(
-                    conn_id, max_depth - 1, visited, branch, direction
+                    conn_id, max_depth - 1, visited, branch, direction,
+                    nav_ids, nav_counter if make_clickable else None,
                 )
                 lines.extend(sub_lines)
 
         if not connections:
             lines.append(" [dim](aucune connexion)[/dim]")
 
-        return "\n".join(lines)
+        output = "\n".join(lines)
+        if make_clickable:
+            return (output, nav_ids)
+        return output
 
     def _render_subtree(
         self,
@@ -963,9 +1101,19 @@ class Database:
         visited: set[str],
         prefix: str,
         parent_direction: str,
+        nav_ids: list[str] | None = None,
+        nav_counter: list[int] | None = None,
     ) -> list[str]:
         """Render subtree for recursive graph traversal."""
         lines: list[str] = []
+
+        # Helper to format ID with optional number
+        def format_id(eid: str) -> str:
+            if nav_counter is not None and nav_counter[0] < 9:
+                nav_counter[0] += 1
+                nav_ids.append(eid)
+                return f"[cyan bold][{nav_counter[0]}][/cyan bold] [dim]{eid}[/dim]"
+            return f"[dim]({eid})[/dim]"
 
         if depth <= 0:
             return lines
@@ -974,20 +1122,20 @@ class Database:
         if parent_direction == "→":
             links = self.get_links(entry_id, direction="outgoing")
             connections = [
-                ("→", link.relation_type, link.target_id)
+                ("→", link.relation_type, link.target_id, link.reason)
                 for link in links
                 if link.target_id not in visited
             ]
         else:
             links = self.get_links(entry_id, direction="incoming")
             connections = [
-                ("←", link.relation_type, link.source_id)
+                ("←", link.relation_type, link.source_id, link.reason)
                 for link in links
                 if link.source_id not in visited
             ]
 
         total = len(connections)
-        for i, (direction, rel_type, conn_id) in enumerate(connections):
+        for i, (direction, rel_type, conn_id, reason) in enumerate(connections):
             is_last = (i == total - 1)
             conn_entry = self.get(conn_id, update_access=False)
             if not conn_entry:
@@ -1014,12 +1162,17 @@ class Database:
                 f"[bold]{conn_entry.title[:40]}[/bold]"
             )
             # ID on separate line for readability
-            lines.append(f" {prefix}{'   ' if is_last else '│  '}  [dim]({conn_id})[/dim]")
+            sub_prefix = prefix + ('   ' if is_last else '│  ')
+            lines.append(f" {sub_prefix}  {format_id(conn_id)}")
+            # Show reason if available
+            if reason:
+                lines.append(f" {sub_prefix}  [dim italic]→ {reason}[/dim italic]")
 
             # Continue recursion
             if depth > 1:
                 sub_lines = self._render_subtree(
-                    conn_id, depth - 1, visited, next_prefix, direction
+                    conn_id, depth - 1, visited, next_prefix, direction,
+                    nav_ids, nav_counter,
                 )
                 lines.extend(sub_lines)
 
@@ -1161,3 +1314,768 @@ class Database:
             (new_interval, new_ease, next_review.isoformat(), entry_id),
         )
         self.conn.commit()
+
+    # =========================================================================
+    # Embedding Methods (Phase 0 - Smart Embeddings)
+    # =========================================================================
+
+    def add_embedding(self, embedding: Embedding) -> None:
+        """Store an embedding vector.
+
+        Args:
+            embedding: Embedding to store
+        """
+        self.conn.execute(
+            """
+            INSERT OR REPLACE INTO embeddings
+            (id, entry_id, embedding_type, vector, dimensions, model_name, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                embedding.id,
+                embedding.entry_id,
+                embedding.embedding_type,
+                embedding.vector,
+                embedding.dimensions,
+                embedding.model_name,
+                embedding.created_at.isoformat(),
+            ),
+        )
+        self.conn.commit()
+
+    def get_embedding(
+        self, entry_id: str, embedding_type: str
+    ) -> Optional[Embedding]:
+        """Get embedding for entry by type.
+
+        Args:
+            entry_id: Entry ULID
+            embedding_type: 'summary' or 'context'
+
+        Returns:
+            Embedding if found, None otherwise
+        """
+        cursor = self.conn.execute(
+            "SELECT * FROM embeddings WHERE entry_id = ? AND embedding_type = ?",
+            (entry_id, embedding_type),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+
+        return Embedding(
+            id=row["id"],
+            entry_id=row["entry_id"],
+            embedding_type=row["embedding_type"],
+            vector=row["vector"],
+            dimensions=row["dimensions"],
+            model_name=row["model_name"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+        )
+
+    def get_embeddings(self, entry_id: str) -> list[Embedding]:
+        """Get all embeddings for an entry (summary + context).
+
+        Args:
+            entry_id: Entry ULID
+
+        Returns:
+            List of Embedding objects
+        """
+        cursor = self.conn.execute(
+            "SELECT * FROM embeddings WHERE entry_id = ?",
+            (entry_id,),
+        )
+        embeddings = []
+        for row in cursor.fetchall():
+            embeddings.append(
+                Embedding(
+                    id=row["id"],
+                    entry_id=row["entry_id"],
+                    embedding_type=row["embedding_type"],
+                    vector=row["vector"],
+                    dimensions=row["dimensions"],
+                    model_name=row["model_name"],
+                    created_at=datetime.fromisoformat(row["created_at"]),
+                )
+            )
+        return embeddings
+
+    def delete_embedding(
+        self, entry_id: str, embedding_type: Optional[str] = None
+    ) -> int:
+        """Delete embedding(s) for entry.
+
+        Args:
+            entry_id: Entry ULID
+            embedding_type: Specific type to delete (optional, deletes all if None)
+
+        Returns:
+            Number of embeddings deleted
+        """
+        if embedding_type:
+            cursor = self.conn.execute(
+                "DELETE FROM embeddings WHERE entry_id = ? AND embedding_type = ?",
+                (entry_id, embedding_type),
+            )
+        else:
+            cursor = self.conn.execute(
+                "DELETE FROM embeddings WHERE entry_id = ?",
+                (entry_id,),
+            )
+        self.conn.commit()
+        return cursor.rowcount
+
+    def get_all_embeddings(
+        self, embedding_type: Optional[str] = None
+    ) -> list[Embedding]:
+        """Get all embeddings, optionally filtered by type.
+
+        Args:
+            embedding_type: Filter by type (optional)
+
+        Returns:
+            List of all Embedding objects
+        """
+        if embedding_type:
+            cursor = self.conn.execute(
+                "SELECT * FROM embeddings WHERE embedding_type = ?",
+                (embedding_type,),
+            )
+        else:
+            cursor = self.conn.execute("SELECT * FROM embeddings")
+
+        embeddings = []
+        for row in cursor.fetchall():
+            embeddings.append(
+                Embedding(
+                    id=row["id"],
+                    entry_id=row["entry_id"],
+                    embedding_type=row["embedding_type"],
+                    vector=row["vector"],
+                    dimensions=row["dimensions"],
+                    model_name=row["model_name"],
+                    created_at=datetime.fromisoformat(row["created_at"]),
+                )
+            )
+        return embeddings
+
+    def count_embeddings(self) -> int:
+        """Count total embeddings in database.
+
+        Returns:
+            Number of embeddings
+        """
+        cursor = self.conn.execute("SELECT COUNT(*) FROM embeddings")
+        return cursor.fetchone()[0]
+
+    def get_entries_without_embeddings(
+        self, embedding_type: str = "summary"
+    ) -> list[Entry]:
+        """Get entries missing embeddings (for migration).
+
+        Args:
+            embedding_type: Type to check for (default: 'summary')
+
+        Returns:
+            List of Entry objects without the specified embedding type
+        """
+        cursor = self.conn.execute(
+            """
+            SELECT e.* FROM entries e
+            WHERE e.status = 'active'
+            AND NOT EXISTS (
+                SELECT 1 FROM embeddings emb
+                WHERE emb.entry_id = e.id AND emb.embedding_type = ?
+            )
+            """,
+            (embedding_type,),
+        )
+
+        entries = []
+        for row in cursor.fetchall():
+            tag_cursor = self.conn.execute(
+                "SELECT tag FROM tags WHERE entry_id = ?", (row["id"],)
+            )
+            tags = [r[0] for r in tag_cursor.fetchall()]
+            entries.append(self._row_to_entry(row, tags))
+
+        return entries
+
+    # =========================================================================
+    # Suggestion Methods (Phase 0 - Smart Embeddings)
+    # =========================================================================
+
+    def add_suggestion(self, suggestion: Suggestion) -> None:
+        """Create a new suggestion.
+
+        Args:
+            suggestion: Suggestion to create
+        """
+        self.conn.execute(
+            """
+            INSERT INTO suggestions
+            (id, suggestion_type, entry_ids, reason, score, status, created_at, resolved_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                suggestion.id,
+                suggestion.suggestion_type,
+                suggestion.entry_ids_json(),
+                suggestion.reason,
+                suggestion.score,
+                suggestion.status,
+                suggestion.created_at.isoformat(),
+                suggestion.resolved_at.isoformat() if suggestion.resolved_at else None,
+            ),
+        )
+        self.conn.commit()
+
+    def get_suggestion(self, suggestion_id: str) -> Optional[Suggestion]:
+        """Get suggestion by ID.
+
+        Args:
+            suggestion_id: Suggestion ULID
+
+        Returns:
+            Suggestion if found, None otherwise
+        """
+        cursor = self.conn.execute(
+            "SELECT * FROM suggestions WHERE id = ?",
+            (suggestion_id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+
+        return Suggestion.from_row(dict(row))
+
+    def get_suggestions(
+        self,
+        status: Optional[str] = None,
+        suggestion_type: Optional[str] = None,
+        limit: int = 100,
+    ) -> list[Suggestion]:
+        """Get suggestions with optional filters.
+
+        Args:
+            status: Filter by status (optional)
+            suggestion_type: Filter by type (optional)
+            limit: Maximum results
+
+        Returns:
+            List of Suggestion objects
+        """
+        sql = "SELECT * FROM suggestions WHERE 1=1"
+        params: list = []
+
+        if status:
+            sql += " AND status = ?"
+            params.append(status)
+
+        if suggestion_type:
+            sql += " AND suggestion_type = ?"
+            params.append(suggestion_type)
+
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        params.append(limit)
+
+        cursor = self.conn.execute(sql, params)
+        return [Suggestion.from_row(dict(row)) for row in cursor.fetchall()]
+
+    def update_suggestion_status(
+        self,
+        suggestion_id: str,
+        status: str,
+    ) -> bool:
+        """Update suggestion status (accept/reject).
+
+        Args:
+            suggestion_id: Suggestion ULID
+            status: New status ('accepted' or 'rejected')
+
+        Returns:
+            True if updated, False if not found
+        """
+        resolved_at = datetime.now().isoformat() if status != "pending" else None
+        cursor = self.conn.execute(
+            """
+            UPDATE suggestions SET status = ?, resolved_at = ?
+            WHERE id = ?
+            """,
+            (status, resolved_at, suggestion_id),
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def suggestion_exists(
+        self, entry_ids: list[str], suggestion_type: str
+    ) -> bool:
+        """Check if similar suggestion already exists (avoid duplicates).
+
+        Args:
+            entry_ids: List of entry IDs involved
+            suggestion_type: Type of suggestion
+
+        Returns:
+            True if a pending suggestion with same entries exists
+        """
+        import json
+
+        # Sort IDs for consistent comparison
+        sorted_ids = json.dumps(sorted(entry_ids))
+
+        # Check exact match on sorted entry_ids
+        cursor = self.conn.execute(
+            """
+            SELECT 1 FROM suggestions
+            WHERE suggestion_type = ? AND status = 'pending'
+            AND entry_ids = ?
+            """,
+            (suggestion_type, sorted_ids),
+        )
+
+        if cursor.fetchone():
+            return True
+
+        # For link suggestions, also check reverse order
+        if suggestion_type == "link" and len(entry_ids) == 2:
+            reverse_ids = json.dumps(sorted(entry_ids, reverse=True))
+            cursor = self.conn.execute(
+                """
+                SELECT 1 FROM suggestions
+                WHERE suggestion_type = ? AND status = 'pending'
+                AND entry_ids = ?
+                """,
+                (suggestion_type, reverse_ids),
+            )
+            return cursor.fetchone() is not None
+
+        return False
+
+    # =========================================================================
+    # Metadata Methods (Phase 0 - Smart Embeddings)
+    # =========================================================================
+
+    def get_metadata(self, key: str) -> Optional[str]:
+        """Get metadata value by key.
+
+        Args:
+            key: Metadata key
+
+        Returns:
+            Value if found, None otherwise
+        """
+        cursor = self.conn.execute(
+            "SELECT value FROM metadata WHERE key = ?",
+            (key,),
+        )
+        row = cursor.fetchone()
+        return row[0] if row else None
+
+    def set_metadata(self, key: str, value: str) -> None:
+        """Set metadata key-value pair (upsert).
+
+        Args:
+            key: Metadata key
+            value: Value to store
+        """
+        self.conn.execute(
+            "INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)",
+            (key, value),
+        )
+        self.conn.commit()
+
+    def delete_metadata(self, key: str) -> bool:
+        """Delete metadata entry.
+
+        Args:
+            key: Metadata key
+
+        Returns:
+            True if deleted, False if not found
+        """
+        cursor = self.conn.execute(
+            "DELETE FROM metadata WHERE key = ?",
+            (key,),
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def is_first_weekly_call(self) -> bool:
+        """Check if this is the first call this ISO week.
+
+        Returns:
+            True if first call this week, False otherwise
+        """
+        from datetime import date
+
+        last_check = self.get_metadata("last_weekly_check")
+        if last_check is None:
+            return True
+
+        try:
+            last_date = date.fromisoformat(last_check)
+            today = date.today()
+            # Same ISO week?
+            return last_date.isocalendar()[:2] != today.isocalendar()[:2]
+        except ValueError:
+            return True
+
+    def update_weekly_check(self) -> None:
+        """Update the weekly check timestamp to today."""
+        from datetime import date
+
+        self.set_metadata("last_weekly_check", date.today().isoformat())
+
+    # =========================================================================
+    # Context Compression Methods
+    # =========================================================================
+
+    def store_context(self, entry_id: str, context: str) -> None:
+        """Store compressed context for an entry.
+
+        Useful for AI verification of suggestions - store the conversation
+        context that led to the entry creation for later retrieval.
+
+        Args:
+            entry_id: Entry ULID
+            context: Text context to compress and store
+        """
+        compressed = compress_context(context)
+        self.conn.execute(
+            "UPDATE entries SET context_compressed = ? WHERE id = ?",
+            (compressed, entry_id),
+        )
+        self.conn.commit()
+
+    def get_context(self, entry_id: str) -> Optional[str]:
+        """Retrieve and decompress context for an entry.
+
+        Args:
+            entry_id: Entry ULID
+
+        Returns:
+            Decompressed context text, or None if not stored
+        """
+        row = self.conn.execute(
+            "SELECT context_compressed FROM entries WHERE id = ?",
+            (entry_id,),
+        ).fetchone()
+
+        if row is None or row["context_compressed"] is None:
+            return None
+
+        return decompress_context(row["context_compressed"])
+
+    def get_contexts_for_verification(
+        self, entry_ids: list[str]
+    ) -> dict[str, Optional[str]]:
+        """Retrieve contexts for multiple entries (for suggestion verification).
+
+        Args:
+            entry_ids: List of entry ULIDs
+
+        Returns:
+            Dict mapping entry_id to decompressed context (None if not stored)
+        """
+        placeholders = ",".join("?" * len(entry_ids))
+        rows = self.conn.execute(
+            f"SELECT id, context_compressed FROM entries WHERE id IN ({placeholders})",
+            entry_ids,
+        ).fetchall()
+
+        result = {}
+        for row in rows:
+            if row["context_compressed"]:
+                result[row["id"]] = decompress_context(row["context_compressed"])
+            else:
+                result[row["id"]] = None
+
+        return result
+
+    def get_context_sizes(self, entry_ids: list[str]) -> dict[str, int]:
+        """Get compressed context sizes for multiple entries (single query).
+
+        Args:
+            entry_ids: List of entry ULIDs
+
+        Returns:
+            Dict mapping entry_id to compressed size in bytes (0 if no context)
+        """
+        if not entry_ids:
+            return {}
+
+        placeholders = ",".join("?" * len(entry_ids))
+        rows = self.conn.execute(
+            f"SELECT id, LENGTH(context_compressed) as size FROM entries "
+            f"WHERE id IN ({placeholders})",
+            entry_ids,
+        ).fetchall()
+
+        return {row["id"]: row["size"] or 0 for row in rows}
+
+    # =========================================================================
+    # Structured Context Methods (Feature 006)
+    # =========================================================================
+
+    def store_structured_context(
+        self, entry_id: str, context: StructuredContext
+    ) -> None:
+        """Store structured context for an entry.
+
+        Uses compressed storage in context_blob (v7+) with keywords
+        indexed in context_keywords table for fast search.
+
+        Args:
+            entry_id: Entry ULID
+            context: StructuredContext object to store
+        """
+        # Compress JSON and store in context_blob
+        json_data = context.to_json()
+        compressed = compress_context(json_data)
+
+        self.conn.execute(
+            "UPDATE entries SET context_blob = ?, context_structured = ? WHERE id = ?",
+            (compressed, json_data, entry_id),  # Keep context_structured for backward compat
+        )
+
+        # Update keywords index
+        self.conn.execute(
+            "DELETE FROM context_keywords WHERE entry_id = ?",
+            (entry_id,),
+        )
+        for keyword in context.trigger_keywords:
+            self.conn.execute(
+                "INSERT OR IGNORE INTO context_keywords (entry_id, keyword) VALUES (?, ?)",
+                (entry_id, keyword.lower()),
+            )
+
+        self.conn.commit()
+
+    def get_structured_context(self, entry_id: str) -> Optional[StructuredContext]:
+        """Get structured context for an entry.
+
+        Reads from context_blob (compressed, v7+) with fallback to
+        context_structured (uncompressed, v6) for backward compatibility.
+
+        Args:
+            entry_id: Entry ULID
+
+        Returns:
+            StructuredContext object if exists, None otherwise
+        """
+        row = self.conn.execute(
+            "SELECT context_blob, context_structured FROM entries WHERE id = ?",
+            (entry_id,),
+        ).fetchone()
+
+        if not row:
+            return None
+
+        # Prefer compressed blob (v7+)
+        if row["context_blob"]:
+            json_data = decompress_context(row["context_blob"])
+            return StructuredContext.from_json(json_data)
+
+        # Fallback to uncompressed (v6)
+        if row["context_structured"]:
+            return StructuredContext.from_json(row["context_structured"])
+
+        return None
+
+    def search_by_keywords(
+        self, keywords: list[str], limit: int = 20
+    ) -> list[Entry]:
+        """Search entries by trigger keywords in structured context.
+
+        Uses the context_keywords index table (v7+) with fallback to
+        LIKE matching on context_structured for backward compatibility.
+
+        Args:
+            keywords: List of keywords to search for
+            limit: Maximum results to return
+
+        Returns:
+            List of Entry objects matching any keyword
+        """
+        if not keywords:
+            return []
+
+        # Normalize keywords
+        keywords = [kw.lower().strip() for kw in keywords if kw.strip()]
+        if not keywords:
+            return []
+
+        # Check if context_keywords table exists (v7+)
+        table_exists = self.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='context_keywords'"
+        ).fetchone()
+
+        if table_exists:
+            # Use indexed keyword search (v7+)
+            placeholders = ",".join("?" * len(keywords))
+            query = f"""
+                SELECT DISTINCT e.* FROM entries e
+                JOIN context_keywords ck ON e.id = ck.entry_id
+                WHERE ck.keyword IN ({placeholders})
+                ORDER BY e.updated_at DESC
+                LIMIT ?
+            """
+            params = keywords + [limit]
+        else:
+            # Fallback to LIKE search on JSON (v6)
+            conditions = []
+            params = []
+            for kw in keywords:
+                conditions.append("LOWER(context_structured) LIKE ?")
+                params.append(f"%{kw}%")
+
+            query = f"""
+                SELECT * FROM entries
+                WHERE context_structured IS NOT NULL
+                AND ({" OR ".join(conditions)})
+                ORDER BY updated_at DESC
+                LIMIT ?
+            """
+            params.append(limit)
+
+        rows = self.conn.execute(query, params).fetchall()
+        entries = []
+        for row in rows:
+            tag_cursor = self.conn.execute(
+                "SELECT tag FROM tags WHERE entry_id = ?", (row["id"],)
+            )
+            tags = [r[0] for r in tag_cursor.fetchall()]
+            entries.append(self._row_to_entry(row, tags))
+        return entries
+
+    def get_entries_with_structured_context(
+        self, limit: int = 100
+    ) -> list[tuple[Entry, StructuredContext]]:
+        """Get all entries that have structured context.
+
+        Args:
+            limit: Maximum entries to return
+
+        Returns:
+            List of (Entry, StructuredContext) tuples
+        """
+        rows = self.conn.execute(
+            """
+            SELECT * FROM entries
+            WHERE context_blob IS NOT NULL OR context_structured IS NOT NULL
+            ORDER BY updated_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+
+        result = []
+        for row in rows:
+            tag_cursor = self.conn.execute(
+                "SELECT tag FROM tags WHERE entry_id = ?", (row["id"],)
+            )
+            tags = [r[0] for r in tag_cursor.fetchall()]
+            entry = self._row_to_entry(row, tags)
+
+            # Prefer compressed blob (v7+), fallback to uncompressed (v6)
+            if row["context_blob"]:
+                json_data = decompress_context(row["context_blob"])
+                context = StructuredContext.from_json(json_data)
+            else:
+                context = StructuredContext.from_json(row["context_structured"])
+
+            result.append((entry, context))
+        return result
+
+    def migrate_to_compressed_context(self) -> tuple[int, int]:
+        """Migrate existing context data to compressed format (v7).
+
+        This function:
+        1. Compresses context_structured JSON into context_blob
+        2. Populates context_keywords table from trigger_keywords
+        3. Optionally migrates context_compressed into conversation_excerpt
+
+        Returns:
+            Tuple of (migrated_count, keywords_added)
+        """
+        # Get all entries with context_structured but no context_blob
+        rows = self.conn.execute(
+            """
+            SELECT id, context_structured, context_compressed
+            FROM entries
+            WHERE context_structured IS NOT NULL
+            AND (context_blob IS NULL OR context_blob = '')
+            """
+        ).fetchall()
+
+        migrated_count = 0
+        keywords_added = 0
+
+        for row in rows:
+            entry_id = row["id"]
+            json_data = row["context_structured"]
+
+            try:
+                # Parse the structured context
+                ctx = StructuredContext.from_json(json_data)
+
+                # If context_compressed exists and conversation_excerpt is empty,
+                # migrate the old compressed context
+                if row["context_compressed"] and not ctx.conversation_excerpt:
+                    try:
+                        old_context = decompress_context(row["context_compressed"])
+                        # Create new context with conversation_excerpt
+                        ctx = StructuredContext(
+                            situation=ctx.situation,
+                            solution=ctx.solution,
+                            trigger_keywords=ctx.trigger_keywords,
+                            what_failed=ctx.what_failed,
+                            conversation_excerpt=old_context,  # Migrate here
+                            files_modified=ctx.files_modified,
+                            error_messages=ctx.error_messages,
+                            created_at=ctx.created_at,
+                            extraction_method=ctx.extraction_method,
+                        )
+                        json_data = ctx.to_json()
+                    except Exception:
+                        pass  # Keep original if decompression fails
+
+                # Compress and store
+                compressed = compress_context(json_data)
+                self.conn.execute(
+                    "UPDATE entries SET context_blob = ? WHERE id = ?",
+                    (compressed, entry_id),
+                )
+
+                # Add keywords to index
+                for keyword in ctx.trigger_keywords:
+                    self.conn.execute(
+                        "INSERT OR IGNORE INTO context_keywords (entry_id, keyword) VALUES (?, ?)",
+                        (entry_id, keyword.lower()),
+                    )
+                    keywords_added += 1
+
+                migrated_count += 1
+            except Exception:
+                # Skip invalid entries
+                continue
+
+        self.conn.commit()
+        return (migrated_count, keywords_added)
+
+    def count_entries_without_context_blob(self) -> int:
+        """Count entries with context_structured but no context_blob.
+
+        Returns:
+            Number of entries needing migration
+        """
+        row = self.conn.execute(
+            """
+            SELECT COUNT(*) as count FROM entries
+            WHERE context_structured IS NOT NULL
+            AND (context_blob IS NULL OR context_blob = '')
+            """
+        ).fetchone()
+        return row["count"] if row else 0

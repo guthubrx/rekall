@@ -7,8 +7,6 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 
-import pytest
-
 from rekall.models import Entry
 
 

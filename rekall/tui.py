@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
@@ -25,7 +27,7 @@ from textual.widgets import (
 )
 from textual.widgets.selection_list import Selection
 
-from rekall.config import get_config
+from rekall.config import get_config, save_config_to_toml
 from rekall.db import Database
 from rekall.i18n import LANGUAGES, get_lang, load_lang_preference, set_lang, t
 from rekall.models import VALID_TYPES, Entry, generate_ulid
@@ -142,7 +144,9 @@ BANNER_CSS = """
 class MenuItem(ListItem):
     """A menu item with label and description."""
 
-    def __init__(self, label: str, description: str, action_key: str, label_width: int = 15) -> None:
+    def __init__(
+        self, label: str, description: str, action_key: str, label_width: int = 15
+    ) -> None:
         super().__init__()
         self.label = label
         self.description = description
@@ -175,6 +179,9 @@ class MenuListView(ListView):
         if self.highlighted_child is not None:
             item = self.highlighted_child
             if isinstance(item, MenuItem):
+                # Skip non-selectable items (headers and spacers)
+                if item.action_key in ("__header__", "__spacer__"):
+                    return
                 # Convert action_key to int for index-based results
                 try:
                     self.app.exit(result=int(item.action_key))
@@ -410,11 +417,12 @@ class SimpleMenuApp(App):
         Binding("q", "cancel", "Back", show=False),
     ]
 
-    def __init__(self, title: str, items: List[str]):
+    def __init__(self, title: str, items: List[str], notification: str = ""):
         super().__init__()
         self.title_text = title
         self.items = items
         self.result = None
+        self.initial_notification = notification
 
     def compose(self) -> ComposeResult:
         yield create_banner_container()
@@ -422,24 +430,45 @@ class SimpleMenuApp(App):
         if self.title_text:
             yield Static(self.title_text, id="title")
 
-        # Build menu items, skipping separators
+        # Build menu items with section headers support
+        # Section headers start with "─" or "═" and are non-selectable
         menu_items = []
-        valid_items = []
+        self.index_mapping = {}  # Map ListView position to original index
+        list_position = 0
+
+        # Calculate max label width (excluding headers)
+        selectable_items = [
+            item for item in self.items
+            if not (item.strip().startswith("─") or item.strip().startswith("═"))
+        ]
+        max_label_width = max((len(item) for item in selectable_items), default=15) + 2
+
         for i, item in enumerate(self.items):
-            if item.strip() and all(c in '─-═' for c in item.strip()):
+            stripped = item.strip()
+            # Empty line = visual spacer (non-selectable)
+            if not stripped:
+                menu_items.append(MenuItem(" ", "", "__spacer__", max_label_width))
+                list_position += 1
                 continue
-            valid_items.append((i, item))
-
-        # Calculate max label width for alignment
-        max_label_width = max(len(item) for _, item in valid_items) + 2 if valid_items else 15
-
-        for i, item in valid_items:
-            menu_items.append(MenuItem(item, "", str(i), max_label_width))
+            # Section header (non-selectable visual separator)
+            if stripped.startswith("─") or stripped.startswith("═"):
+                styled = f"[bold cyan]{stripped}[/bold cyan]"
+                menu_items.append(MenuItem(styled, "", "__header__", max_label_width))
+                list_position += 1
+            else:
+                menu_items.append(MenuItem(item, "", str(i), max_label_width))
+                self.index_mapping[list_position] = i
+                list_position += 1
 
         yield MenuListView(*menu_items)
 
         yield Static("", id="left-notify")
         yield Footer()
+
+    def on_mount(self) -> None:
+        """Called when app is mounted - show initial notification if any."""
+        if self.initial_notification:
+            self.show_left_notify(self.initial_notification, 3.0)
 
     def show_left_notify(self, message: str, timeout: float = 3.0) -> None:
         """Show a notification on the left side."""
@@ -456,13 +485,16 @@ class SimpleMenuApp(App):
         self.exit(result=None)
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
-        # Get the index directly from the ListView
-        list_view = event.list_view
-        idx = list_view.index
-        if idx is not None:
-            self.exit(result=int(idx) if not isinstance(idx, int) else idx)
-        else:
-            self.exit(result=None)
+        """Handle item selection using action_key."""
+        item = event.item
+        if isinstance(item, MenuItem):
+            # Skip non-selectable items (headers and spacers)
+            if item.action_key in ("__header__", "__spacer__"):
+                return
+            try:
+                self.exit(result=int(item.action_key))
+            except ValueError:
+                self.exit(result=item.action_key)
 
 
 class MultiSelectApp(App):
@@ -623,27 +655,21 @@ class BrowseApp(App):
         margin-top: 1;
     }
 
-    #graph-overlay {
+    #graph-modal {
         display: none;
         layer: modal;
-        width: 100%;
-        height: 100%;
-        align: center middle;
-        background: rgba(0, 0, 0, 0.5);
-    }
-
-    #graph-overlay.visible {
-        display: block;
-    }
-
-    #graph-modal {
         width: 80;
         height: auto;
         max-height: 80%;
         padding: 1 2;
+        offset: 50% 4;
         background: #1e2a4a;
         border: thick #4367CD;
         color: #93B5F7;
+    }
+
+    #graph-modal.visible {
+        display: block;
     }
 
     #graph-title {
@@ -782,17 +808,39 @@ class BrowseApp(App):
         Binding("escape", "quit_or_close", "Back", show=True),
         Binding("q", "quit", "Quit", show=True),
         Binding("enter", "select_entry", "View", show=True),
+        Binding("a", "add_entry", "Add", show=True),
         Binding("e", "edit_entry", "Edit", show=True),
         Binding("d", "delete_entry", "Delete", show=True),
         Binding("slash", "search", "Search", show=True),
         Binding("question_mark", "toggle_legend", "?", show=True),
         Binding("space", "toggle_graph", "Graph", show=True),
+        # Graph navigation keys
+        Binding("1", "graph_nav(0)", "1", show=False),
+        Binding("2", "graph_nav(1)", "2", show=False),
+        Binding("3", "graph_nav(2)", "3", show=False),
+        Binding("4", "graph_nav(3)", "4", show=False),
+        Binding("5", "graph_nav(4)", "5", show=False),
+        Binding("6", "graph_nav(5)", "6", show=False),
+        Binding("7", "graph_nav(6)", "7", show=False),
+        Binding("8", "graph_nav(7)", "8", show=False),
+        Binding("9", "graph_nav(8)", "9", show=False),
+        # Preview mode toggle
+        Binding("less_than_sign", "preview_content", "<", show=False),
+        Binding("greater_than_sign", "preview_context", ">", show=False),
+        # Panel resize
+        Binding("plus", "panel_grow", "+", show=False),
+        Binding("minus", "panel_shrink", "-", show=False),
     ]
 
     def __init__(self, entries: list, db):
         super().__init__()
         self.all_entries = entries  # Keep original list
         self.entries = entries  # Current filtered list
+        self.graph_nav_ids: list[str] = []  # IDs navigable from graph modal
+        self.context_sizes: dict[str, int] = {}  # Context compressed sizes
+        self.preview_mode = "content"  # "content" or "context"
+        self.config = get_config()
+        self.detail_panel_fr = self.config.ui_detail_panel_ratio  # Load from config
         self.db = db
         self.selected_entry = entries[0] if entries else None
         self.result_action = None  # ("view"|"edit"|"delete", entry)
@@ -827,18 +875,15 @@ class BrowseApp(App):
             Static("[dim]? ou Esc pour fermer[/dim]", id="legend-hint"),
             id="legend-modal",
         )
-        # Graph modal with centered overlay
+        # Graph modal (hidden by default)
         yield Container(
-            Container(
-                Static(t("browse.graph_title"), id="graph-title"),
-                VerticalScroll(
-                    Static("", id="graph-content"),
-                    id="graph-scroll",
-                ),
-                Static("[dim]Espace ou Esc pour fermer • Clic sur ID pour naviguer[/dim]", id="graph-hint"),
-                id="graph-modal",
+            Static(t("browse.graph_title"), id="graph-title"),
+            VerticalScroll(
+                Static("", id="graph-content"),
+                id="graph-scroll",
             ),
-            id="graph-overlay",
+            Static("[dim]Espace/Esc: fermer • 1-9: naviguer[/dim]", id="graph-hint"),
+            id="graph-modal",
         )
 
     def show_left_notify(self, message: str, timeout: float = 3.0) -> None:
@@ -859,37 +904,76 @@ class BrowseApp(App):
 
     def action_toggle_graph(self) -> None:
         """Toggle the graph modal visibility for selected entry."""
-        graph_overlay = self.query_one("#graph-overlay", Container)
+        graph_modal = self.query_one("#graph-modal", Container)
 
-        if graph_overlay.has_class("visible"):
-            graph_overlay.remove_class("visible")
+        if graph_modal.has_class("visible"):
+            graph_modal.remove_class("visible")
+            self.graph_nav_ids = []
         else:
             # Generate graph for selected entry
             if self.selected_entry:
-                graph_output = self.db.render_graph_ascii(
+                result = self.db.render_graph_ascii(
                     self.selected_entry.id,
                     max_depth=2,
                     show_incoming=True,
                     show_outgoing=True,
                     make_clickable=True,
                 )
+                graph_output, self.graph_nav_ids = result
                 graph_content = self.query_one("#graph-content", Static)
                 graph_content.update(graph_output)
-                graph_overlay.add_class("visible")
+                graph_modal.add_class("visible")
             else:
                 self.show_left_notify("Aucune entrée sélectionnée", 2.0)
+
+    def action_graph_nav(self, index: int) -> None:
+        """Navigate to entry by number key (1-9) when graph is visible."""
+        graph_modal = self.query_one("#graph-modal", Container)
+        if not graph_modal.has_class("visible"):
+            return  # Only works when graph is open
+
+        if 0 <= index < len(self.graph_nav_ids):
+            entry_id = self.graph_nav_ids[index]
+            self.action_navigate_to_entry(entry_id)
 
     def action_quit_or_close(self) -> None:
         """Close modals if open, otherwise quit."""
         legend = self.query_one("#legend-modal", Container)
-        graph_overlay = self.query_one("#graph-overlay", Container)
+        graph_modal = self.query_one("#graph-modal", Container)
 
         if legend.has_class("visible"):
             legend.remove_class("visible")
-        elif graph_overlay.has_class("visible"):
-            graph_overlay.remove_class("visible")
+        elif graph_modal.has_class("visible"):
+            graph_modal.remove_class("visible")
         else:
             self.app.exit()
+
+    def action_navigate_to_entry(self, entry_id: str) -> None:
+        """Navigate to a specific entry by ID (from graph click)."""
+        # Close the graph modal
+        graph_modal = self.query_one("#graph-modal", Container)
+        graph_modal.remove_class("visible")
+
+        # Find the entry in current list
+        for idx, entry in enumerate(self.entries):
+            if entry.id == entry_id:
+                # Move cursor to that row
+                table = self.query_one("#entries-table", DataTable)
+                table.move_cursor(row=idx)
+                # Update detail panel
+                self.selected_entry = entry
+                self._update_detail_panel(entry)
+                self.show_left_notify(f"→ {entry.title[:40]}", 2.0)
+                return
+
+        # Entry not in current list - try to load it
+        entry = self.db.get(entry_id, update_access=False)
+        if entry:
+            self.selected_entry = entry
+            self._update_detail_panel(entry)
+            self.show_left_notify(f"→ {entry.title[:40]} (hors liste)", 3.0)
+        else:
+            self.show_left_notify(f"Entrée non trouvée: {entry_id[:12]}...", 3.0)
 
     def on_mount(self) -> None:
         """Populate the DataTable with entries."""
@@ -908,6 +992,11 @@ class BrowseApp(App):
         table.add_column(t("browse.score"), width=5, key="score")
         table.add_column(t("browse.links_in"), width=3, key="links_in")
         table.add_column(t("browse.links_out"), width=3, key="links_out")
+        table.add_column("Ctx", width=6, key="context")
+
+        # Load context sizes (single query)
+        entry_ids = [e.id for e in self.entries]
+        self.context_sizes = self.db.get_context_sizes(entry_ids)
 
         # Add rows
         self._populate_table()
@@ -915,6 +1004,10 @@ class BrowseApp(App):
         # Update detail panel for first entry
         if self.entries:
             self._update_detail_panel(self.entries[0])
+
+        # Apply saved panel height ratio
+        if self.detail_panel_fr != 1.0:
+            self._apply_panel_height()
 
     def _get_content_preview(self, entry, max_len: int = 60) -> str:
         """Get content preview - shows context around search term if searching."""
@@ -961,6 +1054,15 @@ class BrowseApp(App):
             # Get link counts
             links_in, links_out = self.db.count_links_by_direction(entry.id)
 
+            # Format context size (bytes to human readable)
+            ctx_size = self.context_sizes.get(entry.id, 0)
+            if ctx_size == 0:
+                ctx_str = "—"
+            elif ctx_size < 1024:
+                ctx_str = f"{ctx_size}B"
+            else:
+                ctx_str = f"{ctx_size // 1024}K"
+
             table.add_row(
                 entry.type,
                 project[:10] + "…" if len(project) > 10 else project,
@@ -972,6 +1074,7 @@ class BrowseApp(App):
                 f"{entry.consolidation_score:.2f}",
                 str(links_in),
                 str(links_out),
+                ctx_str,
                 key=str(i),
             )
 
@@ -983,8 +1086,25 @@ class BrowseApp(App):
                 if 0 <= idx < len(self.entries):
                     self.selected_entry = self.entries[idx]
                     self._update_detail_panel(self.selected_entry)
+                    # Update graph modal if visible
+                    self._update_graph_if_visible()
             except (ValueError, TypeError):
                 pass
+
+    def _update_graph_if_visible(self) -> None:
+        """Update graph modal content if it's currently visible."""
+        graph_modal = self.query_one("#graph-modal", Container)
+        if graph_modal.has_class("visible") and self.selected_entry:
+            result = self.db.render_graph_ascii(
+                self.selected_entry.id,
+                max_depth=2,
+                show_incoming=True,
+                show_outgoing=True,
+                make_clickable=True,
+            )
+            graph_output, self.graph_nav_ids = result
+            graph_content = self.query_one("#graph-content", Static)
+            graph_content.update(graph_output)
 
     def _update_detail_panel(self, entry) -> None:
         """Update the detail panel with entry information."""
@@ -1030,13 +1150,86 @@ class BrowseApp(App):
         ]
         meta_widget.update("\n".join(meta_lines))
 
-        # Full content with markdown rendering and highlighting
-        if entry.content:
-            # For markdown, we highlight after render isn't possible
-            # So we show raw content with markdown rendering
-            content_widget.update(entry.content)
+        # Full content or context based on preview_mode
+        if self.preview_mode == "context":
+            # Try structured context first (new system)
+            structured_ctx = self.db.get_structured_context(entry.id)
+            if structured_ctx:
+                # Format structured context nicely (Markdown format)
+                lines = ["# CONTEXTE STRUCTURÉ\n"]
+                lines.append(f"## 📍 Situation\n{structured_ctx.situation}\n")
+                lines.append(f"## ✅ Solution\n{structured_ctx.solution}\n")
+                if structured_ctx.trigger_keywords:
+                    kw_str = ", ".join(f"`{kw}`" for kw in structured_ctx.trigger_keywords)
+                    lines.append(f"## 🏷️ Keywords\n{kw_str}\n")
+                if structured_ctx.what_failed:
+                    lines.append(f"## ❌ Ce qui n'a pas marché\n{structured_ctx.what_failed}\n")
+                if structured_ctx.conversation_excerpt:
+                    lines.append(f"## 💬 Conversation\n{structured_ctx.conversation_excerpt}\n")
+                if structured_ctx.files_modified:
+                    files_str = ", ".join(f"`{f}`" for f in structured_ctx.files_modified)
+                    lines.append(f"## 📁 Fichiers\n{files_str}\n")
+                if structured_ctx.error_messages:
+                    errors_str = "\n- ".join(structured_ctx.error_messages)
+                    lines.append(f"## ⚠️ Erreurs\n- {errors_str}\n")
+                content_widget.update("\n".join(lines))
+            else:
+                # Fallback to legacy compressed context
+                context = self.db.get_context(entry.id)
+                if context:
+                    content_widget.update(f"**[CONTEXTE]**\n\n{context}")
+                else:
+                    content_widget.update("*Pas de contexte stocké pour cette entrée*")
         else:
-            content_widget.update(f"*{t('browse.no_content')}*")
+            # Show normal content
+            if entry.content:
+                content_widget.update(entry.content)
+            else:
+                content_widget.update(f"*{t('browse.no_content')}*")
+
+    def action_preview_content(self) -> None:
+        """Toggle preview mode (< or >)."""
+        self._toggle_preview_mode()
+
+    def action_preview_context(self) -> None:
+        """Toggle preview mode (< or >)."""
+        self._toggle_preview_mode()
+
+    def _toggle_preview_mode(self) -> None:
+        """Cycle between content and context preview modes."""
+        if self.preview_mode == "content":
+            self.preview_mode = "context"
+            self.show_left_notify("◀ Contexte", 1.5)
+        else:
+            self.preview_mode = "content"
+            self.show_left_notify("▶ Contenu", 1.5)
+
+        if self.selected_entry:
+            self._update_detail_panel(self.selected_entry)
+
+    def action_panel_grow(self) -> None:
+        """Increase detail panel height (+)."""
+        self.detail_panel_fr = min(4.0, self.detail_panel_fr + 0.5)
+        self._apply_panel_height()
+        self._save_panel_ratio()
+
+    def action_panel_shrink(self) -> None:
+        """Decrease detail panel height (-)."""
+        self.detail_panel_fr = max(0.5, self.detail_panel_fr - 0.5)
+        self._apply_panel_height()
+        self._save_panel_ratio()
+
+    def _apply_panel_height(self) -> None:
+        """Apply the current panel height fraction."""
+        detail_panel = self.query_one("#detail-panel", VerticalScroll)
+        detail_panel.styles.height = f"{self.detail_panel_fr}fr"
+
+    def _save_panel_ratio(self) -> None:
+        """Save panel ratio to config file."""
+        save_config_to_toml(
+            self.config.config_dir,
+            {"ui": {"detail_panel_ratio": self.detail_panel_fr}}
+        )
 
     def action_quit(self) -> None:
         self.exit(result=None)
@@ -1055,6 +1248,11 @@ class BrowseApp(App):
         """Delete selected entry."""
         if self.selected_entry:
             self.exit(result=("delete", self.selected_entry))
+
+    def action_add_entry(self) -> None:
+        """Add a new entry (optionally pre-linked to selected entry)."""
+        # Pass selected entry for potential pre-linking
+        self.exit(result=("add", self.selected_entry))
 
     def action_search(self) -> None:
         """Toggle search bar."""
@@ -2193,6 +2391,229 @@ def show_toast(message: str, duration: float = 1.5):
     app.run()
 
 
+class MCPConfigApp(App):
+    """Textual app for MCP Server configuration with CLI selector."""
+
+    CSS = """
+    Screen {
+        background: $surface;
+    }
+
+    #left-notify {
+        dock: bottom;
+        width: auto;
+        max-width: 60;
+        height: auto;
+        padding: 1 2;
+        margin: 1 2;
+        background: #1e2a4a;
+        border: thick #4367CD;
+        color: #93B5F7;
+        text-style: bold;
+        display: none;
+        layer: notification;
+    }
+
+    #left-notify.visible {
+        display: block;
+    }
+
+    #main-container {
+        height: 1fr;
+        padding: 0 2;
+    }
+
+    #status-section {
+        height: auto;
+        margin-bottom: 1;
+    }
+
+    #cli-selector {
+        height: 3;
+        border: solid $primary;
+        padding: 0 2;
+        margin: 1 0;
+    }
+
+    #cli-label {
+        width: 100%;
+        text-align: center;
+    }
+
+    #config-section {
+        height: 1fr;
+        border: solid $secondary;
+        padding: 1 2;
+        background: $surface-darken-1;
+    }
+
+    #config-scroll {
+        height: 100%;
+    }
+
+    #footer-hint {
+        dock: bottom;
+        height: 1;
+        padding: 0 2;
+        color: $text-muted;
+    }
+
+    #info-overlay {
+        display: none;
+        layer: modal;
+        width: 100%;
+        height: 100%;
+        align: center middle;
+        color: $text;
+    }
+
+    #info-overlay.visible {
+        display: block;
+    }
+
+    #info-content {
+        text-align: center;
+        width: 50;
+        padding: 1 2;
+    }
+    """ + BANNER_CSS
+
+    BINDINGS = [
+        Binding("escape", "quit_or_close", "Back", show=True),
+        Binding("q", "quit", "Quit", show=True),
+        Binding("left", "prev_cli", "←", show=True),
+        Binding("right", "next_cli", "→", show=True),
+        Binding("i", "install_config", "Install", show=True),
+        Binding("c", "copy_config", "Copy", show=True),
+        Binding("question_mark", "toggle_info", "?", show=True),
+    ]
+
+    def __init__(self, cli_configs: dict, deps_ok: bool):
+        super().__init__()
+        self.cli_configs = cli_configs
+        self.cli_keys = list(cli_configs.keys())
+        self.selected_idx = 0
+        self.deps_ok = deps_ok
+
+    def compose(self) -> ComposeResult:
+        yield create_banner_container()
+        with Container(id="main-container"):
+            # Status section
+            yield Static(self._build_status(), id="status-section", markup=True)
+            # CLI selector
+            with Container(id="cli-selector"):
+                yield Static(self._build_cli_selector(), id="cli-label", markup=True)
+            # Config section
+            with VerticalScroll(id="config-scroll"):
+                yield Static(self._build_config(), id="config-section", markup=True)
+        yield Static("[dim]←/→ change CLI • I install • C copy • ? info • Esc back[/dim]", id="footer-hint")
+        yield Static("", id="left-notify")
+        # Info overlay
+        with Container(id="info-overlay"):
+            yield Static(self._build_info_text(), id="info-content", markup=True)
+
+    def _build_status(self) -> str:
+        """Build status section content."""
+        if self.deps_ok:
+            return "[bold]MCP Server[/bold]\n[green]✓[/green] Server ready [dim](?)[/dim]"
+        else:
+            return "[bold]MCP Server[/bold]\n[yellow]⚠[/yellow] Server needs: [dim]pip install mcp[/dim] [dim](?)[/dim]"
+
+    def _build_cli_selector(self) -> str:
+        """Build CLI selector with arrows."""
+        # Show all CLIs with current highlighted using reverse video
+        parts = []
+        for i, key in enumerate(self.cli_keys):
+            name = self.cli_configs[key]["name"]
+            if i == self.selected_idx:
+                # Reverse video for selected CLI (text inverse)
+                parts.append(f"[reverse] {name} [/reverse]")
+            else:
+                parts.append(f"[dim]{name}[/dim]")
+        return "  ".join(parts)
+
+    def _build_config(self) -> str:
+        """Build config section content."""
+        cli_config = self.cli_configs[self.cli_keys[self.selected_idx]]
+        return f"""[cyan]File:[/cyan] {cli_config['file']}
+
+[cyan]Configuration:[/cyan]
+[dim]{cli_config['config']}[/dim]
+
+[yellow]Add this to your config file to enable Rekall MCP server.[/yellow]"""
+
+    def _build_info_text(self) -> str:
+        """Build info overlay content."""
+        return """[bold]MCP (Model Context Protocol)[/bold]
+
+MCP permet aux agents IA (Claude, etc.)
+d'accéder à vos souvenirs Rekall.
+
+[cyan]Server ready[/cyan] = rekall mcp-server peut démarrer
+[yellow]pip install mcp[/yellow] = dépendance manquante
+
+[dim]? ou Esc pour fermer[/dim]"""
+
+    def _update_display(self) -> None:
+        """Update display after CLI change."""
+        self.query_one("#cli-label", Static).update(self._build_cli_selector())
+        self.query_one("#config-section", Static).update(self._build_config())
+
+    def show_left_notify(self, message: str, timeout: float = 3.0) -> None:
+        """Show a notification on the left side."""
+        notify_widget = self.query_one("#left-notify", Static)
+        notify_widget.update(message)
+        notify_widget.add_class("visible")
+        self.set_timer(timeout, lambda: notify_widget.remove_class("visible"))
+
+    def action_prev_cli(self) -> None:
+        """Select previous CLI."""
+        self.selected_idx = (self.selected_idx - 1) % len(self.cli_keys)
+        self._update_display()
+        cli_name = self.cli_configs[self.cli_keys[self.selected_idx]]["name"]
+        self.show_left_notify(f"→ {cli_name}", 1.5)
+
+    def action_next_cli(self) -> None:
+        """Select next CLI."""
+        self.selected_idx = (self.selected_idx + 1) % len(self.cli_keys)
+        self._update_display()
+        cli_name = self.cli_configs[self.cli_keys[self.selected_idx]]["name"]
+        self.show_left_notify(f"→ {cli_name}", 1.5)
+
+    def action_copy_config(self) -> None:
+        """Copy current config to clipboard."""
+        try:
+            import subprocess
+            cli_config = self.cli_configs[self.cli_keys[self.selected_idx]]
+            subprocess.run(["pbcopy"], input=cli_config["config"].encode(), check=True)
+            self.show_left_notify("✓ Config copied", 2.0)
+        except Exception:
+            self.show_left_notify("⚠ Could not copy", 2.0)
+
+    def action_install_config(self) -> None:
+        """Install MCP config to the selected CLI's config file."""
+        cli_key = self.cli_keys[self.selected_idx]
+        cli_config = self.cli_configs[cli_key]
+        result = _install_mcp_config(cli_config)
+        self.show_left_notify(result, 4.0)
+
+    def action_toggle_info(self) -> None:
+        """Toggle info overlay visibility."""
+        overlay = self.query_one("#info-overlay", Container)
+        overlay.toggle_class("visible")
+
+    def action_quit_or_close(self) -> None:
+        """Close overlay if open, otherwise quit."""
+        overlay = self.query_one("#info-overlay", Container)
+        if overlay.has_class("visible"):
+            overlay.remove_class("visible")
+        else:
+            self.exit()
+
+    def action_quit(self) -> None:
+        self.exit()
+
+
 class InfoDisplayApp(App):
     """Simple app to display info with Escape/Enter/Q to exit."""
 
@@ -2201,8 +2622,11 @@ class InfoDisplayApp(App):
         background: $surface;
     }
 
-    #content {
+    #scroll-container {
         height: 1fr;
+    }
+
+    #content {
         padding: 1 2;
     }
 
@@ -2218,6 +2642,10 @@ class InfoDisplayApp(App):
         Binding("escape", "quit", "Back", show=False),
         Binding("enter", "quit", "Continue", show=False),
         Binding("q", "quit", "Quit", show=False),
+        Binding("up", "scroll_up", "Scroll up", show=False),
+        Binding("down", "scroll_down", "Scroll down", show=False),
+        Binding("pageup", "page_up", "Page up", show=False),
+        Binding("pagedown", "page_down", "Page down", show=False),
     ]
 
     def __init__(self, content: str, title: str = ""):
@@ -2227,8 +2655,21 @@ class InfoDisplayApp(App):
 
     def compose(self) -> ComposeResult:
         yield create_banner_container()
-        yield Static(self.content_text, id="content", markup=True)
-        yield Static("[dim]Press Escape, Enter or Q to continue...[/dim]", id="footer-hint")
+        with VerticalScroll(id="scroll-container"):
+            yield Static(self.content_text, id="content", markup=True)
+        yield Static("[dim]↑↓ scroll • Escape/Enter/Q to continue[/dim]", id="footer-hint")
+
+    def action_scroll_up(self) -> None:
+        self.query_one("#scroll-container").scroll_up()
+
+    def action_scroll_down(self) -> None:
+        self.query_one("#scroll-container").scroll_down()
+
+    def action_page_up(self) -> None:
+        self.query_one("#scroll-container").scroll_page_up()
+
+    def action_page_down(self) -> None:
+        self.query_one("#scroll-container").scroll_page_down()
 
     def action_quit(self) -> None:
         self.exit()
@@ -2306,55 +2747,18 @@ def action_language():
 
 
 def action_install_ide():
-    """Configuration & Maintenance - unified menu for setup, backup, restore, IDE."""
-    while True:
-        # Build submenu (no separators - they break index mapping)
-        submenu_options = [
-            t('maintenance.db_info'),
-            t('menu.setup'),
-            t('maintenance.create_backup'),
-            t('maintenance.restore_backup'),
-            t('ide.integrations'),
-            f"← {t('setup.back')}",
-        ]
-        actions = ["db_info", "setup", "backup", "restore", "ide", "back"]
-
-        app = SimpleMenuApp(t("menu.config"), submenu_options)
-        idx = app.run()
-
-        # SimpleMenuApp returns str or int depending on selection method
-        if idx is None:
-            return
-        idx = int(idx) if isinstance(idx, str) else idx
-
-        if idx >= len(actions) or actions[idx] == "back":
-            return
-
-        action = actions[idx]
-
-        if action == "db_info":
-            _show_db_info()
-        elif action == "setup":
-            _database_setup_submenu()
-        elif action == "backup":
-            _create_backup_tui()
-        elif action == "restore":
-            _restore_backup_tui()
-        elif action == "ide":
-            _ide_integration_submenu()
-
-
-def _database_setup_submenu():
-    """Database setup submenu (moved from action_setup)."""
+    """Configuration & Maintenance - unified flat menu with visual groupings."""
     from pathlib import Path
 
     from rekall.config import get_config
     from rekall.paths import PathResolver
 
+    pending_notification = ""
+
     while True:
         config = get_config()
 
-        # Detect current state
+        # Detect database state
         local_rekall = Path.cwd() / ".rekall"
         local_db = local_rekall / "knowledge.db"
         has_local = local_rekall.exists()
@@ -2365,60 +2769,126 @@ def _database_setup_submenu():
         global_db = global_paths.db_path if global_paths else Path.home() / ".local" / "share" / "rekall" / "knowledge.db"
         has_global_db = global_db.exists()
 
-        # Build status info
-        global_status = "[green]✓[/green]" if has_global_db else "[dim]○[/dim]"
-        local_status = "[green]✓[/green]" if has_local_db else ("[yellow]⚠[/yellow]" if has_local else "[dim]○[/dim]")
+        # Status indicators
+        global_icon = "[green]✓[/green]" if has_global_db else "[dim]○[/dim]"
+        local_icon = "[green]✓[/green]" if has_local_db else ("[yellow]⚠[/yellow]" if has_local else "[dim]○[/dim]")
+        emb_icon = "[green]✓[/green]" if config.smart_embeddings_enabled else "[dim]○[/dim]"
 
-        # Build title with status
-        title = f"{t('setup.title')} | {t('setup.current_source')}: {config.paths.source.value}"
-
-        # Build dynamic menu
-        submenu_options = []
+        # Build flat menu with section headers
+        menu_options = []
         actions = []
 
+        # ─── DATABASE ───
+        menu_options.append("─── DATABASE ───")
+        actions.append(None)
+
+        menu_options.append(f"  ⓘ {t('maintenance.db_info')}")
+        actions.append("db_info")
+
         if has_global_db:
-            submenu_options.append(f"{global_status} {t('setup.use_global')}")
+            menu_options.append(f"  {global_icon} {t('setup.use_global')}")
             actions.append("use_global")
         else:
-            submenu_options.append(f"{global_status} {t('setup.create_global')}")
+            menu_options.append(f"  {global_icon} {t('setup.create_global')}")
             actions.append("create_global")
 
         if has_local_db:
-            submenu_options.append(f"{local_status} {t('setup.use_local')}")
+            menu_options.append(f"  {local_icon} {t('setup.use_local')}")
             actions.append("use_local")
         else:
-            submenu_options.append(f"{local_status} {t('setup.create_local')}")
+            menu_options.append(f"  {local_icon} {t('setup.create_local')}")
             actions.append("create_local")
 
         if has_global_db and not has_local_db:
-            submenu_options.append(t("setup.copy_global_to_local"))
+            menu_options.append(f"  → {t('setup.copy_global_to_local')}")
             actions.append("migrate_to_local")
         if has_local_db and not has_global_db:
-            submenu_options.append(t("setup.copy_local_to_global"))
+            menu_options.append(f"  → {t('setup.copy_local_to_global')}")
             actions.append("migrate_to_global")
 
-        submenu_options.append(t("setup.show_config"))
-        actions.append("show_config")
+        # Spacer + FEATURES section
+        menu_options.append("")
+        actions.append(None)
+        menu_options.append("─── FEATURES ───")
+        actions.append(None)
 
-        submenu_options.append(f"← {t('setup.back')}")
+        menu_options.append(f"  {emb_icon} {t('embeddings.configure')}")
+        actions.append("configure_embeddings")
+
+        # MCP Server status
+        mcp_icon = "[green]✓[/green]" if _check_mcp_deps() else "[dim]○[/dim]"
+        menu_options.append(f"  {mcp_icon} MCP Server")
+        actions.append("configure_mcp")
+
+        menu_options.append(f"  ⚙ {t('ide.integrations')}")
+        actions.append("ide")
+
+        menu_options.append(f"  📦 {t('menu.speckit')}")
+        actions.append("speckit")
+
+        # Spacer + SETTINGS section (Feature 007)
+        menu_options.append("")
+        actions.append(None)
+        menu_options.append("─── SETTINGS ───")
+        actions.append(None)
+
+        # Context mode display
+        mode_display = {
+            "required": "[green]required[/green] (strict)",
+            "recommended": "[yellow]recommended[/yellow] (warns)",
+            "optional": "[dim]optional[/dim] (permissive)",
+        }
+        current_mode = config.smart_embeddings_context_mode
+        menu_options.append(f"  📋 Context mode: {mode_display.get(current_mode, current_mode)}")
+        actions.append("settings_context_mode")
+
+        # Max context size display
+        size_kb = config.max_context_size // 1024
+        menu_options.append(f"  📏 Max context size: {size_kb} KB")
+        actions.append("settings_max_context_size")
+
+        # Spacer + ABOUT section
+        menu_options.append("")
+        actions.append(None)
+        menu_options.append("─── ABOUT ───")
+        actions.append(None)
+
+        menu_options.append(f"  📋 {t('about.changelog')}")
+        actions.append("changelog")
+
+        menu_options.append(f"  ⓘ {t('about.version')}")
+        actions.append("version_info")
+
+        # Back
+        menu_options.append("")
+        actions.append(None)
+        menu_options.append(f"← {t('setup.back')}")
         actions.append("back")
 
-        # Show menu using Textual
-        app = SimpleMenuApp(title, submenu_options)
+        # Show menu with pending notification
+        title = f"{t('menu.config')} | {t('setup.current_source')}: {config.paths.source.value}"
+        app = SimpleMenuApp(title, menu_options, pending_notification)
+        pending_notification = ""  # Clear after use
         idx = app.run()
 
         if idx is None:
             return
         idx = int(idx) if isinstance(idx, str) else idx
 
-        if idx >= len(actions) or actions[idx] == "back":
+        if idx >= len(actions):
             return
 
         action = actions[idx]
-        if action == "use_global":
-            show_toast("✓ Base globale déjà active")
+        if action is None or action == "back":
+            return
+
+        # Execute action
+        if action == "db_info":
+            _show_db_info()
+        elif action == "use_global":
+            pending_notification = "✓ Base globale déjà active"
         elif action == "use_local":
-            show_toast("✓ Base locale déjà active")
+            pending_notification = "✓ Base locale déjà active"
         elif action == "create_global":
             _setup_global()
         elif action == "create_local":
@@ -2427,8 +2897,45 @@ def _database_setup_submenu():
             _migrate_db(global_db, local_rekall / "knowledge.db", "GLOBAL → LOCAL")
         elif action == "migrate_to_global":
             _migrate_db(local_db, global_db, "LOCAL → GLOBAL")
-        elif action == "show_config":
-            _show_config_details()
+        elif action == "configure_embeddings":
+            _configure_embeddings()
+        elif action == "configure_mcp":
+            _configure_mcp()
+        elif action == "ide":
+            _ide_integration_submenu()
+        elif action == "speckit":
+            action_speckit_integration()
+        elif action == "settings_context_mode":
+            _configure_context_mode()
+        elif action == "settings_max_context_size":
+            _configure_max_context_size()
+        elif action == "changelog":
+            _show_changelog()
+        elif action == "version_info":
+            _show_version_info()
+
+
+def _show_changelog():
+    """Display changelog in TUI."""
+    changelog = get_changelog_content()
+    if changelog:
+        show_info(changelog)
+    else:
+        show_info(f"[dim]{t('about.changelog_not_found')}[/dim]")
+
+
+def _show_version_info():
+    """Display version information in TUI."""
+    from rekall import __release_date__, __version__
+    from rekall.db import CURRENT_SCHEMA_VERSION
+
+    info_text = f"""[bold]{t('about.version_title')}[/bold]
+
+[cyan]Rekall:[/cyan]      v{__version__}
+[cyan]{t('about.release_date')}:[/cyan]  {__release_date__}
+[cyan]{t('info.schema')}:[/cyan]    v{CURRENT_SCHEMA_VERSION}
+"""
+    show_info(info_text)
 
 
 def _show_db_info():
@@ -2854,6 +3361,219 @@ def action_browse():
                 if not entries:
                     show_toast(f"⚠ {t('browse.no_entries')}")
                     return
+        elif action == "add":
+            # Add new entry, optionally pre-link to selected entry
+            _add_entry_with_links(db, pre_link_entry=entry)
+            entries = db.list_all(limit=100)
+
+
+def _add_entry_with_links(db, pre_link_entry=None):
+    """Add a new entry with optional linking to other entries.
+
+    Args:
+        db: Database instance
+        pre_link_entry: Entry to suggest linking to (optional)
+    """
+    # 1. Select type
+    type_options = list(VALID_TYPES) + [f"← {t('common.back')}"]
+    app = SimpleMenuApp(t('add.type'), type_options)
+    idx = app.run()
+
+    if idx is None or idx == len(type_options) - 1:
+        return
+
+    entry_type = VALID_TYPES[idx]
+
+    # 2. Get title
+    title = prompt_input(t("add.title"))
+    if not title:
+        return
+
+    # 3. Get content (optional)
+    content = prompt_input(t("add.content"), required=False)
+
+    # 4. Get tags
+    tags_input = prompt_input(t("add.tags"), required=False)
+    tags = [tag.strip() for tag in tags_input.split(",")] if tags_input else []
+
+    # 5. Get project
+    project = prompt_input(t("add.project"), required=False)
+
+    # 6. Get confidence
+    conf_options = ["1 - Very Low", "2 - Low", "3 - Medium", "4 - High", "5 - Very High"]
+    conf_app = SimpleMenuApp(t('add.confidence'), conf_options)
+    conf_idx = conf_app.run()
+    confidence = (conf_idx + 1) if conf_idx is not None else 3
+
+    # 7. Create entry
+    entry = Entry(
+        id=generate_ulid(),
+        title=title,
+        content=content,
+        type=entry_type,
+        tags=tags,
+        project=project,
+        confidence=confidence,
+    )
+    db.add(entry)
+
+    show_toast(f"✓ {t('add.success')}: {entry.id[:8]}...", 2.0)
+
+    # 8. Propose linking
+    _propose_entry_links(db, entry, pre_link_entry)
+
+
+def _propose_entry_links(db, new_entry, pre_link_entry=None):
+    """Propose linking the new entry to other entries.
+
+    Args:
+        db: Database instance
+        new_entry: The newly created entry
+        pre_link_entry: Entry to suggest as first in the list (optional)
+    """
+    relation_types = ["related", "supersedes", "derived_from", "contradicts"]
+    relation_labels = {
+        "related": "↔ Related (lié à)",
+        "supersedes": "→ Supersedes (remplace)",
+        "derived_from": "← Derived from (dérivé de)",
+        "contradicts": "⚡ Contradicts (contredit)",
+    }
+
+    while True:
+        # Build link menu - always explicit choice
+        menu_items = [
+            f"✓ {t('common.done')} (Terminer)",
+            "🔍 Rechercher une entrée",
+            "📋 Choisir parmi les entrées",
+        ]
+
+        link_app = SimpleMenuApp("Ajouter des liens ?", menu_items)
+        link_idx = link_app.run()
+
+        if link_idx is None or link_idx == 0:
+            # Done linking
+            return
+
+        target_entry = None
+
+        if link_idx == 1:
+            # Search for entry
+            query = prompt_input("Recherche", required=False)
+            if query:
+                results = db.search(query, limit=15)
+                if results:
+                    # Filter out new_entry
+                    filtered = [r for r in results if r.entry.id != new_entry.id]
+                    if filtered:
+                        target_entry = _select_entry_from_list(
+                            [r.entry for r in filtered],
+                            "Sélectionner l'entrée à lier"
+                        )
+                    else:
+                        show_toast("Aucun résultat (hors entrée actuelle)", 2.0)
+                else:
+                    show_toast(f"⚠ {t('search.no_results')}", 2.0)
+        elif link_idx == 2:
+            # Show entry list with pre_link_entry first if provided
+            recent = db.list_all(limit=20)
+            recent_filtered = [e for e in recent if e.id != new_entry.id]
+
+            # If pre_link_entry exists and is valid, put it first
+            if pre_link_entry and pre_link_entry.id != new_entry.id:
+                # Remove it if already in list to avoid duplicates
+                recent_filtered = [e for e in recent_filtered if e.id != pre_link_entry.id]
+                # Add it at the beginning with a marker
+                recent_filtered.insert(0, pre_link_entry)
+
+            if recent_filtered:
+                target_entry = _select_entry_from_list(
+                    recent_filtered,
+                    "Sélectionner l'entrée à lier",
+                    highlight_first=(pre_link_entry is not None)
+                )
+            else:
+                show_toast("Aucune autre entrée disponible", 2.0)
+
+        # If target selected, ask for relation type and create link
+        if target_entry:
+            _create_link_to_entry(db, new_entry, target_entry, relation_types, relation_labels)
+            # Reset pre_link_entry after first link to avoid confusion
+            pre_link_entry = None
+
+
+def _select_entry_from_list(entries: list, title: str, highlight_first: bool = False):
+    """Display a list of entries and let user select one.
+
+    Args:
+        entries: List of Entry objects
+        title: Menu title
+        highlight_first: If True, mark the first entry as suggested
+
+    Returns:
+        Selected Entry or None if cancelled
+    """
+    if not entries:
+        return None
+
+    # Build menu options with entry info
+    menu_options = []
+    for i, entry in enumerate(entries):
+        type_short = entry.type[:3].upper()
+        project = f"[{entry.project}]" if entry.project else ""
+        title_text = entry.title[:40]
+
+        # Mark first entry if highlight_first
+        if i == 0 and highlight_first:
+            menu_options.append(f"★ {type_short} {project} {title_text}")
+        else:
+            menu_options.append(f"  {type_short} {project} {title_text}")
+
+    menu_options.append(f"← {t('common.back')}")
+
+    app = SimpleMenuApp(title, menu_options)
+    idx = app.run()
+
+    if idx is None or idx >= len(entries):
+        return None
+
+    return entries[idx]
+
+
+def _create_link_to_entry(db, source_entry, target_entry, relation_types, relation_labels):
+    """Create a link between source and target entries.
+
+    Args:
+        db: Database instance
+        source_entry: The source entry (new entry)
+        target_entry: The target entry to link to
+        relation_types: List of valid relation types
+        relation_labels: Dict mapping types to display labels
+    """
+    # Select relation type
+    rel_options = [relation_labels[rt] for rt in relation_types]
+    rel_options.append(f"← {t('common.back')}")
+    rel_app = SimpleMenuApp(f"Type de relation → {target_entry.title[:30]}", rel_options)
+    rel_idx = rel_app.run()
+
+    if rel_idx is None or rel_idx >= len(relation_types):
+        return
+
+    relation_type = relation_types[rel_idx]
+
+    # Get optional reason
+    reason = prompt_input("Raison du lien (optionnel)", required=False)
+
+    # Create the link
+    try:
+        db.add_link(
+            source_id=source_entry.id,
+            target_id=target_entry.id,
+            relation_type=relation_type,
+            reason=reason if reason else None,
+        )
+        show_toast(f"✓ Lien créé: {source_entry.title[:20]}... → {target_entry.title[:20]}...", 2.0)
+    except ValueError as e:
+        show_toast(f"⚠ {str(e)[:50]}", 3.0)
 
 
 def _show_entry_detail(entry):
@@ -2977,89 +3697,6 @@ def action_show():
         lines.extend(["", f"[cyan]{t('browse.content')}:[/cyan]", entry.content])
 
     show_info("\n".join(lines))
-
-
-def action_setup():
-    """Setup / Configuration submenu using Textual."""
-    from pathlib import Path
-
-    from rekall.config import get_config
-    from rekall.paths import PathResolver
-
-    while True:
-        config = get_config()
-
-        # Detect current state
-        local_rekall = Path.cwd() / ".rekall"
-        local_db = local_rekall / "knowledge.db"
-        has_local = local_rekall.exists()
-        has_local_db = local_db.exists()
-
-        resolver = PathResolver()
-        global_paths = resolver._from_xdg()
-        global_db = global_paths.db_path if global_paths else Path.home() / ".local" / "share" / "rekall" / "knowledge.db"
-        has_global_db = global_db.exists()
-
-        # Build status info
-        global_status = "[green]✓[/green]" if has_global_db else "[dim]○[/dim]"
-        local_status = "[green]✓[/green]" if has_local_db else ("[yellow]⚠[/yellow]" if has_local else "[dim]○[/dim]")
-
-        # Build title with status
-        title = f"{t('setup.title')} | {t('setup.current_source')}: {config.paths.source.value}"
-
-        # Build dynamic menu
-        submenu_options = []
-        actions = []
-
-        if has_global_db:
-            submenu_options.append(f"{global_status} {t('setup.use_global')}")
-            actions.append("use_global")
-        else:
-            submenu_options.append(f"{global_status} {t('setup.create_global')}")
-            actions.append("create_global")
-
-        if has_local_db:
-            submenu_options.append(f"{local_status} {t('setup.use_local')}")
-            actions.append("use_local")
-        else:
-            submenu_options.append(f"{local_status} {t('setup.create_local')}")
-            actions.append("create_local")
-
-        if has_global_db and not has_local_db:
-            submenu_options.append(t("setup.copy_global_to_local"))
-            actions.append("migrate_to_local")
-        if has_local_db and not has_global_db:
-            submenu_options.append(t("setup.copy_local_to_global"))
-            actions.append("migrate_to_global")
-
-        submenu_options.append(t("setup.show_config"))
-        actions.append("show_config")
-
-        submenu_options.append(f"← {t('setup.back')}")
-        actions.append("back")
-
-        # Show menu using Textual
-        app = SimpleMenuApp(title, submenu_options)
-        idx = app.run()
-
-        if idx is None or actions[idx] == "back":
-            return
-
-        action = actions[idx]
-        if action == "use_global":
-            show_toast("✓ Base globale déjà active")
-        elif action == "use_local":
-            show_toast("✓ Base locale déjà active")
-        elif action == "create_global":
-            _setup_global()
-        elif action == "create_local":
-            _setup_local()
-        elif action == "migrate_to_local":
-            _migrate_db(global_db, local_rekall / "knowledge.db", "GLOBAL → LOCAL")
-        elif action == "migrate_to_global":
-            _migrate_db(local_db, global_db, "LOCAL → GLOBAL")
-        elif action == "show_config":
-            _show_config_details()
 
 
 def _migrate_db(source: Path, dest: Path, direction: str):
@@ -3218,6 +3855,16 @@ def _show_config_details():
     table.add_row("REKALL_HOME", os.environ.get("REKALL_HOME", "(non défini)"))
     table.add_row("XDG_CONFIG_HOME", os.environ.get("XDG_CONFIG_HOME", "(non défini)"))
     table.add_row("XDG_DATA_HOME", os.environ.get("XDG_DATA_HOME", "(non défini)"))
+    table.add_row("", "")
+    table.add_row("[bold]Smart Embeddings[/bold]", "")
+    emb_status = "[green]✓ " + t("embeddings.status_enabled") + "[/green]" if config.smart_embeddings_enabled else "[dim]○ " + t("embeddings.status_disabled") + "[/dim]"
+    table.add_row("  Status", emb_status)
+    table.add_row("  Model", config.smart_embeddings_model)
+    table.add_row("  Dimensions", str(config.smart_embeddings_dimensions))
+    table.add_row("  Similarity threshold", str(config.smart_embeddings_similarity_threshold))
+    table.add_row("", "")
+    table.add_row("[bold]Interface (UI)[/bold]", "")
+    table.add_row("  Detail panel ratio", f"{config.ui_detail_panel_ratio} (+/- pour ajuster)")
 
     # Capture table as string
     string_io = StringIO()
@@ -3231,46 +3878,708 @@ def _show_config_details():
     show_info(content)
 
 
-def action_export_import():
-    """Export / Import submenu using Textual."""
+# Cache for embeddings dependency check (avoid slow reimport)
+_embeddings_deps_cache: dict = {"checked": False, "available": False}
+
+
+def _check_embeddings_deps() -> bool:
+    """Check if embeddings dependencies are available (cached)."""
+    if _embeddings_deps_cache["checked"]:
+        return _embeddings_deps_cache["available"]
+
+    # Show loading message (first time only)
+    print("\r⏳ Checking dependencies...", end="", flush=True)
+
+    try:
+        import numpy  # noqa: F401
+        import sentence_transformers  # noqa: F401
+        _embeddings_deps_cache["available"] = True
+    except ImportError:
+        _embeddings_deps_cache["available"] = False
+
+    _embeddings_deps_cache["checked"] = True
+    print("\r" + " " * 30 + "\r", end="", flush=True)  # Clear message
+    return _embeddings_deps_cache["available"]
+
+
+# Cache for MCP dependency check
+_mcp_deps_cache: dict = {"checked": False, "available": False}
+
+
+def _check_mcp_deps() -> bool:
+    """Check if MCP dependencies are available (cached)."""
+    if _mcp_deps_cache["checked"]:
+        return _mcp_deps_cache["available"]
+
+    try:
+        from mcp.server import Server  # noqa: F401
+        _mcp_deps_cache["available"] = True
+    except ImportError:
+        _mcp_deps_cache["available"] = False
+
+    _mcp_deps_cache["checked"] = True
+    return _mcp_deps_cache["available"]
+
+
+# MCP configuration per CLI
+MCP_CLI_CONFIGS = {
+    "claude-desktop": {
+        "name": "Claude Desktop",
+        "file": "~/Library/Application Support/Claude/claude_desktop_config.json",
+        "config": '''{
+  "mcpServers": {
+    "rekall": {
+      "command": "rekall",
+      "args": ["mcp-server"]
+    }
+  }
+}''',
+    },
+    "claude-code": {
+        "name": "Claude Code",
+        "file": "~/.claude/settings.json",
+        "config": '''{
+  "mcpServers": {
+    "rekall": {
+      "command": "rekall",
+      "args": ["mcp-server"]
+    }
+  }
+}''',
+    },
+    "cursor": {
+        "name": "Cursor",
+        "file": "~/.cursor/mcp.json",
+        "config": '''{
+  "mcpServers": {
+    "rekall": {
+      "command": "rekall",
+      "args": ["mcp-server"]
+    }
+  }
+}''',
+    },
+    "windsurf": {
+        "name": "Windsurf",
+        "file": "~/.codeium/windsurf/mcp_config.json",
+        "config": '''{
+  "mcpServers": {
+    "rekall": {
+      "command": "rekall",
+      "args": ["mcp-server"]
+    }
+  }
+}''',
+    },
+    "cline": {
+        "name": "Cline",
+        "file": "~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json",
+        "config": '''{
+  "mcpServers": {
+    "rekall": {
+      "command": "rekall",
+      "args": ["mcp-server"]
+    }
+  }
+}''',
+    },
+    "zed": {
+        "name": "Zed",
+        "file": "~/.config/zed/settings.json",
+        "config": '''{
+  "context_servers": {
+    "rekall": {
+      "command": "rekall",
+      "args": ["mcp-server"]
+    }
+  }
+}''',
+    },
+    "continue": {
+        "name": "Continue.dev",
+        "file": "~/.continue/config.json",
+        "config": '''{
+  "mcpServers": [
+    {
+      "name": "rekall",
+      "command": "rekall",
+      "args": ["mcp-server"]
+    }
+  ]
+}''',
+    },
+    "copilot": {
+        "name": "GitHub Copilot",
+        "file": "~/.vscode/mcp.json",
+        "config": '''{
+  "mcpServers": {
+    "rekall": {
+      "command": "rekall",
+      "args": ["mcp-server"]
+    }
+  }
+}''',
+    },
+    "qwen": {
+        "name": "Qwen Code",
+        "file": "~/.qwen/settings.json",
+        "config": '''{
+  "mcpServers": {
+    "rekall": {
+      "command": "rekall",
+      "args": ["mcp-server"]
+    }
+  }
+}''',
+    },
+    "opencode": {
+        "name": "OpenCode",
+        "file": "~/.config/opencode/config.json",
+        "config": '''{
+  "mcp": {
+    "rekall": {
+      "type": "local",
+      "command": ["rekall", "mcp-server"],
+      "enabled": true
+    }
+  }
+}''',
+    },
+}
+
+
+def _install_mcp_config(cli_config: dict) -> str:
+    """Install MCP config by merging into the CLI's config file.
+
+    Strategy:
+    1. Expand file path and create parent directories if needed
+    2. Read existing config (or start with empty object)
+    3. Create backup of existing file
+    4. Merge mcpServers section (preserving other servers)
+    5. Write merged config
+    6. Validate JSON syntax
+    7. If error: rollback from backup + create .error file
+
+    Args:
+        cli_config: Dict with 'name', 'file', 'config' keys
+
+    Returns:
+        Status message for notification
+    """
+    import json
+    import shutil
+    from datetime import datetime
+    from pathlib import Path
+
+    file_path_str = cli_config["file"]
+    new_config = json.loads(cli_config["config"])
+
+    # Expand path (handle ~ and relative paths)
+    if file_path_str.startswith("~"):
+        file_path = Path(file_path_str).expanduser()
+    elif file_path_str.startswith("."):
+        # Relative to home for safety
+        file_path = Path.home() / file_path_str
+    else:
+        file_path = Path(file_path_str)
+
+    backup_path = None
+    error_path = file_path.with_suffix(".error.json")
+
+    try:
+        # Create parent directories if needed
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Read existing config or start fresh
+        existing_config = {}
+        if file_path.exists():
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    content = f.read().strip()
+                    if content:
+                        existing_config = json.loads(content)
+            except json.JSONDecodeError:
+                # Invalid JSON - we'll try to preserve it in error file
+                pass
+
+            # Create backup with timestamp
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_path = file_path.with_suffix(f".backup_{timestamp}.json")
+            shutil.copy2(file_path, backup_path)
+
+        # Detect format and merge appropriately
+        if "mcpServers" in new_config:
+            new_servers = new_config["mcpServers"]
+            if isinstance(new_servers, list):
+                # Array format (Continue.dev)
+                if "mcpServers" not in existing_config:
+                    existing_config["mcpServers"] = []
+                elif not isinstance(existing_config["mcpServers"], list):
+                    # Convert existing dict to list if needed
+                    existing_list = []
+                    for name, cfg in existing_config["mcpServers"].items():
+                        existing_list.append({"name": name, **cfg})
+                    existing_config["mcpServers"] = existing_list
+
+                # Find and replace rekall entry, or add new
+                rekall_entry = new_servers[0]  # Our config has 1 entry
+                found = False
+                for i, entry in enumerate(existing_config["mcpServers"]):
+                    if entry.get("name") == "rekall":
+                        existing_config["mcpServers"][i] = rekall_entry
+                        found = True
+                        break
+                if not found:
+                    existing_config["mcpServers"].append(rekall_entry)
+            else:
+                # Dict format (standard - most CLIs)
+                if "mcpServers" not in existing_config:
+                    existing_config["mcpServers"] = {}
+                existing_config["mcpServers"]["rekall"] = new_servers["rekall"]
+
+        elif "context_servers" in new_config:
+            # Zed format
+            if "context_servers" not in existing_config:
+                existing_config["context_servers"] = {}
+            existing_config["context_servers"]["rekall"] = new_config["context_servers"]["rekall"]
+
+        elif "mcp" in new_config:
+            # OpenCode format
+            if "mcp" not in existing_config:
+                existing_config["mcp"] = {}
+            existing_config["mcp"]["rekall"] = new_config["mcp"]["rekall"]
+
+        else:
+            return "⚠ Unknown config format"
+
+        # Write merged config with nice formatting
+        merged_json = json.dumps(existing_config, indent=2, ensure_ascii=False)
+
+        # Validate before writing
+        json.loads(merged_json)  # Will raise if invalid
+
+        # Write to file
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(merged_json + "\n")
+
+        # Final validation - re-read and parse
+        with open(file_path, "r", encoding="utf-8") as f:
+            json.loads(f.read())
+
+        # Success - remove backup if it was just created and file was empty
+        if backup_path and backup_path.exists():
+            # Keep backup for safety, but could optionally remove small backups
+            pass
+
+        return f"✓ Installed to {file_path.name}"
+
+    except json.JSONDecodeError as e:
+        # JSON syntax error - rollback
+        if backup_path and backup_path.exists():
+            shutil.copy2(backup_path, file_path)
+            # Write error file with the attempted merge
+            try:
+                with open(error_path, "w", encoding="utf-8") as f:
+                    f.write(f"// JSON Error: {e}\n")
+                    f.write("// Original file restored from backup\n")
+                    f.write("// Attempted config below:\n")
+                    f.write(json.dumps(existing_config, indent=2, ensure_ascii=False))
+                return f"⚠ JSON error, restored backup. See {error_path.name}"
+            except Exception:
+                return f"⚠ JSON error: {e}"
+        return f"⚠ JSON error: {e}"
+
+    except PermissionError:
+        return f"⚠ Permission denied: {file_path}"
+
+    except Exception as e:
+        # Other error - try to rollback
+        if backup_path and backup_path.exists():
+            try:
+                shutil.copy2(backup_path, file_path)
+                return f"⚠ Error, restored backup: {str(e)[:30]}"
+            except Exception:
+                pass
+        return f"⚠ Error: {str(e)[:40]}"
+
+
+def _configure_mcp():
+    """Configure MCP Server - single screen with CLI selector."""
+    mcp_ok = _check_mcp_deps()
+    app = MCPConfigApp(MCP_CLI_CONFIGS, mcp_ok)
+    app.run()
+
+
+def _configure_context_mode():
+    """Configure context_mode setting (Feature 007).
+
+    Shows menu to select between:
+    - required: Reject entries without structured context
+    - recommended: Warn but allow entries without context
+    - optional: Accept all entries
+    """
+    from rekall.config import get_config, reset_config, save_config_to_toml
+
+    config = get_config()
+    current_mode = config.smart_embeddings_context_mode
+
+    # Build menu with current selection highlighted
+    menu_options = [
+        "─── Context Mode ───",
+        "",
+        f"  {'→ ' if current_mode == 'required' else '  '}[green]required[/green] - Entrée refusée sans contexte structuré",
+        f"  {'→ ' if current_mode == 'recommended' else '  '}[yellow]recommended[/yellow] - Avertissement sans contexte",
+        f"  {'→ ' if current_mode == 'optional' else '  '}[dim]optional[/dim] - Tout accepter (permissif)",
+        "",
+        "← Retour",
+    ]
+
+    app = SimpleMenuApp("📋 Context Mode", menu_options)
+    idx = app.run()
+
+    if idx is None:
+        return
+    idx = int(idx) if isinstance(idx, str) else idx
+
+    mode_map = {2: "required", 3: "recommended", 4: "optional"}
+    new_mode = mode_map.get(idx)
+
+    if new_mode and new_mode != current_mode:
+        # Save to config
+        success = save_config_to_toml(
+            config.config_dir,
+            {"smart_embeddings": {"context_mode": new_mode}}
+        )
+        if success:
+            reset_config()  # Force reload
+            show_toast(f"✓ Context mode: {new_mode}", 2.0)
+        else:
+            show_toast("⚠ Erreur sauvegarde config", 2.0)
+
+
+def _configure_max_context_size():
+    """Configure max_context_size setting (Feature 007).
+
+    Shows menu to select context size limit in KB.
+    """
+    from rekall.config import get_config, reset_config, save_config_to_toml
+
+    config = get_config()
+    current_kb = config.max_context_size // 1024
+
+    # Build menu with size options
+    size_options = [5, 10, 20, 50, 100]
+
+    menu_options = [
+        "─── Max Context Size ───",
+        "",
+    ]
+
+    for size in size_options:
+        marker = "→ " if size == current_kb else "  "
+        menu_options.append(f"  {marker}{size} KB")
+
+    menu_options.append("")
+    menu_options.append("← Retour")
+
+    app = SimpleMenuApp("📏 Max Context Size", menu_options)
+    idx = app.run()
+
+    if idx is None:
+        return
+    idx = int(idx) if isinstance(idx, str) else idx
+
+    # Map index to size (accounting for header and spacer)
+    if 2 <= idx <= 2 + len(size_options) - 1:
+        new_size = size_options[idx - 2]
+        if new_size != current_kb:
+            success = save_config_to_toml(
+                config.config_dir,
+                {"smart_embeddings": {"max_context_size": new_size * 1024}}
+            )
+            if success:
+                reset_config()
+                show_toast(f"✓ Max context size: {new_size} KB", 2.0)
+            else:
+                show_toast("⚠ Erreur sauvegarde config", 2.0)
+
+
+def _configure_embeddings():
+    """Configure Smart Embeddings - single flat menu with info and actions."""
+    from rekall.config import get_config, reset_config, save_config_to_toml
+
+    pending_notification = ""
+
     while True:
-        submenu_options = [
-            t("export.archive"),
-            t("export.markdown"),
-            t("export.json"),
-            "─" * 30,
-            t("import.archive"),
-            t("import.external_db"),
-            "─" * 30,
-            f"← {t('setup.back')}",
-        ]
-        app = SimpleMenuApp("Export / Import", submenu_options)
+        config = get_config()
+
+        # Check dependencies (cached after first call)
+        deps_ok = _check_embeddings_deps()
+
+        # Status indicators
+        status_icon = "[green]✓[/green]" if config.smart_embeddings_enabled else "[dim]○[/dim]"
+        deps_icon = "[green]✓[/green]" if deps_ok else "[yellow]⚠[/yellow]"
+
+        # Build flat menu with info sections
+        menu_options = []
+        actions = []
+
+        # ─── STATUS ───
+        menu_options.append("─── STATUS ───")
+        actions.append(None)
+
+        status_text = t("embeddings.status_enabled") if config.smart_embeddings_enabled else t("embeddings.status_disabled")
+        menu_options.append(f"  {status_icon} {status_text}")
+        actions.append(None)
+
+        deps_text = "Dependencies OK" if deps_ok else t('embeddings.deps_missing')
+        menu_options.append(f"  {deps_icon} {deps_text}")
+        actions.append(None)
+
+        # ─── CONFIG ───
+        menu_options.append("")
+        actions.append(None)
+        menu_options.append("─── CONFIG ───")
+        actions.append(None)
+
+        menu_options.append(f"  Model: {config.smart_embeddings_model}")
+        actions.append(None)
+
+        menu_options.append(f"  Dimensions: {config.smart_embeddings_dimensions}")
+        actions.append(None)
+
+        menu_options.append(f"  Threshold: {config.smart_embeddings_similarity_threshold}")
+        actions.append(None)
+
+        # ─── ACTIONS ───
+        menu_options.append("")
+        actions.append(None)
+        menu_options.append("─── ACTIONS ───")
+        actions.append(None)
+
+        if config.smart_embeddings_enabled:
+            menu_options.append(f"  ○ {t('embeddings.disable')}")
+            actions.append("disable")
+        else:
+            menu_options.append(f"  ✓ {t('embeddings.enable')}")
+            actions.append("enable")
+
+        menu_options.append("")
+        actions.append(None)
+        menu_options.append(f"← {t('setup.back')}")
+        actions.append("back")
+
+        # Show menu with pending notification
+        app = SimpleMenuApp(t("embeddings.title"), menu_options, pending_notification)
+        pending_notification = ""  # Clear after use
         idx = app.run()
 
-        if idx is None or idx == 7:  # Back or Escape
+        if idx is None:
+            return
+        if idx >= len(actions):
             return
 
-        if idx == 0:
+        action = actions[idx]
+        if action is None or action == "back":
+            return
+
+        if action == "enable":
+            success = save_config_to_toml(config.config_dir, {
+                "smart_embeddings": {"enabled": True}
+            })
+            if success:
+                reset_config()
+                pending_notification = f"✓ {t('embeddings.saved')}"
+            else:
+                pending_notification = "⚠ Error saving config"
+        elif action == "disable":
+            success = save_config_to_toml(config.config_dir, {
+                "smart_embeddings": {"enabled": False}
+            })
+            if success:
+                reset_config()
+                pending_notification = f"✓ {t('embeddings.saved')}"
+            else:
+                pending_notification = "⚠ Error saving config"
+
+
+@dataclass
+class ExportInfo:
+    """Information about an export file."""
+
+    path: Path
+    timestamp: datetime
+    size: int
+    format: str  # rekall, md, json
+
+    @property
+    def size_human(self) -> str:
+        """Human-readable size."""
+        if self.size < 1024:
+            return f"{self.size} B"
+        elif self.size < 1024 * 1024:
+            return f"{self.size / 1024:.1f} KB"
+        else:
+            return f"{self.size / (1024 * 1024):.1f} MB"
+
+
+def _get_exports_dir() -> Path:
+    """Get the exports directory (creates if needed)."""
+    from rekall.config import get_config
+
+    config = get_config()
+    exports_dir = config.paths.data_dir / "exports"
+    exports_dir.mkdir(parents=True, exist_ok=True)
+    return exports_dir
+
+
+def _list_exports(format_filter: str | None = None) -> list[ExportInfo]:
+    """List existing exports.
+
+    Args:
+        format_filter: Filter by format (rekall, md, json) or None for all
+
+    Returns:
+        List of ExportInfo sorted by timestamp (newest first)
+    """
+    exports_dir = _get_exports_dir()
+    exports = []
+
+    patterns = {
+        "rekall": "*.rekall.zip",
+        "md": "*.md",
+        "json": "*.json",
+    }
+
+    if format_filter:
+        search_patterns = [patterns.get(format_filter, f"*.{format_filter}")]
+    else:
+        search_patterns = list(patterns.values())
+
+    for pattern in search_patterns:
+        for path in exports_dir.glob(pattern):
+            if path.is_file():
+                stat = path.stat()
+                # Determine format from extension
+                if path.suffix == ".zip":
+                    fmt = "rekall"
+                elif path.suffix == ".md":
+                    fmt = "md"
+                elif path.suffix == ".json":
+                    fmt = "json"
+                else:
+                    fmt = path.suffix[1:]
+
+                exports.append(
+                    ExportInfo(
+                        path=path,
+                        timestamp=datetime.fromtimestamp(stat.st_mtime),
+                        size=stat.st_size,
+                        format=fmt,
+                    )
+                )
+
+    exports.sort(key=lambda e: e.timestamp, reverse=True)
+    return exports
+
+
+def action_export_import():
+    """Data management: backup, export, import submenu."""
+    from rekall.backup import list_backups
+
+    while True:
+        # Get counts for display
+        archives = _list_exports("rekall")
+        backups = list_backups()
+
+        # Build menu with sections
+        menu_options = []
+        actions = []
+
+        # ─── BACKUP ───
+        menu_options.append("─── BACKUP ───")
+        actions.append(None)
+
+        backup_label = f"  💾 {t('maintenance.create_backup')}"
+        menu_options.append(backup_label)
+        actions.append("backup")
+
+        restore_label = f"  ↩ {t('maintenance.restore_backup')}"
+        if backups:
+            restore_label += f" [dim]({len(backups)})[/dim]"
+        menu_options.append(restore_label)
+        actions.append("restore")
+
+        # ─── EXPORT ───
+        menu_options.append("")
+        actions.append(None)
+        menu_options.append("─── EXPORT ───")
+        actions.append(None)
+
+        export_label = f"  📦 {t('export.archive')}"
+        if archives:
+            export_label += f" [dim]({len(archives)})[/dim]"
+        menu_options.append(export_label)
+        actions.append("export_archive")
+
+        menu_options.append(f"  📄 {t('export.markdown')}")
+        actions.append("export_md")
+
+        menu_options.append(f"  📄 {t('export.json')}")
+        actions.append("export_json")
+
+        # ─── IMPORT ───
+        menu_options.append("")
+        actions.append(None)
+        menu_options.append("─── IMPORT ───")
+        actions.append(None)
+
+        import_label = f"  📦 {t('import.archive')}"
+        if archives:
+            import_label += f" [dim]({len(archives)})[/dim]"
+        menu_options.append(import_label)
+        actions.append("import_archive")
+
+        menu_options.append(f"  📄 {t('import.external_db')}")
+        actions.append("import_db")
+
+        # Back
+        menu_options.append("")
+        actions.append(None)
+        menu_options.append(f"← {t('setup.back')}")
+        actions.append("back")
+
+        app = SimpleMenuApp(t("menu.data"), menu_options)
+        idx = app.run()
+
+        if idx is None:
+            return
+        if idx >= len(actions):
+            return
+
+        action = actions[idx]
+        if action is None or action == "back":
+            return
+
+        if action == "backup":
+            _create_backup_tui()
+        elif action == "restore":
+            _restore_backup_tui()
+        elif action == "export_archive":
             _do_export_rekall()
-        elif idx == 1:
+        elif action == "export_md":
             _do_export_text("md")
-        elif idx == 2:
+        elif action == "export_json":
             _do_export_text("json")
-        elif idx == 4:
+        elif action == "import_archive":
             _do_import_rekall()
-        elif idx == 5:
+        elif action == "import_db":
             _do_import_external_db()
 
 
 def _do_export_rekall():
-    """Export to .rekall.zip archive using Textual."""
-    from pathlib import Path
-
+    """Export to .rekall.zip archive using Textual with list of existing exports."""
     from rekall.archive import RekallArchive
-
-    filename = prompt_input(t("import.filename"))
-    if not filename:
-        return
 
     db = get_db()
     entries = db.list_all(limit=100000)
@@ -3279,20 +4588,53 @@ def _do_export_rekall():
         show_toast(f"⚠ {t('import.no_entries')}")
         return
 
-    output_path = Path(f"{filename}.rekall.zip")
+    # List existing exports
+    existing = _list_exports("rekall")
+    exports_dir = _get_exports_dir()
+
+    # Build selection menu
+    options = [f"+ {t('export.new')}"]  # New export option
+    for exp in existing[:10]:  # Limit to 10 most recent
+        date_str = exp.timestamp.strftime("%Y-%m-%d %H:%M")
+        options.append(f"{exp.path.name}  ({date_str}, {exp.size_human})")
+    options.append(f"← {t('setup.back')}")
+
+    app = SimpleMenuApp(t("export.select_or_new"), options)
+    idx = app.run()
+
+    if idx is None or idx == len(options) - 1:
+        return
+
+    if idx == 0:
+        # New export - ask for filename
+        filename = prompt_input(t("import.filename"))
+        if not filename:
+            return
+        output_path = exports_dir / f"{filename}.rekall.zip"
+    else:
+        # Overwrite existing - confirm first
+        selected = existing[idx - 1]
+        confirm_options = [
+            t("export.overwrite"),
+            t("common.cancel"),
+        ]
+        confirm_app = SimpleMenuApp(
+            f"{t('export.confirm_overwrite')}: {selected.path.name}",
+            confirm_options
+        )
+        confirm_idx = confirm_app.run()
+        if confirm_idx is None or confirm_idx != 0:
+            return
+        output_path = selected.path
+
+    # Do the export
     RekallArchive.create(output_path, entries)
-    show_toast(f"✓ {t('import.exported', count=len(entries), path=output_path)}", 2.0)
+    show_toast(f"✓ {t('import.exported', count=len(entries), path=output_path.name)}", 2.0)
 
 
 def _do_export_text(fmt: str):
-    """Export to text format (md or json) using Textual."""
-    from pathlib import Path
-
+    """Export to text format (md or json) using Textual with list of existing exports."""
     from rekall import exporters
-
-    filename = prompt_input(t("import.output_filename", fmt=fmt))
-    if not filename:
-        return
 
     db = get_db()
     entries = db.list_all(limit=100000)
@@ -3301,32 +4643,96 @@ def _do_export_text(fmt: str):
         show_toast(f"⚠ {t('import.no_entries')}")
         return
 
-    output_path = Path(f"{filename}.{fmt}")
+    # List existing exports of this format
+    existing = _list_exports(fmt)
+    exports_dir = _get_exports_dir()
 
+    # Build selection menu
+    options = [f"+ {t('export.new')}"]
+    for exp in existing[:10]:
+        date_str = exp.timestamp.strftime("%Y-%m-%d %H:%M")
+        options.append(f"{exp.path.name}  ({date_str}, {exp.size_human})")
+    options.append(f"← {t('setup.back')}")
+
+    app = SimpleMenuApp(t("export.select_or_new"), options)
+    idx = app.run()
+
+    if idx is None or idx == len(options) - 1:
+        return
+
+    if idx == 0:
+        # New export
+        filename = prompt_input(t("import.output_filename", fmt=fmt))
+        if not filename:
+            return
+        output_path = exports_dir / f"{filename}.{fmt}"
+    else:
+        # Overwrite existing
+        selected = existing[idx - 1]
+        confirm_options = [t("export.overwrite"), t("common.cancel")]
+        confirm_app = SimpleMenuApp(
+            f"{t('export.confirm_overwrite')}: {selected.path.name}",
+            confirm_options
+        )
+        confirm_idx = confirm_app.run()
+        if confirm_idx is None or confirm_idx != 0:
+            return
+        output_path = selected.path
+
+    # Generate content
     if fmt == "json":
         content = exporters.export_json(entries)
     else:
         content = exporters.export_markdown(entries)
 
     output_path.write_text(content)
-    show_toast(f"✓ {t('import.exported', count=len(entries), path=output_path)}", 2.0)
+    show_toast(f"✓ {t('import.exported', count=len(entries), path=output_path.name)}", 2.0)
 
 
 def _do_import_rekall():
-    """Import from .rekall.zip archive using Textual."""
+    """Import from .rekall.zip archive using Textual with list of available archives."""
     from pathlib import Path
 
     from rekall.archive import RekallArchive
     from rekall.sync import ImportExecutor, build_import_plan
 
-    filepath = prompt_input(t("import.archive_path"))
-    if not filepath:
+    # List available archives
+    archives = _list_exports("rekall")
+
+    # Build selection menu
+    options = []
+    for arch in archives[:10]:
+        date_str = arch.timestamp.strftime("%Y-%m-%d %H:%M")
+        options.append(f"{arch.path.name}  ({date_str}, {arch.size_human})")
+
+    options.append(f"📂 {t('import.other_file')}")  # Browse for other file
+    options.append(f"← {t('setup.back')}")
+
+    if archives:
+        app = SimpleMenuApp(t("import.select_archive"), options)
+    else:
+        # No archives - show only "Other file" option
+        options = [f"📂 {t('import.other_file')}", f"← {t('setup.back')}"]
+        app = SimpleMenuApp(t("import.no_archives_found"), options)
+
+    idx = app.run()
+
+    if idx is None or idx == len(options) - 1:
         return
 
-    archive_path = Path(filepath)
-    if not archive_path.exists():
-        show_info(f"[red]{t('import.file_not_found')}: {filepath}[/red]")
-        return
+    # Determine archive path
+    if archives and idx < len(archives):
+        # Selected from list
+        archive_path = archives[idx].path
+    else:
+        # "Other file" selected - ask for path
+        filepath = prompt_input(t("import.archive_path"))
+        if not filepath:
+            return
+        archive_path = Path(filepath).expanduser()
+        if not archive_path.exists():
+            show_info(f"[red]{t('import.file_not_found')}: {filepath}[/red]")
+            return
 
     # Open and validate
     archive = RekallArchive.open(archive_path)
@@ -3506,6 +4912,266 @@ def _do_import_external_db():
 
 
 # =============================================================================
+# Migration Overlay (Feature 007)
+# =============================================================================
+
+
+class MigrationOverlayApp(App):
+    """Overlay app for migration prompts with changelog navigation."""
+
+    CSS = """
+    Screen {
+        background: $surface;
+        align: center middle;
+    }
+
+    #overlay-container {
+        width: 70;
+        height: auto;
+        max-height: 30;
+        padding: 1 2;
+        background: $surface;
+        border: thick #4367CD;
+    }
+
+    #overlay-title {
+        text-align: center;
+        padding: 1 0;
+        color: #93B5F7;
+        text-style: bold;
+    }
+
+    #overlay-content {
+        height: auto;
+        max-height: 18;
+        padding: 1 2;
+        background: $surface-darken-1;
+        overflow: auto;
+    }
+
+    #overlay-nav {
+        text-align: center;
+        padding: 1 0;
+        color: $text-muted;
+    }
+
+    #overlay-buttons {
+        layout: horizontal;
+        height: auto;
+        align: center middle;
+        padding: 1 0;
+    }
+
+    .overlay-button {
+        width: auto;
+        min-width: 15;
+        margin: 0 1;
+        padding: 0 2;
+    }
+
+    .overlay-button:focus {
+        background: #4367CD;
+        color: white;
+    }
+    """ + BANNER_CSS
+
+    BINDINGS = [
+        Binding("escape", "later", "Later", show=True),
+        Binding("left", "prev_view", "◀", show=True),
+        Binding("right", "next_view", "▶", show=True),
+        Binding("m", "migrate", "Migrate", show=True),
+    ]
+
+    def __init__(
+        self,
+        current_version: int,
+        target_version: int,
+        legacy_count: int,
+        changelog_content: str,
+    ):
+        super().__init__()
+        self.current_version = current_version
+        self.target_version = target_version
+        self.legacy_count = legacy_count
+        self.changelog_content = changelog_content
+        self.current_view = 0  # 0 = migration, 1 = changelog
+        self.result: str | None = None
+
+    def compose(self) -> ComposeResult:
+        from textual.widgets import Button
+
+        with Container(id="overlay-container"):
+            yield Static("", id="overlay-title")
+            yield VerticalScroll(
+                Markdown("", id="overlay-markdown"),
+                id="overlay-content",
+            )
+            yield Static("◀ 1/2 ▶  (← →)", id="overlay-nav")
+            with Container(id="overlay-buttons"):
+                yield Button("Migrer", id="btn-migrate", variant="primary", classes="overlay-button")
+                yield Button("Plus tard", id="btn-later", variant="default", classes="overlay-button")
+
+    def on_mount(self) -> None:
+        self._update_view()
+
+    def _update_view(self) -> None:
+        """Update display based on current view."""
+        title_widget = self.query_one("#overlay-title", Static)
+        content_widget = self.query_one("#overlay-markdown", Markdown)
+        nav_widget = self.query_one("#overlay-nav", Static)
+
+        if self.current_view == 0:
+            # Migration view
+            title_widget.update("🔄 Migration Disponible")
+            nav_widget.update("◀ 1/2 ▶  (← →)")
+
+            content = f"""## Mise à jour de schéma
+
+**Version actuelle**: v{self.current_version}
+**Nouvelle version**: v{self.target_version}
+
+**Migrations en attente**: {self.target_version - self.current_version}
+"""
+            if self.legacy_count > 0:
+                content += f"\n**Entrées sans contexte**: {self.legacy_count}\n"
+                content += "\n*Ces entrées pourront être enrichies après migration.*"
+
+            content += "\n\n---\n\nUne **sauvegarde automatique** sera créée avant la migration."
+
+            content_widget.update(content)
+        else:
+            # Changelog view
+            title_widget.update("📋 Changelog")
+            nav_widget.update("◀ 2/2 ▶  (← →)")
+            content_widget.update(self.changelog_content or "*Changelog non disponible*")
+
+    def action_next_view(self) -> None:
+        self.current_view = (self.current_view + 1) % 2
+        self._update_view()
+
+    def action_prev_view(self) -> None:
+        self.current_view = (self.current_view - 1) % 2
+        self._update_view()
+
+    def action_migrate(self) -> None:
+        self.result = "migrate"
+        self.exit(result="migrate")
+
+    def action_later(self) -> None:
+        self.result = "later"
+        self.exit(result="later")
+
+    def on_button_pressed(self, event) -> None:
+
+        button = event.button
+        if button.id == "btn-migrate":
+            self.action_migrate()
+        elif button.id == "btn-later":
+            self.action_later()
+
+
+def check_migration_needed() -> tuple[bool, int, int, int]:
+    """Check if database migration is needed.
+
+    Returns:
+        Tuple of (needs_migration, current_version, target_version, legacy_entries_count)
+    """
+    from rekall.db import CURRENT_SCHEMA_VERSION, Database
+
+    config = get_config()
+
+    if not config.db_path.exists():
+        return (False, 0, CURRENT_SCHEMA_VERSION, 0)
+
+    try:
+        import sqlite3
+
+        db = Database(config.db_path)
+        db.conn = sqlite3.connect(str(config.db_path))
+        current_version = db.get_schema_version()
+        db.close()
+
+        # Count legacy entries without structured context
+        db = Database(config.db_path)
+        db.init()
+        entries = db.list_all(limit=10000)
+        legacy_count = 0
+        for entry in entries:
+            ctx = db.get_structured_context(entry.id)
+            if ctx is None:
+                legacy_count += 1
+        db.close()
+
+        needs_migration = current_version < CURRENT_SCHEMA_VERSION
+        return (needs_migration, current_version, CURRENT_SCHEMA_VERSION, legacy_count)
+    except Exception:
+        return (False, 0, CURRENT_SCHEMA_VERSION, 0)
+
+
+def get_changelog_content() -> str:
+    """Load changelog content for display."""
+    changelog_paths = [
+        Path(__file__).parent.parent / "CHANGELOG.md",
+        Path(__file__).parent / "CHANGELOG.md",
+    ]
+
+    for path in changelog_paths:
+        if path.exists():
+            return path.read_text()
+
+    return ""
+
+
+def run_migration_overlay() -> str | None:
+    """Run migration overlay only if schema migration is needed.
+
+    Returns:
+        "migrate" if user chose to migrate, "later" or None otherwise
+    """
+    needs_migration, current, target, legacy = check_migration_needed()
+
+    # Only show popup for actual schema migrations, not for legacy entries
+    if not needs_migration:
+        return None
+
+    changelog = get_changelog_content()
+
+    app = MigrationOverlayApp(
+        current_version=current,
+        target_version=target,
+        legacy_count=legacy,
+        changelog_content=changelog,
+    )
+
+    return app.run()
+
+
+def apply_migration_from_tui() -> bool:
+    """Apply migrations from TUI context.
+
+    Returns:
+        True if migration successful, False otherwise
+    """
+    from rekall.backup import create_backup
+    from rekall.db import Database
+
+    config = get_config()
+
+    try:
+        # Create backup first
+        create_backup(config.db_path)
+
+        # Apply migrations
+        db = Database(config.db_path)
+        db.init()
+        db.close()
+
+        return True
+    except Exception:
+        return False
+
+
+# =============================================================================
 # Main TUI Loop
 # =============================================================================
 
@@ -3514,9 +5180,7 @@ def _do_import_external_db():
 ACTION_MAP = {
     "language": None,  # Will be set to action_language
     "config": None,    # Unified config & maintenance
-    "speckit": None,
     "research": None,
-    "add": None,
     "search": None,
     "browse": None,
     "show": None,
@@ -3530,11 +5194,8 @@ def get_menu_items():
     return [
         ("language", t("menu.language"), t("menu.language.desc")),
         ("config", t("menu.config"), t("menu.config.desc")),
-        ("speckit", t("menu.speckit"), t("menu.speckit.desc")),
         ("research", t("menu.research"), t("menu.research.desc")),
-        ("add", t("menu.add"), t("menu.add.desc")),
         ("browse", t("menu.browse"), t("menu.browse.desc")),
-        ("show", t("menu.show"), t("menu.show.desc")),
         ("export", t("menu.export"), t("menu.export.desc")),
         ("quit", t("menu.quit"), t("menu.quit.desc")),
     ]
@@ -3545,15 +5206,20 @@ def run_tui():
     # Load saved language preference
     load_lang_preference()
 
+    # Check for pending migrations at startup (Feature 007)
+    migration_result = run_migration_overlay()
+    if migration_result == "migrate":
+        if apply_migration_from_tui():
+            show_info("[green]✓ Migration réussie ![/green]")
+        else:
+            show_info("[red]✗ Échec de la migration. Vérifiez les logs.[/red]")
+
     # Map action keys to functions
     actions = {
         "language": action_language,
         "config": action_install_ide,  # Unified config & maintenance menu
-        "speckit": action_speckit_integration,
         "research": action_research,
-        "add": action_add_entry,
         "browse": action_browse,
-        "show": action_show,
         "export": action_export_import,
         "quit": None,
     }

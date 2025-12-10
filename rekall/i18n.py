@@ -137,18 +137,18 @@ TRANSLATIONS = {
         "ar": "البحث في قاعدة البيانات",
     },
     "menu.browse": {
-        "en": "Browse/Search",
-        "fr": "Parcourir/Chercher",
-        "es": "Explorar/Buscar",
-        "zh": "浏览/搜索",
-        "ar": "تصفح/بحث",
+        "en": "Knowledge Base",
+        "fr": "Base de connaissances",
+        "es": "Base de conocimiento",
+        "zh": "知识库",
+        "ar": "قاعدة المعرفة",
     },
     "menu.browse.desc": {
-        "en": "Browse all entries",
-        "fr": "Parcourir les entrées",
-        "es": "Explorar las entradas",
-        "zh": "浏览所有条目",
-        "ar": "تصفح جميع الإدخالات",
+        "en": "Browse, search and add entries",
+        "fr": "Parcourir, chercher et ajouter",
+        "es": "Explorar, buscar y añadir",
+        "zh": "浏览、搜索和添加条目",
+        "ar": "تصفح وبحث وإضافة",
     },
     "menu.show": {
         "en": "Show",
@@ -165,18 +165,25 @@ TRANSLATIONS = {
         "ar": "عرض التفاصيل بواسطة المعرف",
     },
     "menu.export": {
-        "en": "Export/Import",
-        "fr": "Export/Import",
-        "es": "Exportar/Importar",
-        "zh": "导出/导入",
-        "ar": "تصدير/استيراد",
+        "en": "Data",
+        "fr": "Données",
+        "es": "Datos",
+        "zh": "数据",
+        "ar": "البيانات",
     },
     "menu.export.desc": {
-        "en": "Backup/restore .rekall",
-        "fr": "Sauvegarder/restaurer .rekall",
-        "es": "Guardar/restaurar .rekall",
-        "zh": "备份/恢复 .rekall",
-        "ar": "نسخ احتياطي/استعادة .rekall",
+        "en": "Backup, export, import",
+        "fr": "Sauvegarde, export, import",
+        "es": "Copia, exportar, importar",
+        "zh": "备份、导出、导入",
+        "ar": "نسخ، تصدير، استيراد",
+    },
+    "menu.data": {
+        "en": "Data Management",
+        "fr": "Gestion des données",
+        "es": "Gestión de datos",
+        "zh": "数据管理",
+        "ar": "إدارة البيانات",
     },
     "menu.quit": {
         "en": "Quit",
@@ -279,6 +286,13 @@ TRANSLATIONS = {
         "es": "¡Adiós! Sigue aplastando esos bugs.",
         "zh": "再见！继续消灭那些bug。",
         "ar": "وداعاً! استمر في سحق تلك الأخطاء.",
+    },
+    "common.done": {
+        "en": "Done",
+        "fr": "Terminé",
+        "es": "Hecho",
+        "zh": "完成",
+        "ar": "تم",
     },
 
     # ==========================================================================
@@ -469,6 +483,94 @@ TRANSLATIONS = {
     },
 
     # ==========================================================================
+    # Smart Embeddings Configuration
+    # ==========================================================================
+    "embeddings.title": {
+        "en": "Smart Embeddings Configuration",
+        "fr": "Configuration Smart Embeddings",
+        "es": "Configuración Smart Embeddings",
+        "zh": "智能嵌入配置",
+        "ar": "تكوين التضمينات الذكية",
+    },
+    "embeddings.configure": {
+        "en": "Configure Smart Embeddings",
+        "fr": "Configurer Smart Embeddings",
+        "es": "Configurar Smart Embeddings",
+        "zh": "配置智能嵌入",
+        "ar": "تكوين التضمينات الذكية",
+    },
+    "embeddings.description": {
+        "en": "Embeddings enable semantic search (find similar entries by meaning, not just keywords).",
+        "fr": "Les embeddings permettent la recherche sémantique (trouver des entrées similaires par le sens, pas seulement par mots-clés).",
+        "es": "Los embeddings permiten búsqueda semántica (encontrar entradas similares por significado, no solo palabras clave).",
+        "zh": "嵌入启用语义搜索（按含义查找相似条目，而不仅仅是关键词）。",
+        "ar": "تتيح التضمينات البحث الدلالي (إيجاد مدخلات مشابهة بالمعنى، ليس فقط بالكلمات المفتاحية).",
+    },
+    "embeddings.warning_download": {
+        "en": "⚠ Requires ~90 MB download (first time only)",
+        "fr": "⚠ Nécessite ~90 Mo de téléchargement (première fois uniquement)",
+        "es": "⚠ Requiere ~90 MB de descarga (solo la primera vez)",
+        "zh": "⚠ 需要下载约90 MB（仅首次）",
+        "ar": "⚠ يتطلب تحميل ~90 ميجابايت (المرة الأولى فقط)",
+    },
+    "embeddings.warning_slow": {
+        "en": "⚠ May be slow on older machines",
+        "fr": "⚠ Peut être lent sur machines anciennes",
+        "es": "⚠ Puede ser lento en máquinas antiguas",
+        "zh": "⚠ 在旧机器上可能会很慢",
+        "ar": "⚠ قد يكون بطيئًا على الأجهزة القديمة",
+    },
+    "embeddings.enable": {
+        "en": "Enable Smart Embeddings",
+        "fr": "Activer Smart Embeddings",
+        "es": "Activar Smart Embeddings",
+        "zh": "启用智能嵌入",
+        "ar": "تفعيل التضمينات الذكية",
+    },
+    "embeddings.disable": {
+        "en": "Disable (FTS only)",
+        "fr": "Désactiver (FTS uniquement)",
+        "es": "Desactivar (solo FTS)",
+        "zh": "禁用（仅FTS）",
+        "ar": "تعطيل (FTS فقط)",
+    },
+    "embeddings.status_enabled": {
+        "en": "Enabled",
+        "fr": "Activé",
+        "es": "Activado",
+        "zh": "已启用",
+        "ar": "مفعّل",
+    },
+    "embeddings.status_disabled": {
+        "en": "Disabled",
+        "fr": "Désactivé",
+        "es": "Desactivado",
+        "zh": "已禁用",
+        "ar": "معطّل",
+    },
+    "embeddings.saved": {
+        "en": "Smart Embeddings configuration saved",
+        "fr": "Configuration Smart Embeddings sauvegardée",
+        "es": "Configuración Smart Embeddings guardada",
+        "zh": "智能嵌入配置已保存",
+        "ar": "تم حفظ تكوين التضمينات الذكية",
+    },
+    "embeddings.deps_missing": {
+        "en": "Dependencies not installed",
+        "fr": "Dépendances non installées",
+        "es": "Dependencias no instaladas",
+        "zh": "依赖项未安装",
+        "ar": "التبعيات غير مثبتة",
+    },
+    "embeddings.deps_install": {
+        "en": "Install with: pip install sentence-transformers numpy",
+        "fr": "Installer avec: pip install sentence-transformers numpy",
+        "es": "Instalar con: pip install sentence-transformers numpy",
+        "zh": "安装方式: pip install sentence-transformers numpy",
+        "ar": "التثبيت باستخدام: pip install sentence-transformers numpy",
+    },
+
+    # ==========================================================================
     # IDE Integration Menu
     # ==========================================================================
     "ide.title": {
@@ -615,6 +717,34 @@ TRANSLATIONS = {
         "zh": "导出（JSON）",
         "ar": "تصدير (JSON)",
     },
+    "export.new": {
+        "en": "New export",
+        "fr": "Nouvel export",
+        "es": "Nueva exportación",
+        "zh": "新导出",
+        "ar": "تصدير جديد",
+    },
+    "export.select_or_new": {
+        "en": "Select or create export",
+        "fr": "Sélectionner ou créer",
+        "es": "Seleccionar o crear",
+        "zh": "选择或创建",
+        "ar": "اختر أو أنشئ",
+    },
+    "export.overwrite": {
+        "en": "Overwrite",
+        "fr": "Écraser",
+        "es": "Sobrescribir",
+        "zh": "覆盖",
+        "ar": "استبدال",
+    },
+    "export.confirm_overwrite": {
+        "en": "Confirm overwrite",
+        "fr": "Confirmer écrasement",
+        "es": "Confirmar sobrescritura",
+        "zh": "确认覆盖",
+        "ar": "تأكيد الاستبدال",
+    },
     "import.archive": {
         "en": "Import (.rekall.zip archive)",
         "fr": "Import (.rekall.zip archive)",
@@ -667,6 +797,13 @@ TRANSLATIONS = {
         "es": "Nivel de confianza",
         "zh": "置信度",
         "ar": "مستوى الثقة",
+    },
+    "add.content": {
+        "en": "Content (optional)",
+        "fr": "Contenu (optionnel)",
+        "es": "Contenido (opcional)",
+        "zh": "内容（可选）",
+        "ar": "المحتوى (اختياري)",
     },
     "add.success": {
         "en": "Entry added",
@@ -1705,6 +1842,27 @@ TRANSLATIONS = {
         "zh": "归档路径（.rekall.zip文件）",
         "ar": "مسار الأرشيف (ملف .rekall.zip)",
     },
+    "import.select_archive": {
+        "en": "Select archive to import",
+        "fr": "Sélectionner une archive",
+        "es": "Seleccionar archivo a importar",
+        "zh": "选择要导入的归档",
+        "ar": "اختر الأرشيف للاستيراد",
+    },
+    "import.other_file": {
+        "en": "Other file...",
+        "fr": "Autre fichier...",
+        "es": "Otro archivo...",
+        "zh": "其他文件...",
+        "ar": "ملف آخر...",
+    },
+    "import.no_archives_found": {
+        "en": "No archives found",
+        "fr": "Aucune archive trouvée",
+        "es": "No se encontraron archivos",
+        "zh": "未找到归档",
+        "ar": "لم يتم العثور على أرشيفات",
+    },
     "import.file_not_found": {
         "en": "File not found",
         "fr": "Fichier introuvable",
@@ -2193,6 +2351,45 @@ TRANSLATIONS = {
         "es": "Se necesitan al menos 2 entradas para generalizar",
         "zh": "需要至少 2 个条目才能泛化",
         "ar": "تحتاج إلى إدخالين على الأقل للتعميم",
+    },
+
+    # ==========================================================================
+    # About Section
+    # ==========================================================================
+    "about.changelog": {
+        "en": "Changelog",
+        "fr": "Historique des versions",
+        "es": "Registro de cambios",
+        "zh": "更新日志",
+        "ar": "سجل التغييرات",
+    },
+    "about.version": {
+        "en": "Version info",
+        "fr": "Infos version",
+        "es": "Info de versión",
+        "zh": "版本信息",
+        "ar": "معلومات الإصدار",
+    },
+    "about.version_title": {
+        "en": "Version Information",
+        "fr": "Informations de version",
+        "es": "Información de versión",
+        "zh": "版本信息",
+        "ar": "معلومات الإصدار",
+    },
+    "about.release_date": {
+        "en": "Release date",
+        "fr": "Date de sortie",
+        "es": "Fecha de lanzamiento",
+        "zh": "发布日期",
+        "ar": "تاريخ الإصدار",
+    },
+    "about.changelog_not_found": {
+        "en": "Changelog not found",
+        "fr": "Historique non trouvé",
+        "es": "Registro no encontrado",
+        "zh": "未找到更新日志",
+        "ar": "سجل التغييرات غير موجود",
     },
 
     # ==========================================================================
