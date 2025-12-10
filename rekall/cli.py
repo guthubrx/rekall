@@ -23,6 +23,7 @@ from rekall.models import (
     VALID_RELATION_TYPES,
     VALID_TYPES,
     Entry,
+    StructuredContext,
     generate_ulid,
 )
 
@@ -137,6 +138,8 @@ def main(
 @app.command()
 def version():
     """Display version and system information."""
+    from rekall.db import CURRENT_SCHEMA_VERSION, Database
+
     show_banner()
 
     # Build info table
@@ -163,6 +166,27 @@ def version():
     db_exists = config.db_path.exists()
     info_table.add_row("Database", str(config.db_path))
     info_table.add_row("DB Status", "[green]initialized[/green]" if db_exists else "[yellow]not initialized[/yellow]")
+
+    # Schema version info
+    if db_exists:
+        try:
+            db = Database(config.db_path)
+            db.conn = __import__("sqlite3").connect(str(config.db_path))
+            current_schema = db.get_schema_version()
+            db.close()
+
+            if current_schema < CURRENT_SCHEMA_VERSION:
+                pending = CURRENT_SCHEMA_VERSION - current_schema
+                info_table.add_row(
+                    "Schema Version",
+                    f"v{current_schema} → v{CURRENT_SCHEMA_VERSION} [yellow]({pending} migration(s) pending)[/yellow]"
+                )
+            else:
+                info_table.add_row("Schema Version", f"v{current_schema} [green](current)[/green]")
+        except Exception:
+            info_table.add_row("Schema Version", "[red]error reading[/red]")
+    else:
+        info_table.add_row("Schema Version", f"v{CURRENT_SCHEMA_VERSION} (latest)")
 
     console.print(Panel(
         info_table,
@@ -304,8 +328,20 @@ def search(
     ),
     limit: int = typer.Option(20, "--limit", "-l", help="Maximum results"),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON for AI agents"),
+    context: Optional[str] = typer.Option(
+        None,
+        "--context",
+        help="Conversation context for semantic search (AI agent use)",
+    ),
+    semantic_only: bool = typer.Option(
+        False,
+        "--semantic-only",
+        help="Use semantic search only (requires embeddings)",
+    ),
 ):
     """Search knowledge base.
+
+    Uses hybrid search (FTS + semantic) when embeddings are enabled.
 
     Examples:
         rekall search "circular import"
@@ -313,18 +349,89 @@ def search(
         rekall search "react" --project frontend
         rekall search "timeout" --memory-type semantic
         rekall search "auth" --json  # For AI agents
+        rekall search "error handling" --context "API development"
+        rekall search "patterns" --semantic-only
     """
     import json
 
     db = get_db()
-    results = db.search(query, entry_type=entry_type, project=project, memory_type=memory_type, limit=limit)
+    cfg = get_config()
+
+    # Determine search mode
+    use_hybrid = cfg.smart_embeddings_enabled and not semantic_only
+    use_semantic = semantic_only
+
+    # Semantic scores for display
+    semantic_scores: dict[str, float] = {}
+
+    if use_semantic:
+        # Semantic-only search
+        from rekall.embeddings import get_embedding_service
+
+        service = get_embedding_service(
+            dimensions=cfg.smart_embeddings_dimensions,
+            similarity_threshold=cfg.smart_embeddings_similarity_threshold,
+        )
+
+        if not service.available:
+            console.print("[red]Error: Embeddings not available for --semantic-only[/red]")
+            console.print("[dim]Install with: pip install sentence-transformers numpy[/dim]")
+            raise typer.Exit(1)
+
+        sem_results = service.semantic_search(query, db, context=context, limit=limit)
+
+        # Convert to SearchResult-like format for unified processing
+        from rekall.db import SearchResult
+        results = []
+        for entry, score in sem_results:
+            # Apply filters
+            if entry_type and entry.type != entry_type:
+                continue
+            if project and entry.project != project:
+                continue
+            if memory_type and entry.memory_type != memory_type:
+                continue
+            results.append(SearchResult(entry=entry, rank=None))
+            semantic_scores[entry.id] = score
+
+    elif use_hybrid:
+        # Hybrid search (FTS + semantic)
+        from rekall.embeddings import get_embedding_service
+
+        service = get_embedding_service(
+            dimensions=cfg.smart_embeddings_dimensions,
+            similarity_threshold=cfg.smart_embeddings_similarity_threshold,
+        )
+
+        hybrid_results = service.hybrid_search(
+            query, db,
+            context=context,
+            limit=limit,
+            entry_type=entry_type,
+            project=project,
+            memory_type=memory_type,
+        )
+
+        # Convert to SearchResult format
+        from rekall.db import SearchResult
+        results = []
+        for entry, combined_score, sem_score in hybrid_results:
+            results.append(SearchResult(entry=entry, rank=None))
+            if sem_score is not None:
+                semantic_scores[entry.id] = sem_score
+
+    else:
+        # FTS-only search (default when embeddings disabled)
+        results = db.search(query, entry_type=entry_type, project=project, memory_type=memory_type, limit=limit)
 
     # JSON output for AI agents
     if json_output:
+        search_mode = "semantic" if use_semantic else ("hybrid" if use_hybrid else "fts")
         output = {
             "query": query,
             "results": [],
             "total_count": len(results),
+            "search_mode": search_mode,
             "context_matches": {
                 "project": project is not None,
                 "type": entry_type,
@@ -351,6 +458,7 @@ def search(
                 "last_accessed": entry.last_accessed.isoformat() if entry.last_accessed else None,
                 # BM25 rank: lower = more relevant, normalize to 0-1 score
                 "relevance_score": round(min(1.0, max(0, 1 - result.rank / 10)), 2) if result.rank else 0.5,
+                "semantic_score": round(semantic_scores.get(entry.id, 0), 3) if entry.id in semantic_scores else None,
                 "links": {
                     "outgoing": [{"target_id": lnk.target_id, "type": lnk.relation_type} for lnk in outgoing],
                     "incoming": [{"source_id": lnk.source_id, "type": lnk.relation_type} for lnk in incoming],
@@ -366,24 +474,36 @@ def search(
         console.print("[yellow]No results found.[/yellow]")
         return
 
+    # Display search mode
+    if use_semantic:
+        console.print("[dim]Search mode: semantic only[/dim]")
+    elif use_hybrid and semantic_scores:
+        console.print("[dim]Search mode: hybrid (FTS + semantic)[/dim]")
+
     # Display results in a table
     table = Table(title=f"Search: {query}", show_header=True, header_style="bold", box=box.ROUNDED)
     table.add_column("ID", style="dim", width=12)
     table.add_column("Type", width=10)
     table.add_column("Title", min_width=30)
     table.add_column("Confidence", justify="center", width=10)
+    if semantic_scores:
+        table.add_column("Semantic", justify="center", width=10)
     table.add_column("Project", width=15)
 
     for result in results:
         entry = result.entry
         confidence_stars = "★" * entry.confidence + "☆" * (5 - entry.confidence)
-        table.add_row(
+        row = [
             entry.id[:12] + "...",
             entry.type,
             entry.title,
             confidence_stars,
-            entry.project or "-",
-        )
+        ]
+        if semantic_scores:
+            sem_score = semantic_scores.get(entry.id)
+            row.append(f"{sem_score:.0%}" if sem_score else "-")
+        row.append(entry.project or "-")
+        table.add_row(*row)
 
     console.print(table)
     console.print(f"\n[dim]Found {len(results)} result(s)[/dim]")
@@ -456,6 +576,23 @@ def add(
         "-m",
         help=f"Memory type: {', '.join(VALID_MEMORY_TYPES)}",
     ),
+    context: Optional[str] = typer.Option(
+        None,
+        "--context",
+        help="Conversation context for semantic embedding (AI agent use)",
+    ),
+    context_json: Optional[str] = typer.Option(
+        None,
+        "--context-json",
+        "-cj",
+        help="Structured context as JSON: {situation, solution, trigger_keywords, ...}",
+    ),
+    context_interactive: bool = typer.Option(
+        False,
+        "--context-interactive",
+        "-ci",
+        help="Interactively prompt for structured context fields",
+    ),
 ):
     """Add a new knowledge entry.
 
@@ -493,6 +630,24 @@ def add(
     if not entry_content and not sys.stdin.isatty():
         entry_content = sys.stdin.read()
 
+    # Check context requirement based on config
+    # Context can be provided via --context, --context-json, or --context-interactive
+    cfg = get_config()
+    context_mode = cfg.smart_embeddings_context_mode
+    has_context = context or context_json or context_interactive
+    if not has_context:
+        if context_mode == "required":
+            console.print(
+                "[red]Error: --context is required[/red]\n"
+                "Set context_mode = \"optional\" in config.toml to disable this check."
+            )
+            raise typer.Exit(1)
+        elif context_mode == "recommended":
+            console.print(
+                "[yellow]⚠ Warning: --context not provided[/yellow]\n"
+                "[dim]Context helps AI verify suggestions. Use --context to add conversation context.[/dim]"
+            )
+
     # Create entry
     entry = Entry(
         id=generate_ulid(),
@@ -509,6 +664,77 @@ def add(
     db = get_db()
     db.add(entry)
 
+    # Handle structured context (--context-interactive or --context-json)
+    structured_ctx = None
+
+    if context_interactive:
+        # Interactive mode: prompt for each field
+        from rekall.context_extractor import extract_keywords, suggest_keywords
+
+        console.print("\n[bold cyan]Structured Context[/bold cyan]")
+        console.print("[dim]This helps find this entry later. Press Enter to skip optional fields.[/dim]\n")
+
+        situation = typer.prompt("Situation (what was the problem?)")
+        solution = typer.prompt("Solution (how was it resolved?)")
+
+        # Suggest keywords based on title + content
+        suggested = suggest_keywords(title, entry_content, max_suggestions=5)
+        if suggested:
+            console.print(f"[dim]Suggested keywords: {', '.join(suggested)}[/dim]")
+
+        keywords_input = typer.prompt(
+            "Keywords (comma-separated, or press Enter for auto-extract)",
+            default="",
+        )
+        if keywords_input.strip():
+            trigger_keywords = [k.strip() for k in keywords_input.split(",") if k.strip()]
+        else:
+            trigger_keywords = extract_keywords(title, f"{entry_content} {situation} {solution}")[:5]
+            console.print(f"[dim]Auto-extracted: {', '.join(trigger_keywords)}[/dim]")
+
+        what_failed = typer.prompt("What didn't work? (optional)", default="")
+
+        try:
+            structured_ctx = StructuredContext(
+                situation=situation,
+                solution=solution,
+                trigger_keywords=trigger_keywords,
+                what_failed=what_failed if what_failed else None,
+                extraction_method="hybrid" if not keywords_input.strip() else "manual",
+            )
+            db.store_structured_context(entry.id, structured_ctx)
+            context = f"Situation: {situation}\nSolution: {solution}"
+        except ValueError as e:
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1)
+
+    elif context_json:
+        import json as json_module
+        try:
+            ctx_data = json_module.loads(context_json)
+            structured_ctx = StructuredContext(
+                situation=ctx_data.get("situation", ""),
+                solution=ctx_data.get("solution", ""),
+                trigger_keywords=ctx_data.get("trigger_keywords", []),
+                what_failed=ctx_data.get("what_failed"),
+                conversation_excerpt=ctx_data.get("conversation_excerpt"),
+                files_modified=ctx_data.get("files_modified"),
+                error_messages=ctx_data.get("error_messages"),
+            )
+            db.store_structured_context(entry.id, structured_ctx)
+            # Also create legacy context for embeddings
+            context = f"Situation: {structured_ctx.situation}\nSolution: {structured_ctx.solution}"
+        except json_module.JSONDecodeError as e:
+            console.print(f"[red]Error: Invalid JSON in --context-json: {e}[/red]")
+            raise typer.Exit(1)
+        except ValueError as e:
+            console.print(f"[red]Error: Invalid structured context: {e}[/red]")
+            raise typer.Exit(1)
+
+    # Store compressed context if provided (for AI verification of suggestions)
+    if context:
+        db.store_context(entry.id, context)
+
     console.print(f"[green]✓[/green] Entry created: {entry.id}")
     console.print(f"  Type: {entry.type}")
     console.print(f"  Title: {entry.title}")
@@ -516,6 +742,45 @@ def add(
         console.print(f"  Tags: {', '.join(tag_list)}")
     if project:
         console.print(f"  Project: {project}")
+    if structured_ctx:
+        console.print(f"  [dim]Context: {len(structured_ctx.trigger_keywords)} keywords stored[/dim]")
+
+    # Calculate embeddings if enabled (cfg already loaded above)
+    if cfg.smart_embeddings_enabled:
+        from rekall.embeddings import get_embedding_service
+        from rekall.models import Embedding
+
+        service = get_embedding_service(
+            dimensions=cfg.smart_embeddings_dimensions,
+            similarity_threshold=cfg.smart_embeddings_similarity_threshold,
+        )
+
+        if service.available:
+            embeddings = service.calculate_for_entry(entry, context=context)
+
+            # Save summary embedding
+            if embeddings["summary"] is not None:
+                emb = Embedding.from_numpy(
+                    entry.id,
+                    "summary",
+                    embeddings["summary"],
+                    service.model_name,
+                )
+                db.add_embedding(emb)
+                console.print("  [dim]📊 Summary embedding calculated[/dim]")
+
+            # Save context embedding if provided
+            if embeddings["context"] is not None:
+                emb = Embedding.from_numpy(
+                    entry.id,
+                    "context",
+                    embeddings["context"],
+                    service.model_name,
+                )
+                db.add_embedding(emb)
+                console.print("  [dim]📊 Context embedding calculated[/dim]")
+        else:
+            console.print("  [dim yellow]⚠ Embeddings disabled (dependencies missing)[/dim yellow]")
 
 
 # ============================================================================
@@ -591,6 +856,13 @@ def show(
             panel_content.append(f" │ Last: {days_ago} days ago\n")
     else:
         panel_content.append("\n")
+
+    # Embedding status
+    embeddings_list = db.get_embeddings(entry.id)
+    if embeddings_list:
+        emb_types = [e.embedding_type for e in embeddings_list]
+        panel_content.append("Embeddings: ", style="bold")
+        panel_content.append(f"📊 {', '.join(emb_types)}\n")
 
     if entry.project:
         panel_content.append("Project: ", style="bold")
@@ -1187,6 +1459,12 @@ def link(
         "-t",
         help=f"Relation type: {', '.join(VALID_RELATION_TYPES)}",
     ),
+    reason: Optional[str] = typer.Option(
+        None,
+        "--reason",
+        "-r",
+        help="Justification for the link (why this relation type)",
+    ),
 ):
     """Create a link between two entries.
 
@@ -1195,7 +1473,7 @@ def link(
     Examples:
         rekall link 01HXYZ 01HABC                    # related (default)
         rekall link 01HXYZ 01HABC --type supersedes  # A replaces B
-        rekall link 01HXYZ 01HABC --type derived_from
+        rekall link 01HXYZ 01HABC --type derived_from --reason "B is a fix for bug A"
     """
     if relation_type not in VALID_RELATION_TYPES:
         console.print(
@@ -1207,8 +1485,11 @@ def link(
     db = get_db()
 
     try:
-        db.add_link(source_id, target_id, relation_type)
-        console.print(f"[green]✓[/green] Created link: {source_id[:12]}... → [{relation_type}] → {target_id[:12]}...")
+        db.add_link(source_id, target_id, relation_type, reason=reason)
+        output = f"[green]✓[/green] Created link: {source_id[:12]}... → [{relation_type}] → {target_id[:12]}..."
+        if reason:
+            output += f"\n  Reason: {reason}"
+        console.print(output)
     except ValueError as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1)
@@ -1860,6 +2141,584 @@ def restore(
         console.print(f"[red]Error: {e}[/red]")
         console.print("[dim]Current database unchanged.[/dim]")
         raise typer.Exit(1)
+
+
+# ============================================================================
+# Suggest Command (Smart Embeddings - Phase 5)
+# ============================================================================
+
+
+@app.command()
+def suggest(
+    accept: Optional[str] = typer.Option(
+        None,
+        "--accept",
+        "-a",
+        help="Accept suggestion by ID (creates link or shows generalize command)",
+    ),
+    reject: Optional[str] = typer.Option(
+        None,
+        "--reject",
+        "-r",
+        help="Reject suggestion by ID",
+    ),
+    suggestion_type: Optional[str] = typer.Option(
+        None,
+        "--type",
+        "-t",
+        help="Filter by type: link, generalize",
+    ),
+    limit: int = typer.Option(20, "--limit", "-l", help="Maximum suggestions to show"),
+):
+    """Manage smart embedding suggestions.
+
+    Lists pending suggestions (similar entries to link, entries to generalize).
+    Use --accept or --reject to process suggestions.
+
+    Examples:
+        rekall suggest                    # List pending suggestions
+        rekall suggest --type link        # Show link suggestions only
+        rekall suggest --accept ABC123    # Accept a suggestion
+        rekall suggest --reject ABC123    # Reject a suggestion
+    """
+    from rekall.models import VALID_SUGGESTION_TYPES
+
+    db = get_db()
+
+    # Accept a suggestion
+    if accept:
+        suggestion = db.get_suggestion(accept)
+        if suggestion is None:
+            console.print(f"[red]Suggestion not found: {accept}[/red]")
+            raise typer.Exit(1)
+
+        if suggestion.status != "pending":
+            console.print(f"[yellow]Suggestion already {suggestion.status}[/yellow]")
+            raise typer.Exit(1)
+
+        if suggestion.suggestion_type == "link":
+            # Create the link
+            if len(suggestion.entry_ids) >= 2:
+                source_id = suggestion.entry_ids[0]
+                target_id = suggestion.entry_ids[1]
+                try:
+                    db.add_link(source_id, target_id, "related")
+                    db.update_suggestion_status(accept, "accepted")
+                    console.print(f"[green]✓[/green] Link created: {source_id[:12]}... → {target_id[:12]}...")
+                except ValueError as e:
+                    console.print(f"[red]Error creating link: {e}[/red]")
+                    raise typer.Exit(1)
+        else:
+            # Generalize suggestion - show command to use
+            db.update_suggestion_status(accept, "accepted")
+            entry_ids_str = " ".join(suggestion.entry_ids)
+            console.print("[green]✓[/green] Suggestion accepted.")
+            console.print("\nTo generalize these entries, run:")
+            console.print(f"  [cyan]rekall generalize {entry_ids_str}[/cyan]")
+        return
+
+    # Reject a suggestion
+    if reject:
+        suggestion = db.get_suggestion(reject)
+        if suggestion is None:
+            console.print(f"[red]Suggestion not found: {reject}[/red]")
+            raise typer.Exit(1)
+
+        if suggestion.status != "pending":
+            console.print(f"[yellow]Suggestion already {suggestion.status}[/yellow]")
+            raise typer.Exit(1)
+
+        db.update_suggestion_status(reject, "rejected")
+        console.print(f"[green]✓[/green] Suggestion rejected: {reject[:12]}...")
+        return
+
+    # Validate type filter
+    if suggestion_type and suggestion_type not in VALID_SUGGESTION_TYPES:
+        console.print(
+            f"[red]Error: Invalid type '{suggestion_type}'[/red]\n"
+            f"Valid types: {', '.join(VALID_SUGGESTION_TYPES)}"
+        )
+        raise typer.Exit(1)
+
+    # List pending suggestions
+    suggestions = db.get_suggestions(status="pending", suggestion_type=suggestion_type, limit=limit)
+
+    if not suggestions:
+        console.print("[green]No pending suggestions.[/green]")
+        return
+
+    console.print(f"\n[bold]Pending Suggestions[/bold] ({len(suggestions)})\n")
+
+    # Group by type
+    link_suggestions = [s for s in suggestions if s.suggestion_type == "link"]
+    generalize_suggestions = [s for s in suggestions if s.suggestion_type == "generalize"]
+
+    if link_suggestions:
+        console.print("[bold cyan]Link Suggestions[/bold cyan]")
+        table = Table(show_header=True, header_style="bold", box=box.ROUNDED)
+        table.add_column("ID", style="dim", width=14)
+        table.add_column("Entries", min_width=40)
+        table.add_column("Score", justify="center", width=8)
+        table.add_column("Reason", width=30)
+
+        for s in link_suggestions:
+            # Get entry titles
+            entry_titles = []
+            for eid in s.entry_ids[:2]:
+                entry = db.get(eid, update_access=False)
+                if entry:
+                    entry_titles.append(f"{eid[:8]}... \"{entry.title[:20]}\"")
+            entries_str = " ↔ ".join(entry_titles)
+
+            table.add_row(
+                s.id[:14],
+                entries_str,
+                f"{s.score:.0%}",
+                (s.reason[:27] + "...") if len(s.reason) > 30 else s.reason,
+            )
+
+        console.print(table)
+        console.print()
+
+    if generalize_suggestions:
+        console.print("[bold cyan]Generalize Suggestions[/bold cyan]")
+        table = Table(show_header=True, header_style="bold", box=box.ROUNDED)
+        table.add_column("ID", style="dim", width=14)
+        table.add_column("Entries", min_width=40)
+        table.add_column("Count", justify="center", width=6)
+        table.add_column("Score", justify="center", width=8)
+
+        for s in generalize_suggestions:
+            # Get entry titles
+            entry_titles = []
+            for eid in s.entry_ids[:3]:
+                entry = db.get(eid, update_access=False)
+                if entry:
+                    entry_titles.append(f"\"{entry.title[:15]}\"")
+            entries_str = ", ".join(entry_titles)
+            if len(s.entry_ids) > 3:
+                entries_str += f" +{len(s.entry_ids) - 3}"
+
+            table.add_row(
+                s.id[:14],
+                entries_str,
+                str(len(s.entry_ids)),
+                f"{s.score:.0%}",
+            )
+
+        console.print(table)
+        console.print()
+
+    console.print("[dim]Use --accept ID or --reject ID to process suggestions[/dim]")
+
+
+# ============================================================================
+# Embeddings Command (Smart Embeddings - Phase 7)
+# ============================================================================
+
+
+@app.command()
+def embeddings(
+    migrate: bool = typer.Option(
+        False,
+        "--migrate",
+        help="Calculate embeddings for entries without them",
+    ),
+    status: bool = typer.Option(
+        False,
+        "--status",
+        "-s",
+        help="Show embedding status and statistics",
+    ),
+    limit: int = typer.Option(100, "--limit", "-l", help="Max entries to migrate"),
+):
+    """Manage smart embeddings.
+
+    View status or migrate existing entries to have embeddings.
+
+    Examples:
+        rekall embeddings --status         # Show embedding statistics
+        rekall embeddings --migrate        # Calculate missing embeddings
+        rekall embeddings --migrate -l 50  # Migrate max 50 entries
+    """
+    from rich.progress import Progress
+
+    cfg = get_config()
+    db = get_db()
+
+    if status:
+        # Show embedding status
+        total_entries = len(db.list_all(limit=100000))
+        total_embeddings = db.count_embeddings()
+        entries_without = len(db.get_entries_without_embeddings("summary"))
+
+        console.print("\n[bold]Embedding Status[/bold]\n")
+        console.print(f"  Enabled: {'[green]Yes[/green]' if cfg.smart_embeddings_enabled else '[yellow]No[/yellow]'}")
+        console.print(f"  Model: {cfg.smart_embeddings_model}")
+        console.print(f"  Dimensions: {cfg.smart_embeddings_dimensions}")
+        console.print(f"  Threshold: {cfg.smart_embeddings_similarity_threshold}")
+        console.print()
+        console.print(f"  Total entries: {total_entries}")
+        console.print(f"  Total embeddings: {total_embeddings}")
+        console.print(f"  Entries without embeddings: {entries_without}")
+
+        if entries_without > 0:
+            console.print("\n[dim]Run 'rekall embeddings --migrate' to calculate missing embeddings[/dim]")
+        return
+
+    if migrate:
+        if not cfg.smart_embeddings_enabled:
+            console.print("[yellow]Warning: smart_embeddings_enabled is False in config[/yellow]")
+            console.print("[dim]Embeddings will be calculated but not used for search[/dim]")
+            console.print()
+
+        from rekall.embeddings import get_embedding_service
+        from rekall.models import Embedding
+
+        service = get_embedding_service(
+            dimensions=cfg.smart_embeddings_dimensions,
+            similarity_threshold=cfg.smart_embeddings_similarity_threshold,
+        )
+
+        if not service.available:
+            console.print("[red]Error: Embedding dependencies not available[/red]")
+            console.print("[dim]Install with: pip install sentence-transformers numpy[/dim]")
+            raise typer.Exit(1)
+
+        entries = db.get_entries_without_embeddings("summary")[:limit]
+
+        if not entries:
+            console.print("[green]All entries already have embeddings.[/green]")
+            return
+
+        console.print(f"Calculating embeddings for {len(entries)} entries...")
+
+        with Progress() as progress:
+            task = progress.add_task("[cyan]Migrating...", total=len(entries))
+
+            for entry in entries:
+                embeddings_dict = service.calculate_for_entry(entry)
+
+                if embeddings_dict["summary"] is not None:
+                    emb = Embedding.from_numpy(
+                        entry.id,
+                        "summary",
+                        embeddings_dict["summary"],
+                        service.model_name,
+                    )
+                    db.add_embedding(emb)
+
+                progress.update(task, advance=1)
+
+        console.print(f"\n[green]✓[/green] Migrated {len(entries)} entries")
+
+        # Check if more remain
+        remaining = len(db.get_entries_without_embeddings("summary"))
+        if remaining > 0:
+            console.print(f"[dim]{remaining} entries still need embeddings[/dim]")
+        return
+
+    # Default: show help
+    console.print("Use [cyan]rekall embeddings --status[/cyan] to view statistics.")
+    console.print("Use [cyan]rekall embeddings --migrate[/cyan] to calculate missing embeddings.")
+
+
+# ============================================================================
+# Migrate Command (Feature 007 - Migration & Maintenance)
+# ============================================================================
+
+
+@app.command()
+def migrate(
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        "-n",
+        help="Preview migrations without applying them",
+    ),
+    enrich_context: bool = typer.Option(
+        False,
+        "--enrich-context",
+        help="Enrich legacy entries without structured context",
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Skip confirmation prompt",
+    ),
+):
+    """Apply pending database migrations.
+
+    Automatically creates a backup before applying migrations.
+    Use --dry-run to preview changes without modifying the database.
+    Use --enrich-context to add structured context to legacy entries.
+
+    Examples:
+        rekall migrate              # Apply pending migrations
+        rekall migrate --dry-run    # Preview without applying
+        rekall migrate --enrich-context  # Enrich legacy entries
+    """
+    from rekall.backup import create_backup
+    from rekall.db import CURRENT_SCHEMA_VERSION, MIGRATIONS, Database
+
+    config = get_config()
+
+    if not config.db_path.exists():
+        console.print("[yellow]No database found.[/yellow]")
+        console.print("Run [cyan]rekall init[/cyan] to create one.")
+        raise typer.Exit(1)
+
+    # Connect to get current version
+    db = Database(config.db_path)
+    db.conn = __import__("sqlite3").connect(str(config.db_path))
+    current_version = db.get_schema_version()
+
+    # Handle --enrich-context mode
+    if enrich_context:
+        from rekall.context_extractor import extract_keywords
+
+        db.init()  # Ensure full connection
+        entries = db.list_all(limit=100000)
+        legacy_entries = []
+
+        for entry in entries:
+            ctx = db.get_structured_context(entry.id)
+            if ctx is None:
+                legacy_entries.append(entry)
+
+        if not legacy_entries:
+            console.print("[green]All entries already have structured context.[/green]")
+            db.close()
+            return
+
+        console.print(f"Found [cyan]{len(legacy_entries)}[/cyan] entries without structured context.\n")
+
+        if dry_run:
+            console.print("[yellow]Dry run - showing first 5 entries:[/yellow]")
+            for entry in legacy_entries[:5]:
+                keywords = extract_keywords(entry.title, entry.content or "")[:5]
+                console.print(f"  • {entry.id[:12]}... \"{entry.title}\"")
+                console.print(f"    [dim]Keywords: {', '.join(keywords)}[/dim]")
+            if len(legacy_entries) > 5:
+                console.print(f"  [dim]... and {len(legacy_entries) - 5} more[/dim]")
+            db.close()
+            return
+
+        if not yes:
+            confirm = typer.confirm(f"Enrich {len(legacy_entries)} entries?")
+            if not confirm:
+                console.print("[yellow]Cancelled.[/yellow]")
+                db.close()
+                return
+
+        # Enrich entries
+        from rekall.models import StructuredContext
+
+        enriched = 0
+        for entry in legacy_entries:
+            keywords = extract_keywords(entry.title, entry.content or "")[:5]
+            if not keywords:
+                keywords = [entry.type]  # Fallback
+
+            # Generate basic situation/solution from content
+            content = entry.content or entry.title
+            situation = f"Context from: {entry.title}"
+            solution = content[:200] if len(content) > 200 else content
+
+            try:
+                ctx = StructuredContext(
+                    situation=situation,
+                    solution=solution,
+                    trigger_keywords=keywords,
+                    extraction_method="migrated",
+                )
+                db.store_structured_context(entry.id, ctx)
+                enriched += 1
+            except ValueError:
+                continue  # Skip invalid entries
+
+        console.print(f"[green]✓[/green] Enriched {enriched} entries with structured context.")
+        db.close()
+        return
+
+    # Schema migrations
+    pending_versions = [v for v in sorted(MIGRATIONS.keys()) if v > current_version]
+
+    if not pending_versions:
+        console.print(f"[green]Database schema is current (v{current_version}).[/green]")
+        db.close()
+        return
+
+    console.print(f"Current schema: v{current_version}")
+    console.print(f"Target schema: v{CURRENT_SCHEMA_VERSION}")
+    console.print(f"Pending migrations: {len(pending_versions)}\n")
+
+    # Show migration details
+    for version in pending_versions:
+        statements = MIGRATIONS[version]
+        console.print(f"[bold]Migration v{version}:[/bold]")
+        for stmt in statements[:3]:  # Show first 3 statements
+            # Truncate long statements
+            preview = stmt.strip()[:60]
+            if len(stmt.strip()) > 60:
+                preview += "..."
+            console.print(f"  [dim]{preview}[/dim]")
+        if len(statements) > 3:
+            console.print(f"  [dim]... and {len(statements) - 3} more statements[/dim]")
+        console.print()
+
+    if dry_run:
+        console.print("[yellow]Dry run - no changes made.[/yellow]")
+        db.close()
+        return
+
+    # Confirmation
+    if not yes:
+        confirm = typer.confirm("Apply migrations?")
+        if not confirm:
+            console.print("[yellow]Migration cancelled.[/yellow]")
+            db.close()
+            return
+
+    # Create backup before migration
+    console.print("[cyan]Creating backup before migration...[/cyan]")
+    try:
+        backup_info = create_backup(config.db_path)
+        console.print(f"  Backup: {backup_info.path}")
+    except Exception as e:
+        console.print(f"[red]Backup failed: {e}[/red]")
+        console.print("[yellow]Migration aborted for safety.[/yellow]")
+        db.close()
+        raise typer.Exit(1)
+
+    # Apply migrations
+    db.close()
+    db = Database(config.db_path)
+    try:
+        db.init()  # This applies migrations
+        new_version = db.get_schema_version()
+        console.print(f"\n[green]✓[/green] Migrated from v{current_version} to v{new_version}")
+
+        # If migrating to v7+, also migrate context data to compressed format
+        if new_version >= 7 and current_version < 7:
+            pending_data = db.count_entries_without_context_blob()
+            if pending_data > 0:
+                console.print(f"\n[cyan]Migrating {pending_data} entries to compressed format...[/cyan]")
+                migrated, keywords = db.migrate_to_compressed_context()
+                console.print(f"[green]✓[/green] Compressed {migrated} entries, indexed {keywords} keywords")
+    except Exception as e:
+        console.print(f"[red]Migration failed: {e}[/red]")
+        console.print(f"[yellow]Restore from backup: {backup_info.path}[/yellow]")
+        raise typer.Exit(1)
+    finally:
+        db.close()
+
+
+# ============================================================================
+# Changelog Command (Feature 007 - Migration & Maintenance)
+# ============================================================================
+
+
+@app.command()
+def changelog(
+    version_filter: Optional[str] = typer.Argument(
+        None,
+        help="Show changes for specific version (e.g., '0.2.0')",
+    ),
+):
+    """Display changelog and version history.
+
+    Shows changes by version from the CHANGELOG.md file.
+
+    Examples:
+        rekall changelog          # Show full changelog
+        rekall changelog 0.2.0    # Show changes for v0.2.0
+    """
+    # Find CHANGELOG.md
+    changelog_paths = [
+        Path(__file__).parent.parent / "CHANGELOG.md",  # In package root
+        Path(__file__).parent / "CHANGELOG.md",  # In rekall/
+        Path.cwd() / "CHANGELOG.md",  # In current directory
+    ]
+
+    changelog_path = None
+    for path in changelog_paths:
+        if path.exists():
+            changelog_path = path
+            break
+
+    if changelog_path is None:
+        console.print("[yellow]CHANGELOG.md not found.[/yellow]")
+        console.print("[dim]Create one at project root to enable this command.[/dim]")
+        raise typer.Exit(1)
+
+    content = changelog_path.read_text()
+
+    if version_filter:
+        # Extract specific version section
+        import re
+
+        # Match version header (## [0.2.0] or ## 0.2.0)
+        pattern = rf"##\s*\[?{re.escape(version_filter)}\]?.*?\n(.*?)(?=##\s*\[?\d|\Z)"
+        match = re.search(pattern, content, re.DOTALL)
+
+        if match:
+            console.print(f"[bold cyan]Changelog v{version_filter}[/bold cyan]\n")
+            console.print(match.group(1).strip())
+        else:
+            console.print(f"[yellow]Version {version_filter} not found in changelog.[/yellow]")
+            raise typer.Exit(1)
+    else:
+        # Show full changelog with Rich formatting
+        from rich.markdown import Markdown
+
+        md = Markdown(content)
+        console.print(md)
+
+
+# ============================================================================
+# MCP Server Command (Smart Embeddings - Phase 6)
+# ============================================================================
+
+
+@app.command("mcp-server")
+def mcp_server():
+    """Start the MCP (Model Context Protocol) server.
+
+    Provides AI agent tools for interacting with Rekall:
+    - rekall_help: Usage guide
+    - rekall_search: Search knowledge base
+    - rekall_show: Get entry details
+    - rekall_add: Add new entries
+    - rekall_link: Link entries
+    - rekall_suggest: Get suggestions
+
+    Configure in Claude Desktop or other MCP clients:
+        {
+            "mcpServers": {
+                "rekall": {
+                    "command": "rekall",
+                    "args": ["mcp-server"]
+                }
+            }
+        }
+
+    Examples:
+        rekall mcp-server
+    """
+    import asyncio
+
+    from rekall.mcp_server import MCPNotAvailable, run_server
+
+    try:
+        asyncio.run(run_server())
+    except MCPNotAvailable as e:
+        console.print(f"[red]Error: {e}[/red]")
+        console.print("[dim]Install with: pip install mcp[/dim]")
+        raise typer.Exit(1)
+    except KeyboardInterrupt:
+        console.print("\n[yellow]MCP server stopped.[/yellow]")
 
 
 if __name__ == "__main__":
