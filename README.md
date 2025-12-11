@@ -142,7 +142,7 @@ When you solve something, related knowledge surfaces automatically. Fixed a time
         ▼            ▼            ▼
   ┌──────────┐ ┌──────────┐ ┌──────────┐
   │ DB #47   │ │ API #52  │ │ Cache #61│
-  │ (2 weeks)│ │ (1 month)│ │ (3 months)│
+  │ (2 weeks)│ │ (1 month)│ │(3 months)│
   └────┬─────┘ └────┬─────┘ └──────────┘
        └──────┬─────┘
               ▼
@@ -525,14 +525,14 @@ You've fixed 5 different "timeout" bugs. How do you find the right one later? Ke
 Rekall captures **structured context** for each entry:
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  situation        │  "API calls timeout after deploy"       │
-│  solution         │  "Increased connection pool size"       │
-│  what_failed      │  "Retry logic didn't help"              │
+┌──────────────────────────────────────────────────────────────┐
+│  situation        │  "API calls timeout after deploy"        │
+│  solution         │  "Increased connection pool size"        │
+│  what_failed      │  "Retry logic didn't help"               │
 │  trigger_keywords │  ["timeout", "deploy", "connection pool"]│
-│  error_messages   │  "ETIMEDOUT after 30s"                  │
-│  files_modified   │  ["config/database.yml"]                │
-└─────────────────────────────────────────────────────────────┘
+│  error_messages   │  "ETIMEDOUT after 30s"                   │
+│  files_modified   │  ["config/database.yml"]                 │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 When you search, Rekall uses this context to disambiguate:
@@ -554,14 +554,14 @@ rekall add bug "Timeout in prod" --context-interactive
 Context can be verbose. Rekall compresses structured context with zlib and maintains a separate keywords index for fast searching:
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    ENTRY STORAGE                            │
-├─────────────────────────────────────────────────────────────┤
+┌───────────────────────────────────────────────────────────────┐
+│                    ENTRY STORAGE                              │
+├───────────────────────────────────────────────────────────────┤
 │  context_blob     │  Compressed JSON (zlib)    │  ~70% smaller│
 │  context_keywords │  Indexed table for search  │  O(1) lookup │
 │  emb_summary      │  768-dim vector (summary)  │  Semantic    │
 │  emb_context      │  768-dim vector (context)  │  Semantic    │
-└─────────────────────────────────────────────────────────────┘
+└───────────────────────────────────────────────────────────────┘
 ```
 
 The result: **exhaustive** search (nothing is missed) with **speed** (sub-second responses on thousands of entries).
