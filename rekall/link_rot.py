@@ -127,7 +127,7 @@ class LinkRotChecker:
         return self.check_url_accessibility(url)
 
 
-def verify_sources(db: "Database", limit: int = 100) -> dict:
+def verify_sources(db: Database, limit: int = 100) -> dict:
     """Verify accessibility of sources and update their status.
 
     Args:

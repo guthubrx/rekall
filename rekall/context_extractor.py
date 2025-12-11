@@ -6,7 +6,6 @@ Provides automatic extraction of keywords and validation of structured context.
 from __future__ import annotations
 
 import re
-from typing import Optional
 
 # Common stopwords to exclude from keyword extraction
 STOPWORDS = {
@@ -26,12 +25,11 @@ STOPWORDS = {
     # French (common in codebase)
     "le", "la", "les", "un", "une", "des", "du", "de", "et", "ou",
     "mais", "donc", "car", "ni", "dans", "sur", "pour", "avec", "par",
-    "est", "sont", "a", "ont", "fait", "faire", "ce", "cette", "ces",
+    "est", "sont", "ont", "fait", "faire", "ce", "cette", "ces",
     "il", "elle", "nous", "vous", "ils", "elles", "qui", "que", "quoi",
     "je", "tu", "mon", "ton", "son", "notre", "votre", "leur",
     # Programming common words
-    "function", "method", "class", "def", "return", "import", "from",
-    "var", "let", "const", "new", "true", "false", "null", "none",
+    "function", "method", "class", "def", "return", "import", "var", "let", "const", "new", "true", "false", "null", "none",
     "value", "data", "result", "output", "input", "file", "line",
 }
 
@@ -194,7 +192,7 @@ def validate_context(
 def suggest_keywords(
     title: str,
     content: str = "",
-    existing_keywords: Optional[list[str]] = None,
+    existing_keywords: list[str] | None = None,
     max_suggestions: int = 5,
 ) -> list[str]:
     """Suggest additional keywords based on title and content.

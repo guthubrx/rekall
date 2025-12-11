@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 class ClusterAnalysis:
     """Analysis of a cluster of similar entries."""
 
-    entries: list["Entry"]
+    entries: list[Entry]
     common_keywords: list[str]
     keyword_frequency: dict[str, int]
     suggested_title: str
@@ -28,8 +28,8 @@ class ClusterAnalysis:
 
 
 def analyze_cluster(
-    entries: list["Entry"],
-    db: "Database",
+    entries: list[Entry],
+    db: Database,
 ) -> ClusterAnalysis:
     """Analyze a cluster of similar entries for consolidation patterns.
 
@@ -45,7 +45,7 @@ def analyze_cluster(
     """
     # Collect all keywords from structured contexts
     all_keywords: list[str] = []
-    contexts: list[tuple["Entry", "StructuredContext"]] = []
+    contexts: list[tuple[Entry, StructuredContext]] = []
 
     for entry in entries:
         ctx = db.get_structured_context(entry.id)
@@ -84,7 +84,7 @@ def analyze_cluster(
     )
 
 
-def _generate_title(keywords: list[str], entries: list["Entry"]) -> str:
+def _generate_title(keywords: list[str], entries: list[Entry]) -> str:
     """Generate a suggested title for consolidated entry.
 
     Args:
@@ -114,8 +114,8 @@ def _generate_title(keywords: list[str], entries: list["Entry"]) -> str:
 
 
 def _calculate_consolidation_score(
-    entries: list["Entry"],
-    contexts: list[tuple["Entry", "StructuredContext"]],
+    entries: list[Entry],
+    contexts: list[tuple[Entry, StructuredContext]],
     common_keywords: list[str],
     keyword_freq: dict[str, int],
 ) -> float:
@@ -160,7 +160,7 @@ def _calculate_consolidation_score(
 
 
 def find_consolidation_opportunities(
-    db: "Database",
+    db: Database,
     min_cluster_size: int = 2,
     min_score: float = 0.5,
 ) -> list[ClusterAnalysis]:
@@ -184,7 +184,7 @@ def find_consolidation_opportunities(
         return []
 
     # Build keyword -> entries index
-    keyword_index: dict[str, list[tuple["Entry", "StructuredContext"]]] = {}
+    keyword_index: dict[str, list[tuple[Entry, StructuredContext]]] = {}
     for entry, ctx in entries_with_ctx:
         if ctx and ctx.trigger_keywords:
             for kw in ctx.trigger_keywords:
@@ -195,7 +195,7 @@ def find_consolidation_opportunities(
 
     # Find clusters by keyword overlap
     used_ids: set[str] = set()
-    clusters: list[list["Entry"]] = []
+    clusters: list[list[Entry]] = []
 
     # Process keywords by frequency (most connected first)
     sorted_keywords = sorted(
@@ -237,8 +237,8 @@ def find_consolidation_opportunities(
 
 
 def _shares_multiple_keywords(
-    entries: list["Entry"],
-    db: "Database",
+    entries: list[Entry],
+    db: Database,
     min_shared: int = 2,
 ) -> bool:
     """Check if entries share at least min_shared keywords.
@@ -276,7 +276,7 @@ def _shares_multiple_keywords(
 
 def generate_consolidation_summary(
     analysis: ClusterAnalysis,
-    db: "Database",
+    db: Database,
 ) -> str:
     """Generate a human-readable consolidation summary.
 

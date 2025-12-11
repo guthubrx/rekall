@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
 
 from rich import box
 from rich.console import Console
@@ -290,7 +289,7 @@ class RekallMenuApp(App):
         Binding("escape", "cancel", "Back"),
     ]
 
-    def __init__(self, menu_items: List[tuple], banner_lines: List[str], subtitle: str, quote: str):
+    def __init__(self, menu_items: list[tuple], banner_lines: list[str], subtitle: str, quote: str):
         super().__init__()
         self.menu_items = menu_items
         self.banner_lines = banner_lines
@@ -430,7 +429,7 @@ class SimpleMenuApp(App):
         Binding("q", "cancel", "Back", show=False),
     ]
 
-    def __init__(self, title: str, items: List[str], notification: str = ""):
+    def __init__(self, title: str, items: list[str], notification: str = ""):
         super().__init__()
         self.title_text = title
         self.items = items
@@ -564,7 +563,7 @@ class MultiSelectApp(App):
         Binding("enter", "confirm", "Confirm", show=True),
     ]
 
-    def __init__(self, title: str, items: List[tuple], hint: str = ""):
+    def __init__(self, title: str, items: list[tuple], hint: str = ""):
         """
         Args:
             title: Menu title
@@ -575,7 +574,7 @@ class MultiSelectApp(App):
         self.title_text = title
         self.items = items  # [(value, label), ...]
         self.hint = hint
-        self.result: Optional[List] = None
+        self.result: list | None = None
 
     def compose(self) -> ComposeResult:
         yield create_banner_container()
@@ -1033,22 +1032,21 @@ class BrowseApp(App):
         if graph_modal.has_class("visible"):
             graph_modal.remove_class("visible")
             self.graph_nav_ids = []
+        # Generate graph for selected entry
+        elif self.selected_entry:
+            result = self.db.render_graph_ascii(
+                self.selected_entry.id,
+                max_depth=2,
+                show_incoming=True,
+                show_outgoing=True,
+                make_clickable=True,
+            )
+            graph_output, self.graph_nav_ids = result
+            graph_content = self.query_one("#graph-content", Static)
+            graph_content.update(graph_output)
+            graph_modal.add_class("visible")
         else:
-            # Generate graph for selected entry
-            if self.selected_entry:
-                result = self.db.render_graph_ascii(
-                    self.selected_entry.id,
-                    max_depth=2,
-                    show_incoming=True,
-                    show_outgoing=True,
-                    make_clickable=True,
-                )
-                graph_output, self.graph_nav_ids = result
-                graph_content = self.query_one("#graph-content", Static)
-                graph_content.update(graph_output)
-                graph_modal.add_class("visible")
-            else:
-                self.show_left_notify("Aucune entrée sélectionnée", 2.0)
+            self.show_left_notify("Aucune entrée sélectionnée", 2.0)
 
     def action_graph_nav(self, index: int) -> None:
         """Navigate to entry by number key (1-9) when graph is visible."""
@@ -1304,12 +1302,11 @@ class BrowseApp(App):
                     content_widget.update(f"**[CONTEXTE]**\n\n{context}")
                 else:
                     content_widget.update("*Pas de contexte stocké pour cette entrée*")
+        # Show normal content
+        elif entry.content:
+            content_widget.update(entry.content)
         else:
-            # Show normal content
-            if entry.content:
-                content_widget.update(entry.content)
-            else:
-                content_widget.update(f"*{t('browse.no_content')}*")
+            content_widget.update(f"*{t('browse.no_content')}*")
 
     def action_preview_content(self) -> None:
         """Toggle preview mode (< or >)."""
@@ -1882,7 +1879,7 @@ class IDEStatusApp(App):
         table.add_column("Global", width=8, key="global")
 
         # Add rows with IDE name as key
-        for name, desc, local_target, global_target in self.ide_data:
+        for name, desc, _local_target, _global_target in self.ide_data:
             st = self.status.get(name, {})
 
             # Local status
@@ -2522,7 +2519,7 @@ class SpeckitApp(App):
 
 
 # Database instance
-_db: Optional[Database] = None
+_db: Database | None = None
 
 
 def get_db() -> Database:
@@ -2870,7 +2867,7 @@ class EscapePressed(Exception):
     pass
 
 
-def prompt_input(label: str, required: bool = True) -> Optional[str]:
+def prompt_input(label: str, required: bool = True) -> str | None:
     """Prompt user for text input. Returns None if Escape pressed."""
     from prompt_toolkit.key_binding import KeyBindings
     from prompt_toolkit.shortcuts import PromptSession
@@ -3267,7 +3264,7 @@ def _ide_integration_submenu():
         local_not_installed = 0
         global_not_installed = 0
 
-        for name, desc, local_target, global_target in filtered:
+        for name, _desc, _local_target, _global_target in filtered:
             st = status.get(name, {})
             if st.get("local"):
                 local_installed += 1
@@ -3771,7 +3768,7 @@ def _show_source_backlinks(db, source):
         return
 
     menu_options = []
-    for entry, entry_source in backlinks:
+    for entry, _entry_source in backlinks:
         type_short = entry.type[:3].upper()
         menu_options.append(f"  [{type_short}] {entry.title[:40]}")
 
@@ -4650,7 +4647,7 @@ def _install_mcp_config(cli_config: dict) -> str:
         existing_config = {}
         if file_path.exists():
             try:
-                with open(file_path, "r", encoding="utf-8") as f:
+                with open(file_path, encoding="utf-8") as f:
                     content = f.read().strip()
                     if content:
                         existing_config = json.loads(content)
@@ -4719,7 +4716,7 @@ def _install_mcp_config(cli_config: dict) -> str:
             f.write(merged_json + "\n")
 
         # Final validation - re-read and parse
-        with open(file_path, "r", encoding="utf-8") as f:
+        with open(file_path, encoding="utf-8") as f:
             json.loads(f.read())
 
         # Success - remove backup if it was just created and file was empty
@@ -5809,7 +5806,7 @@ def run_tui():
 
         result = app.run()
 
-        if result is None or result == "__quit__" or result == "quit":
+        if result is None or result in {"__quit__", "quit"}:
             # Escape, Q, or Quit selected
             break
 

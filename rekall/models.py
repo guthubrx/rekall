@@ -7,7 +7,7 @@ import secrets
 import time
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import TYPE_CHECKING, Literal, Optional
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     import numpy as np
@@ -63,19 +63,19 @@ class Entry:
     title: str
     type: EntryType
     content: str = ""
-    project: Optional[str] = None
+    project: str | None = None
     tags: list[str] = field(default_factory=list)
     confidence: int = 2
     status: EntryStatus = "active"
-    superseded_by: Optional[str] = None
+    superseded_by: str | None = None
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
     # Cognitive memory fields
     memory_type: MemoryType = "episodic"
-    last_accessed: Optional[datetime] = None
+    last_accessed: datetime | None = None
     access_count: int = 0
     consolidation_score: float = 0.0
-    next_review: Optional[date] = None
+    next_review: date | None = None
     review_interval: int = 1
     ease_factor: float = 2.5
 
@@ -107,7 +107,7 @@ class Link:
     target_id: str
     relation_type: RelationType
     created_at: datetime = field(default_factory=datetime.now)
-    reason: Optional[str] = None  # Justification for the link (helps AI understand intent)
+    reason: str | None = None  # Justification for the link (helps AI understand intent)
 
     def __post_init__(self):
         """Validate link fields after initialization."""
@@ -192,7 +192,7 @@ class Embedding:
                 f"Valid: {VALID_EMBEDDING_DIMENSIONS}"
             )
 
-    def to_numpy(self) -> "np.ndarray":
+    def to_numpy(self) -> np.ndarray:
         """Deserialize vector bytes to numpy array.
 
         Returns:
@@ -207,9 +207,9 @@ class Embedding:
         cls,
         entry_id: str,
         embedding_type: EmbeddingType,
-        array: "np.ndarray",
+        array: np.ndarray,
         model_name: str,
-    ) -> "Embedding":
+    ) -> Embedding:
         """Create Embedding from numpy array.
 
         Args:
@@ -248,7 +248,7 @@ class Suggestion:
     reason: str = ""
     status: SuggestionStatus = "pending"
     created_at: datetime = field(default_factory=datetime.now)
-    resolved_at: Optional[datetime] = None
+    resolved_at: datetime | None = None
 
     def __post_init__(self):
         """Validate suggestion fields after initialization."""
@@ -280,7 +280,7 @@ class Suggestion:
         return json.dumps(self.entry_ids)
 
     @classmethod
-    def from_row(cls, row: dict) -> "Suggestion":
+    def from_row(cls, row: dict) -> Suggestion:
         """Create Suggestion from database row.
 
         Args:
@@ -340,13 +340,13 @@ class Source:
 
     id: str = ""
     domain: str = ""  # Normalized domain (e.g., "pinecone.io")
-    url_pattern: Optional[str] = None  # URL pattern (e.g., "https://pinecone.io/*")
+    url_pattern: str | None = None  # URL pattern (e.g., "https://pinecone.io/*")
     usage_count: int = 0
-    last_used: Optional[datetime] = None
+    last_used: datetime | None = None
     personal_score: float = 50.0  # Score 0-100
     reliability: SourceReliability = "B"  # A/B/C (Admiralty simplified)
     decay_rate: SourceDecayRate = "medium"  # fast/medium/slow
-    last_verified: Optional[datetime] = None  # Link rot check
+    last_verified: datetime | None = None  # Link rot check
     status: SourceStatus = "active"  # active/inaccessible/archived
     created_at: datetime = field(default_factory=datetime.now)
 
@@ -383,14 +383,14 @@ class EntrySource:
 
     id: str = ""
     entry_id: str = ""
-    source_id: Optional[str] = None  # NULL if URL not curated
+    source_id: str | None = None  # NULL if URL not curated
     source_type: SourceType = "url"  # theme/url/file
     source_ref: str = ""  # Actual reference (theme name, URL, file path)
-    note: Optional[str] = None  # Contextual note (e.g., "Section on chunking")
+    note: str | None = None  # Contextual note (e.g., "Section on chunking")
     created_at: datetime = field(default_factory=datetime.now)
 
     # Joined data (not persisted)
-    source: Optional[Source] = None
+    source: Source | None = None
 
     def __post_init__(self):
         """Validate entry_source fields after initialization."""
@@ -416,10 +416,10 @@ class StructuredContext:
     trigger_keywords: list[str]  # Mots-clés pour retrouver
 
     # Champs optionnels
-    what_failed: Optional[str] = None  # Ce qui n'a pas marché
-    conversation_excerpt: Optional[str] = None  # Extrait conversation
-    files_modified: Optional[list[str]] = None  # Fichiers touchés
-    error_messages: Optional[list[str]] = None  # Erreurs rencontrées
+    what_failed: str | None = None  # Ce qui n'a pas marché
+    conversation_excerpt: str | None = None  # Extrait conversation
+    files_modified: list[str] | None = None  # Fichiers touchés
+    error_messages: list[str] | None = None  # Erreurs rencontrées
 
     # Méta
     created_at: datetime = field(default_factory=datetime.now)
@@ -459,7 +459,7 @@ class StructuredContext:
         return json.dumps(self.to_dict())
 
     @classmethod
-    def from_dict(cls, data: dict) -> "StructuredContext":
+    def from_dict(cls, data: dict) -> StructuredContext:
         """Créer depuis un dictionnaire."""
         return cls(
             situation=data["situation"],
@@ -478,7 +478,7 @@ class StructuredContext:
         )
 
     @classmethod
-    def from_json(cls, data: str | dict) -> "StructuredContext":
+    def from_json(cls, data: str | dict) -> StructuredContext:
         """Désérialiser depuis JSON."""
         import json
 

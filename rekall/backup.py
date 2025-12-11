@@ -11,7 +11,6 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 from rekall.db import CURRENT_SCHEMA_VERSION
 
@@ -116,7 +115,7 @@ def validate_backup(backup_path: Path) -> bool:
 
 def create_backup(
     db_path: Path,
-    output: Optional[Path] = None,
+    output: Path | None = None,
 ) -> BackupInfo:
     """Create a backup of the database.
 
@@ -171,7 +170,7 @@ def restore_backup(
     backup_path: Path,
     db_path: Path,
     create_safety_backup: bool = True,
-) -> tuple[bool, Optional[BackupInfo]]:
+) -> tuple[bool, BackupInfo | None]:
     """Restore database from a backup.
 
     Args:
@@ -193,7 +192,7 @@ def restore_backup(
     if not validate_backup(backup_path):
         raise ValueError("Invalid backup file (integrity check failed)")
 
-    safety_backup: Optional[BackupInfo] = None
+    safety_backup: BackupInfo | None = None
 
     # Create safety backup of current database
     if create_safety_backup and db_path.exists():
@@ -229,7 +228,7 @@ def restore_backup(
     return True, safety_backup
 
 
-def list_backups(backups_dir: Optional[Path] = None) -> list[BackupInfo]:
+def list_backups(backups_dir: Path | None = None) -> list[BackupInfo]:
     """List all available backups.
 
     Args:
@@ -261,7 +260,7 @@ def list_backups(backups_dir: Optional[Path] = None) -> list[BackupInfo]:
     return backups
 
 
-def get_database_stats(db_path: Path) -> Optional[DatabaseStats]:
+def get_database_stats(db_path: Path) -> DatabaseStats | None:
     """Get statistics about the database.
 
     Args:

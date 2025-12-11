@@ -79,7 +79,7 @@ When citing entries: [Title](rekall://entry_id)
 """
 
 
-def get_db() -> "Database":
+def get_db() -> Database:
     """Get database instance for MCP server."""
     from rekall.config import get_config
     from rekall.db import Database
@@ -391,7 +391,7 @@ async def _handle_search(args: dict) -> list:
 
         # Format results
         output = []
-        for entry, score, sem_score, matched_kws in results:
+        for entry, _score, sem_score, matched_kws in results:
             snippet = (entry.content or "")[:100] + "..." if entry.content else ""
             # Build relevance info string
             info_parts = []

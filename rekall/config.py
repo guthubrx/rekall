@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 # TOML support: use stdlib tomllib in Python 3.11+, fallback to tomli
 try:
@@ -13,6 +13,7 @@ except ImportError:
     import tomli as tomllib
 
 from rekall.paths import PathResolver, ResolvedPaths
+from rekall.utils import secure_file_permissions
 
 
 def _default_paths() -> ResolvedPaths:
@@ -25,12 +26,12 @@ class Config:
     """Rekall configuration settings."""
 
     paths: ResolvedPaths = field(default_factory=_default_paths)
-    editor: Optional[str] = None
-    default_project: Optional[str] = None
+    editor: str | None = None
+    default_project: str | None = None
 
     # Legacy embedding settings (external providers)
-    embeddings_provider: Optional[str] = None  # ollama | openai
-    embeddings_model: Optional[str] = None  # e.g., nomic-embed-text
+    embeddings_provider: str | None = None  # ollama | openai
+    embeddings_model: str | None = None  # e.g., nomic-embed-text
 
     # Smart embeddings settings (local EmbeddingGemma)
     smart_embeddings_enabled: bool = False  # Enable semantic features
@@ -62,12 +63,12 @@ class Config:
 
 
 # Global config instance
-_config: Optional[Config] = None
+_config: Config | None = None
 
 
 def get_config(
-    cli_db_path: Optional[Path] = None,
-    cli_config_path: Optional[Path] = None,
+    cli_db_path: Path | None = None,
+    cli_config_path: Path | None = None,
     force_global: bool = False,
 ) -> Config:
     """Get the global configuration instance.
@@ -162,6 +163,8 @@ def save_config_to_toml(config_dir: Path, updates: dict[str, Any]) -> bool:
                 lines.append(_format_toml_value(key, value))
 
         config_file.write_text("\n".join(lines).strip() + "\n")
+        # Secure file permissions (rw------- for sensitive config)
+        secure_file_permissions(config_file)
         return True
     except Exception:
         return False

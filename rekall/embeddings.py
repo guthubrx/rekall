@@ -12,7 +12,7 @@ The embedding model is loaded lazily on first use to avoid startup overhead.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import numpy as np
@@ -59,8 +59,8 @@ class EmbeddingService:
         self.dimensions = dimensions
         self.similarity_threshold = similarity_threshold
         self._model = None
-        self._available: Optional[bool] = None
-        self._model_dimensions: Optional[int] = None
+        self._available: bool | None = None
+        self._model_dimensions: int | None = None
 
     @property
     def available(self) -> bool:
@@ -152,7 +152,7 @@ class EmbeddingService:
         )
         return text[:max_chars]
 
-    def _apply_matryoshka(self, vector: "np.ndarray") -> "np.ndarray":
+    def _apply_matryoshka(self, vector: np.ndarray) -> np.ndarray:
         """Apply Matryoshka dimension reduction and re-normalize.
 
         Args:
@@ -176,7 +176,7 @@ class EmbeddingService:
 
         return truncated
 
-    def calculate(self, text: str) -> Optional["np.ndarray"]:
+    def calculate(self, text: str) -> np.ndarray | None:
         """Calculate embedding vector for text.
 
         Args:
@@ -221,9 +221,9 @@ class EmbeddingService:
 
     def calculate_for_entry(
         self,
-        entry: "Entry",
-        context: Optional[str] = None,
-    ) -> dict[str, Optional["np.ndarray"]]:
+        entry: Entry,
+        context: str | None = None,
+    ) -> dict[str, np.ndarray | None]:
         """Calculate embeddings for an entry (summary and optional context).
 
         Args:
@@ -256,10 +256,10 @@ class EmbeddingService:
     def find_similar(
         self,
         entry_id: str,
-        db: "Database",
-        threshold: Optional[float] = None,
+        db: Database,
+        threshold: float | None = None,
         limit: int = 10,
-    ) -> list[tuple["Entry", float]]:
+    ) -> list[tuple[Entry, float]]:
         """Find entries similar to the given entry.
 
         Args:
@@ -305,7 +305,7 @@ class EmbeddingService:
         results = results[:limit]
 
         # Fetch full entries
-        similar_entries: list[tuple["Entry", float]] = []
+        similar_entries: list[tuple[Entry, float]] = []
         for eid, score in results:
             entry = db.get(eid, update_access=False)
             if entry:
@@ -316,11 +316,11 @@ class EmbeddingService:
     def semantic_search(
         self,
         query: str,
-        db: "Database",
-        context: Optional[str] = None,
+        db: Database,
+        context: str | None = None,
         threshold: float = 0.0,
         limit: int = 20,
-    ) -> list[tuple["Entry", float]]:
+    ) -> list[tuple[Entry, float]]:
         """Search entries by semantic similarity to query.
 
         Args:
@@ -362,7 +362,7 @@ class EmbeddingService:
         results = results[:limit]
 
         # Fetch full entries
-        similar_entries: list[tuple["Entry", float]] = []
+        similar_entries: list[tuple[Entry, float]] = []
         for eid, score in results:
             entry = db.get(eid, update_access=False)
             if entry:
@@ -373,16 +373,16 @@ class EmbeddingService:
     def hybrid_search(
         self,
         query: str,
-        db: "Database",
-        context: Optional[str] = None,
+        db: Database,
+        context: str | None = None,
         limit: int = 20,
         fts_weight: float = 0.5,
         semantic_weight: float = 0.3,
         keyword_weight: float = 0.2,
-        entry_type: Optional[str] = None,
-        project: Optional[str] = None,
-        memory_type: Optional[str] = None,
-    ) -> list[tuple["Entry", float, Optional[float], list[str]]]:
+        entry_type: str | None = None,
+        project: str | None = None,
+        memory_type: str | None = None,
+    ) -> list[tuple[Entry, float, float | None, list[str]]]:
         """Hybrid search combining FTS, semantic similarity, and keyword matching.
 
         Uses three scoring components:
@@ -462,7 +462,7 @@ class EmbeddingService:
             | set(semantic_scores.keys())
             | set(keyword_scores.keys())
         )
-        combined: list[tuple[str, float, Optional[float], list[str]]] = []
+        combined: list[tuple[str, float, float | None, list[str]]] = []
 
         for entry_id in all_entry_ids:
             fts_score = fts_scores.get(entry_id, 0.0)
@@ -489,7 +489,7 @@ class EmbeddingService:
         combined.sort(key=lambda x: x[1], reverse=True)
 
         # Limit and fetch entries
-        results: list[tuple["Entry", float, Optional[float], list[str]]] = []
+        results: list[tuple[Entry, float, float | None, list[str]]] = []
         for entry_id, final_score, sem_score, matched_kws in combined[:limit]:
             # Check filters if entry came from semantic only
             entry = db.get(entry_id, update_access=False)
@@ -508,10 +508,10 @@ class EmbeddingService:
 
     def find_generalization_candidates(
         self,
-        db: "Database",
+        db: Database,
         min_cluster_size: int = 3,
         similarity_threshold: float = 0.80,
-    ) -> list[list["Entry"]]:
+    ) -> list[list[Entry]]:
         """Find clusters of similar episodic entries for potential generalization.
 
         Args:
@@ -536,7 +536,7 @@ class EmbeddingService:
             return []
 
         # Greedy clustering
-        clusters: list[list["Entry"]] = []
+        clusters: list[list[Entry]] = []
         used_ids: set[str] = set()
 
         for i, (entry_i, vec_i) in enumerate(episodic_embeddings):
@@ -562,7 +562,7 @@ class EmbeddingService:
         return clusters
 
 
-def cosine_similarity(vec1: "np.ndarray", vec2: "np.ndarray") -> float:
+def cosine_similarity(vec1: np.ndarray, vec2: np.ndarray) -> float:
     """Calculate cosine similarity between two vectors.
 
     Args:
@@ -583,13 +583,13 @@ def cosine_similarity(vec1: "np.ndarray", vec2: "np.ndarray") -> float:
 
 
 # Singleton instance for convenience
-_embedding_service: Optional[EmbeddingService] = None
+_embedding_service: EmbeddingService | None = None
 
 
 def get_embedding_service(
-    model_name: Optional[str] = None,
-    dimensions: Optional[int] = None,
-    similarity_threshold: Optional[float] = None,
+    model_name: str | None = None,
+    dimensions: int | None = None,
+    similarity_threshold: float | None = None,
 ) -> EmbeddingService:
     """Get the global embedding service instance.
 
