@@ -1,0 +1,29 @@
+cff-version: 1.2.0
+title: Rekall
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file.
+type: software
+authors:
+  - name: Rekall Contributors
+repository-code: 'https://github.com/guthubrx/rekall'
+url: 'https://github.com/guthubrx/rekall'
+abstract: >-
+  Developer knowledge base with semantic search, spaced
+  repetition, and MCP server for AI assistants. Built on
+  cognitive science research about how human memory works.
+  100% local, no API keys required.
+keywords:
+  - knowledge-management
+  - developer-tools
+  - semantic-search
+  - spaced-repetition
+  - mcp
+  - cli
+  - sqlite
+  - embeddings
+  - productivity
+  - second-brain
+license: MIT
+version: 0.3.0
+date-released: '2024-12-11'
