@@ -1329,7 +1329,7 @@ class TestContextDataMigration:
 
     def test_migrate_to_compressed_context(self, temp_db_path: Path):
         """Should migrate context_structured to context_blob."""
-        from rekall.db import Database, compress_context
+        from rekall.db import Database
         from rekall.models import Entry, StructuredContext, generate_ulid
 
         db = Database(temp_db_path)
@@ -1403,4 +1403,1038 @@ class TestContextDataMigration:
 
         # Now 2 should need migration
         assert db.count_entries_without_context_blob() == 2
+        db.close()
+
+
+# ============================================================================
+# Feature 009: Sources Integration Tests (Migration v8)
+# ============================================================================
+
+
+class TestMigrationV8Sources:
+    """Tests for schema v8 migration (sources, entry_sources tables)."""
+
+    def test_migration_v8_creates_sources_table(self, temp_db_path: Path):
+        """Migration v8 should create sources table with correct schema."""
+        from rekall.db import Database
+
+        db = Database(temp_db_path)
+        db.init()
+
+        # Check table exists
+        cursor = db.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='sources'"
+        )
+        assert cursor.fetchone() is not None
+
+        # Check columns
+        cursor = db.conn.execute("PRAGMA table_info(sources)")
+        columns = {row[1]: row[2] for row in cursor.fetchall()}
+
+        assert "id" in columns
+        assert "domain" in columns
+        assert "url_pattern" in columns
+        assert "usage_count" in columns
+        assert "last_used" in columns
+        assert "personal_score" in columns
+        assert "reliability" in columns
+        assert "decay_rate" in columns
+        assert "last_verified" in columns
+        assert "status" in columns
+        assert "created_at" in columns
+        db.close()
+
+    def test_migration_v8_creates_entry_sources_table(self, temp_db_path: Path):
+        """Migration v8 should create entry_sources table with correct schema."""
+        from rekall.db import Database
+
+        db = Database(temp_db_path)
+        db.init()
+
+        # Check table exists
+        cursor = db.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='entry_sources'"
+        )
+        assert cursor.fetchone() is not None
+
+        # Check columns
+        cursor = db.conn.execute("PRAGMA table_info(entry_sources)")
+        columns = {row[1]: row[2] for row in cursor.fetchall()}
+
+        assert "id" in columns
+        assert "entry_id" in columns
+        assert "source_id" in columns
+        assert "source_type" in columns
+        assert "source_ref" in columns
+        assert "note" in columns
+        assert "created_at" in columns
+        db.close()
+
+    def test_migration_v8_creates_indexes(self, temp_db_path: Path):
+        """Migration v8 should create required indexes."""
+        from rekall.db import Database
+
+        db = Database(temp_db_path)
+        db.init()
+
+        # Get all indexes
+        cursor = db.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index'"
+        )
+        indexes = {row[0] for row in cursor.fetchall()}
+
+        # Check sources indexes
+        assert "idx_sources_domain" in indexes
+        assert "idx_sources_score" in indexes
+        assert "idx_sources_status" in indexes
+
+        # Check entry_sources indexes
+        assert "idx_entry_sources_entry" in indexes
+        assert "idx_entry_sources_source" in indexes
+        assert "idx_entry_sources_type" in indexes
+        db.close()
+
+    def test_migration_v8_sources_check_constraints(self, temp_db_path: Path):
+        """Migration v8 should enforce CHECK constraints on sources."""
+        import sqlite3
+
+        from rekall.db import Database
+
+        db = Database(temp_db_path)
+        db.init()
+
+        # Try invalid reliability - should fail
+        with db.conn:
+            try:
+                db.conn.execute(
+                    """INSERT INTO sources
+                       (id, domain, reliability, decay_rate, status, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    ("test1", "example.com", "X", "medium", "active", "2025-01-01")
+                )
+                assert False, "Should have raised constraint error"
+            except sqlite3.IntegrityError:
+                pass  # Expected
+
+        # Try invalid decay_rate - should fail
+        with db.conn:
+            try:
+                db.conn.execute(
+                    """INSERT INTO sources
+                       (id, domain, reliability, decay_rate, status, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    ("test2", "example.com", "A", "invalid", "active", "2025-01-01")
+                )
+                assert False, "Should have raised constraint error"
+            except sqlite3.IntegrityError:
+                pass  # Expected
+
+        # Try invalid status - should fail
+        with db.conn:
+            try:
+                db.conn.execute(
+                    """INSERT INTO sources
+                       (id, domain, reliability, decay_rate, status, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    ("test3", "example.com", "B", "slow", "invalid", "2025-01-01")
+                )
+                assert False, "Should have raised constraint error"
+            except sqlite3.IntegrityError:
+                pass  # Expected
+
+        # Valid insert should work
+        db.conn.execute(
+            """INSERT INTO sources
+               (id, domain, reliability, decay_rate, status, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            ("test4", "example.com", "A", "fast", "active", "2025-01-01")
+        )
+        db.conn.commit()
+
+        cursor = db.conn.execute("SELECT id FROM sources WHERE id = ?", ("test4",))
+        assert cursor.fetchone() is not None
+        db.close()
+
+    def test_migration_v8_entry_sources_check_constraint(self, temp_db_path: Path):
+        """Migration v8 should enforce CHECK constraint on entry_sources.source_type."""
+        import sqlite3
+
+        from rekall.db import Database
+        from rekall.models import Entry, generate_ulid
+
+        db = Database(temp_db_path)
+        db.init()
+
+        # Create an entry first
+        entry = Entry(id=generate_ulid(), title="Test", type="bug")
+        db.add(entry)
+
+        # Try invalid source_type - should fail
+        with db.conn:
+            try:
+                db.conn.execute(
+                    """INSERT INTO entry_sources
+                       (id, entry_id, source_type, source_ref, created_at)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    ("test1", entry.id, "invalid", "test", "2025-01-01")
+                )
+                assert False, "Should have raised constraint error"
+            except sqlite3.IntegrityError:
+                pass  # Expected
+
+        # Valid insert should work
+        db.conn.execute(
+            """INSERT INTO entry_sources
+               (id, entry_id, source_type, source_ref, created_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            ("test2", entry.id, "url", "https://example.com", "2025-01-01")
+        )
+        db.conn.commit()
+
+        cursor = db.conn.execute("SELECT id FROM entry_sources WHERE id = ?", ("test2",))
+        assert cursor.fetchone() is not None
+        db.close()
+
+    def test_migration_v8_foreign_key_entry_cascade(self, temp_db_path: Path):
+        """Deleting entry should cascade delete entry_sources."""
+        from rekall.db import Database
+        from rekall.models import Entry, generate_ulid
+
+        db = Database(temp_db_path)
+        db.init()
+
+        # Create entry and link
+        entry = Entry(id=generate_ulid(), title="Test", type="bug")
+        db.add(entry)
+
+        db.conn.execute(
+            """INSERT INTO entry_sources
+               (id, entry_id, source_type, source_ref, created_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            ("link1", entry.id, "theme", "testing", "2025-01-01")
+        )
+        db.conn.commit()
+
+        # Verify link exists
+        cursor = db.conn.execute("SELECT id FROM entry_sources WHERE entry_id = ?", (entry.id,))
+        assert cursor.fetchone() is not None
+
+        # Delete entry
+        db.delete(entry.id)
+
+        # Link should be cascade deleted
+        cursor = db.conn.execute("SELECT id FROM entry_sources WHERE id = ?", ("link1",))
+        assert cursor.fetchone() is None
+        db.close()
+
+    def test_migration_v8_foreign_key_source_set_null(self, temp_db_path: Path):
+        """Deleting source should set entry_sources.source_id to NULL."""
+        from rekall.db import Database
+        from rekall.models import Entry, generate_ulid
+
+        db = Database(temp_db_path)
+        db.init()
+
+        # Create entry and source
+        entry = Entry(id=generate_ulid(), title="Test", type="bug")
+        db.add(entry)
+
+        source_id = generate_ulid()
+        db.conn.execute(
+            """INSERT INTO sources
+               (id, domain, reliability, decay_rate, status, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (source_id, "example.com", "A", "medium", "active", "2025-01-01")
+        )
+
+        # Create link with source_id
+        link_id = generate_ulid()
+        db.conn.execute(
+            """INSERT INTO entry_sources
+               (id, entry_id, source_id, source_type, source_ref, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (link_id, entry.id, source_id, "url", "https://example.com/page", "2025-01-01")
+        )
+        db.conn.commit()
+
+        # Verify link has source_id
+        cursor = db.conn.execute(
+            "SELECT source_id FROM entry_sources WHERE id = ?", (link_id,)
+        )
+        row = cursor.fetchone()
+        assert row[0] == source_id
+
+        # Delete source
+        db.conn.execute("DELETE FROM sources WHERE id = ?", (source_id,))
+        db.conn.commit()
+
+        # Link should still exist but source_id should be NULL
+        cursor = db.conn.execute(
+            "SELECT source_id FROM entry_sources WHERE id = ?", (link_id,)
+        )
+        row = cursor.fetchone()
+        assert row is not None  # Link still exists
+        assert row[0] is None  # source_id is NULL
+        db.close()
+
+    def test_schema_version_is_8(self, temp_db_path: Path):
+        """Schema version should be 8 after migration."""
+        from rekall.db import CURRENT_SCHEMA_VERSION, Database
+
+        db = Database(temp_db_path)
+        db.init()
+
+        version = db.get_schema_version()
+        assert version == 8
+        assert version == CURRENT_SCHEMA_VERSION
+        db.close()
+
+
+class TestSourcesCRUD:
+    """Tests for Source CRUD operations (Feature 009)."""
+
+    def test_add_source(self, temp_db_path: Path):
+        """Should add source to database."""
+        from rekall.db import Database
+        from rekall.models import Source
+
+        db = Database(temp_db_path)
+        db.init()
+
+        source = Source(domain="stackoverflow.com", reliability="A")
+        result = db.add_source(source)
+
+        assert result.id != ""
+        assert result.domain == "stackoverflow.com"
+        assert result.reliability == "A"
+        db.close()
+
+    def test_get_source_by_id(self, temp_db_path: Path):
+        """Should retrieve source by ID."""
+        from rekall.db import Database
+        from rekall.models import Source
+
+        db = Database(temp_db_path)
+        db.init()
+
+        source = Source(domain="docs.python.org")
+        added = db.add_source(source)
+
+        retrieved = db.get_source(added.id)
+        assert retrieved is not None
+        assert retrieved.domain == "docs.python.org"
+        db.close()
+
+    def test_get_source_not_found(self, temp_db_path: Path):
+        """Should return None for non-existent ID."""
+        from rekall.db import Database
+
+        db = Database(temp_db_path)
+        db.init()
+
+        result = db.get_source("nonexistent")
+        assert result is None
+        db.close()
+
+    def test_get_source_by_domain(self, temp_db_path: Path):
+        """Should retrieve source by domain."""
+        from rekall.db import Database
+        from rekall.models import Source
+
+        db = Database(temp_db_path)
+        db.init()
+
+        source = Source(domain="github.com")
+        db.add_source(source)
+
+        retrieved = db.get_source_by_domain("github.com")
+        assert retrieved is not None
+        assert retrieved.domain == "github.com"
+        db.close()
+
+    def test_get_source_by_domain_with_pattern(self, temp_db_path: Path):
+        """Should distinguish sources by URL pattern."""
+        from rekall.db import Database
+        from rekall.models import Source
+
+        db = Database(temp_db_path)
+        db.init()
+
+        # Add two sources for same domain with different patterns
+        source1 = Source(domain="github.com", url_pattern="/anthropics/*")
+        source2 = Source(domain="github.com", url_pattern="/openai/*")
+        db.add_source(source1)
+        db.add_source(source2)
+
+        # Should find specific pattern
+        retrieved1 = db.get_source_by_domain("github.com", "/anthropics/*")
+        assert retrieved1 is not None
+        assert retrieved1.url_pattern == "/anthropics/*"
+
+        retrieved2 = db.get_source_by_domain("github.com", "/openai/*")
+        assert retrieved2 is not None
+        assert retrieved2.url_pattern == "/openai/*"
+        db.close()
+
+    def test_update_source(self, temp_db_path: Path):
+        """Should update source fields."""
+        from rekall.db import Database
+        from rekall.models import Source
+
+        db = Database(temp_db_path)
+        db.init()
+
+        source = Source(domain="example.com", reliability="C")
+        added = db.add_source(source)
+
+        # Update
+        added.reliability = "A"
+        added.usage_count = 10
+        added.personal_score = 75.5
+        result = db.update_source(added)
+        assert result is True
+
+        # Verify
+        retrieved = db.get_source(added.id)
+        assert retrieved.reliability == "A"
+        assert retrieved.usage_count == 10
+        assert retrieved.personal_score == 75.5
+        db.close()
+
+    def test_delete_source(self, temp_db_path: Path):
+        """Should delete source."""
+        from rekall.db import Database
+        from rekall.models import Source
+
+        db = Database(temp_db_path)
+        db.init()
+
+        source = Source(domain="to-delete.com")
+        added = db.add_source(source)
+
+        result = db.delete_source(added.id)
+        assert result is True
+
+        retrieved = db.get_source(added.id)
+        assert retrieved is None
+        db.close()
+
+
+class TestEntrySourcesCRUD:
+    """Tests for EntrySource linking operations (Feature 009)."""
+
+    def test_link_entry_to_source_theme(self, temp_db_path: Path):
+        """Should link entry to a theme source."""
+        from rekall.db import Database
+        from rekall.models import Entry, generate_ulid
+
+        db = Database(temp_db_path)
+        db.init()
+
+        entry = Entry(id=generate_ulid(), title="Python basics", type="reference")
+        db.add(entry)
+
+        link = db.link_entry_to_source(
+            entry_id=entry.id,
+            source_type="theme",
+            source_ref="Python/Fundamentals",
+            note="Good intro resource",
+        )
+
+        assert link.id != ""
+        assert link.entry_id == entry.id
+        assert link.source_type == "theme"
+        assert link.source_ref == "Python/Fundamentals"
+        assert link.note == "Good intro resource"
+        db.close()
+
+    def test_link_entry_to_source_url(self, temp_db_path: Path):
+        """Should link entry to a URL source with curated Source."""
+        from rekall.db import Database
+        from rekall.models import Entry, Source, generate_ulid
+
+        db = Database(temp_db_path)
+        db.init()
+
+        # Create entry and source
+        entry = Entry(id=generate_ulid(), title="SO answer", type="reference")
+        db.add(entry)
+
+        source = Source(domain="stackoverflow.com", url_pattern="/questions/*")
+        added_source = db.add_source(source)
+
+        link = db.link_entry_to_source(
+            entry_id=entry.id,
+            source_type="url",
+            source_ref="https://stackoverflow.com/questions/12345",
+            source_id=added_source.id,
+        )
+
+        assert link.source_id == added_source.id
+        assert link.source_type == "url"
+        db.close()
+
+    def test_link_entry_not_found(self, temp_db_path: Path):
+        """Should raise ValueError if entry doesn't exist."""
+        import pytest
+
+        from rekall.db import Database
+
+        db = Database(temp_db_path)
+        db.init()
+
+        with pytest.raises(ValueError, match="Entry not found"):
+            db.link_entry_to_source(
+                entry_id="nonexistent",
+                source_type="theme",
+                source_ref="test",
+            )
+        db.close()
+
+    def test_get_entry_sources(self, temp_db_path: Path):
+        """Should retrieve all sources linked to an entry."""
+        from rekall.db import Database
+        from rekall.models import Entry, Source, generate_ulid
+
+        db = Database(temp_db_path)
+        db.init()
+
+        entry = Entry(id=generate_ulid(), title="Multi-source", type="reference")
+        db.add(entry)
+
+        source = Source(domain="docs.python.org")
+        added_source = db.add_source(source)
+
+        # Add multiple links
+        db.link_entry_to_source(entry.id, "theme", "Python/Async")
+        db.link_entry_to_source(
+            entry.id, "url", "https://docs.python.org/3/library/asyncio.html",
+            source_id=added_source.id
+        )
+        db.link_entry_to_source(entry.id, "file", "/docs/notes.md")
+
+        sources = db.get_entry_sources(entry.id)
+        assert len(sources) == 3
+
+        # Check types
+        types = {s.source_type for s in sources}
+        assert types == {"theme", "url", "file"}
+
+        # Check that URL source has joined Source data
+        url_source = next(s for s in sources if s.source_type == "url")
+        assert url_source.source is not None
+        assert url_source.source.domain == "docs.python.org"
+        db.close()
+
+    def test_unlink_entry_from_source(self, temp_db_path: Path):
+        """Should remove link between entry and source."""
+        from rekall.db import Database
+        from rekall.models import Entry, generate_ulid
+
+        db = Database(temp_db_path)
+        db.init()
+
+        entry = Entry(id=generate_ulid(), title="Test", type="bug")
+        db.add(entry)
+
+        link = db.link_entry_to_source(entry.id, "theme", "Testing")
+
+        # Unlink
+        result = db.unlink_entry_from_source(link.id)
+        assert result is True
+
+        # Verify gone
+        sources = db.get_entry_sources(entry.id)
+        assert len(sources) == 0
+        db.close()
+
+    def test_unlink_nonexistent(self, temp_db_path: Path):
+        """Should return False for non-existent link."""
+        from rekall.db import Database
+
+        db = Database(temp_db_path)
+        db.init()
+
+        result = db.unlink_entry_from_source("nonexistent")
+        assert result is False
+        db.close()
+
+
+class TestUtilsFunctions:
+    """Tests for utility functions (Feature 009)."""
+
+    def test_extract_domain_simple(self):
+        """Should extract domain from various URL formats."""
+        from rekall.utils import extract_domain
+
+        assert extract_domain("https://example.com/path") == "example.com"
+        assert extract_domain("http://example.com") == "example.com"
+        assert extract_domain("example.com/path") == "example.com"
+        assert extract_domain("//example.com/path") == "example.com"
+
+    def test_extract_domain_with_port(self):
+        """Should handle URLs with ports."""
+        from rekall.utils import extract_domain
+
+        assert extract_domain("https://example.com:8080/path") == "example.com"
+        assert extract_domain("example.com:443") == "example.com"
+
+    def test_extract_domain_subdomains(self):
+        """Should preserve subdomains."""
+        from rekall.utils import extract_domain
+
+        assert extract_domain("https://docs.python.org") == "docs.python.org"
+        assert extract_domain("https://api.example.com") == "api.example.com"
+        assert extract_domain("https://www.example.com") == "www.example.com"
+
+    def test_normalize_url_scheme(self):
+        """Should normalize URL scheme to https."""
+        from rekall.utils import normalize_url
+
+        assert normalize_url("http://example.com").startswith("https://")
+        assert normalize_url("example.com").startswith("https://")
+        assert normalize_url("//example.com").startswith("https://")
+
+    def test_normalize_url_trailing_slash(self):
+        """Should remove trailing slashes."""
+        from rekall.utils import normalize_url
+
+        assert normalize_url("https://example.com/path/") == "https://example.com/path"
+        # Root path should keep single slash
+        assert normalize_url("https://example.com/") == "https://example.com/"
+
+    def test_normalize_url_tracking_params(self):
+        """Should remove tracking parameters."""
+        from rekall.utils import normalize_url
+
+        url = "https://example.com/page?utm_source=twitter&id=123&utm_medium=social"
+        normalized = normalize_url(url)
+        assert "utm_source" not in normalized
+        assert "utm_medium" not in normalized
+        assert "id=123" in normalized
+
+    def test_is_valid_url(self):
+        """Should validate URL format."""
+        from rekall.utils import is_valid_url
+
+        assert is_valid_url("https://example.com") is True
+        assert is_valid_url("example.com") is True
+        assert is_valid_url("docs.python.org/3/library") is True
+        assert is_valid_url("not a url") is False
+        assert is_valid_url("justaword") is False
+
+    def test_extract_url_pattern_stackoverflow(self):
+        """Should extract Stack Overflow patterns."""
+        from rekall.utils import extract_url_pattern
+
+        pattern = extract_url_pattern("https://stackoverflow.com/questions/12345/title-here")
+        assert pattern == "/questions/*"
+
+    def test_extract_url_pattern_github(self):
+        """Should extract GitHub patterns."""
+        from rekall.utils import extract_url_pattern
+
+        pattern = extract_url_pattern("https://github.com/anthropics/claude-code/blob/main/README.md")
+        assert pattern == "/anthropics/claude-code/*"
+
+    def test_extract_url_pattern_generic(self):
+        """Should extract generic patterns for unknown sites."""
+        from rekall.utils import extract_url_pattern
+
+        pattern = extract_url_pattern("https://example.com/docs/api/v2/users")
+        assert pattern == "/docs/api/*"
+
+    def test_extract_url_pattern_none(self):
+        """Should return None for root paths."""
+        from rekall.utils import extract_url_pattern
+
+        assert extract_url_pattern("https://example.com/") is None
+        assert extract_url_pattern("https://example.com") is None
+
+
+class TestSourceScoring:
+    """Tests for source scoring operations (Feature 009 - US3)."""
+
+    def test_calculate_source_score_new_source(self, temp_db_path: Path):
+        """New source should have base score of 50."""
+        from rekall.db import Database
+        from rekall.models import Source
+
+        db = Database(temp_db_path)
+        db.init()
+
+        source = Source(domain="new-source.com")
+        score = db.calculate_source_score(source)
+
+        # Base score with no usage, no recency decay
+        assert 49 <= score <= 51  # Approximately 50
+        db.close()
+
+    def test_calculate_source_score_with_usage(self, temp_db_path: Path):
+        """Score should increase with usage."""
+        from datetime import datetime
+
+        from rekall.db import Database
+        from rekall.models import Source
+
+        db = Database(temp_db_path)
+        db.init()
+
+        # Source with high usage
+        source = Source(
+            domain="popular.com",
+            usage_count=100,
+            last_used=datetime.now(),
+            reliability="A",
+        )
+        score = db.calculate_source_score(source)
+
+        # Should be significantly higher than base
+        assert score > 70
+        db.close()
+
+    def test_calculate_source_score_reliability_factor(self, temp_db_path: Path):
+        """Reliability rating should affect score."""
+        from datetime import datetime
+
+        from rekall.db import Database
+        from rekall.models import Source
+
+        db = Database(temp_db_path)
+        db.init()
+
+        base_args = {
+            "usage_count": 10,
+            "last_used": datetime.now(),
+        }
+
+        source_a = Source(domain="reliable-a.com", reliability="A", **base_args)
+        source_b = Source(domain="reliable-b.com", reliability="B", **base_args)
+        source_c = Source(domain="reliable-c.com", reliability="C", **base_args)
+
+        score_a = db.calculate_source_score(source_a)
+        score_b = db.calculate_source_score(source_b)
+        score_c = db.calculate_source_score(source_c)
+
+        # A > B > C
+        assert score_a > score_b > score_c
+        db.close()
+
+    def test_calculate_source_score_decay(self, temp_db_path: Path):
+        """Score should decay over time for inactive sources."""
+        from datetime import datetime, timedelta
+
+        from rekall.db import Database
+        from rekall.models import Source
+
+        db = Database(temp_db_path)
+        db.init()
+
+        # Source used today
+        recent = Source(
+            domain="recent.com",
+            usage_count=10,
+            last_used=datetime.now(),
+            decay_rate="medium",
+        )
+
+        # Source used 6 months ago (one half-life for medium)
+        old = Source(
+            domain="old.com",
+            usage_count=10,
+            last_used=datetime.now() - timedelta(days=180),
+            decay_rate="medium",
+        )
+
+        recent_score = db.calculate_source_score(recent)
+        old_score = db.calculate_source_score(old)
+
+        # Old source should have lower score due to decay
+        assert recent_score > old_score
+        # After one half-life, score should be roughly half
+        # (but with minimum factor of 0.2)
+        assert old_score < recent_score * 0.7
+        db.close()
+
+    def test_update_source_usage(self, temp_db_path: Path):
+        """Updating usage should increment count and recalculate score."""
+        from rekall.db import Database
+        from rekall.models import Source
+
+        db = Database(temp_db_path)
+        db.init()
+
+        source = Source(domain="update-test.com", usage_count=0)
+        added = db.add_source(source)
+        initial_score = added.personal_score
+
+        # Update usage
+        updated = db.update_source_usage(added.id)
+
+        assert updated is not None
+        assert updated.usage_count == 1
+        assert updated.last_used is not None
+        assert updated.personal_score >= initial_score
+        db.close()
+
+    def test_link_updates_source_usage(self, temp_db_path: Path):
+        """Linking entry to source should update usage automatically."""
+        from rekall.db import Database
+        from rekall.models import Entry, Source, generate_ulid
+
+        db = Database(temp_db_path)
+        db.init()
+
+        # Create source and entry
+        source = Source(domain="auto-update.com", usage_count=0)
+        added_source = db.add_source(source)
+
+        entry = Entry(id=generate_ulid(), title="Test", type="reference")
+        db.add(entry)
+
+        # Link - should auto-update source usage
+        db.link_entry_to_source(
+            entry.id, "url", "https://auto-update.com/page",
+            source_id=added_source.id
+        )
+
+        # Verify usage was updated
+        updated_source = db.get_source(added_source.id)
+        assert updated_source.usage_count == 1
+        assert updated_source.last_used is not None
+        db.close()
+
+    def test_get_top_sources(self, temp_db_path: Path):
+        """Should return sources sorted by score."""
+        from datetime import datetime
+
+        from rekall.db import Database
+        from rekall.models import Source
+
+        db = Database(temp_db_path)
+        db.init()
+
+        # Create sources with different scores
+        for i, (domain, usage, reliability) in enumerate([
+            ("low.com", 1, "C"),
+            ("medium.com", 10, "B"),
+            ("high.com", 50, "A"),
+        ]):
+            source = Source(
+                domain=domain,
+                usage_count=usage,
+                reliability=reliability,
+                last_used=datetime.now(),
+            )
+            added = db.add_source(source)
+            # Recalculate to ensure score is set
+            db.recalculate_source_score(added.id)
+
+        top = db.get_top_sources(limit=10)
+
+        assert len(top) == 3
+        # Should be sorted by score descending
+        assert top[0].domain == "high.com"
+        assert top[1].domain == "medium.com"
+        assert top[2].domain == "low.com"
+        db.close()
+
+    def test_recalculate_all_scores(self, temp_db_path: Path):
+        """Should recalculate scores for all active sources."""
+        from rekall.db import Database
+        from rekall.models import Source
+
+        db = Database(temp_db_path)
+        db.init()
+
+        # Create multiple sources
+        for i in range(5):
+            source = Source(domain=f"source{i}.com", usage_count=i * 10)
+            db.add_source(source)
+
+        # Recalculate all
+        count = db.recalculate_all_scores()
+
+        assert count == 5
+        db.close()
+
+    def test_list_sources_with_filters(self, temp_db_path: Path):
+        """Should filter sources by status and score."""
+        from datetime import datetime
+
+        from rekall.db import Database
+        from rekall.models import Source
+
+        db = Database(temp_db_path)
+        db.init()
+
+        # Create sources with different statuses
+        active1 = Source(domain="active1.com", status="active", usage_count=50,
+                         last_used=datetime.now())
+        active2 = Source(domain="active2.com", status="active", usage_count=10,
+                         last_used=datetime.now())
+        inactive = Source(domain="inactive.com", status="inaccessible")
+
+        for s in [active1, active2, inactive]:
+            added = db.add_source(s)
+            db.recalculate_source_score(added.id)
+
+        # Filter by status
+        active_only = db.list_sources(status="active")
+        assert len(active_only) == 2
+
+        # All sources
+        all_sources = db.list_sources()
+        assert len(all_sources) == 3
+        db.close()
+
+
+class TestBacklinks:
+    """Tests for backlink operations (Feature 009 - US2)."""
+
+    def test_get_source_backlinks(self, temp_db_path: Path):
+        """Should retrieve entries citing a source."""
+        from rekall.db import Database
+        from rekall.models import Entry, Source, generate_ulid
+
+        db = Database(temp_db_path)
+        db.init()
+
+        # Create source
+        source = Source(domain="stackoverflow.com")
+        added_source = db.add_source(source)
+
+        # Create entries that cite this source
+        entry1 = Entry(id=generate_ulid(), title="SO Answer 1", type="reference")
+        entry2 = Entry(id=generate_ulid(), title="SO Answer 2", type="reference")
+        entry3 = Entry(id=generate_ulid(), title="No source", type="reference")
+        db.add(entry1)
+        db.add(entry2)
+        db.add(entry3)
+
+        # Link two entries to the source
+        db.link_entry_to_source(
+            entry1.id, "url", "https://stackoverflow.com/q/123",
+            source_id=added_source.id
+        )
+        db.link_entry_to_source(
+            entry2.id, "url", "https://stackoverflow.com/q/456",
+            source_id=added_source.id
+        )
+
+        # Get backlinks
+        backlinks = db.get_source_backlinks(added_source.id)
+        assert len(backlinks) == 2
+
+        # Check entries are correct
+        entry_titles = {e.title for e, _ in backlinks}
+        assert entry_titles == {"SO Answer 1", "SO Answer 2"}
+        db.close()
+
+    def test_get_source_backlinks_empty(self, temp_db_path: Path):
+        """Should return empty list for source with no backlinks."""
+        from rekall.db import Database
+        from rekall.models import Source
+
+        db = Database(temp_db_path)
+        db.init()
+
+        source = Source(domain="no-backlinks.com")
+        added_source = db.add_source(source)
+
+        backlinks = db.get_source_backlinks(added_source.id)
+        assert len(backlinks) == 0
+        db.close()
+
+    def test_get_source_backlinks_pagination(self, temp_db_path: Path):
+        """Should support pagination for backlinks."""
+        from rekall.db import Database
+        from rekall.models import Entry, Source, generate_ulid
+
+        db = Database(temp_db_path)
+        db.init()
+
+        source = Source(domain="many-refs.com")
+        added_source = db.add_source(source)
+
+        # Create 5 entries citing this source
+        for i in range(5):
+            entry = Entry(id=generate_ulid(), title=f"Entry {i}", type="reference")
+            db.add(entry)
+            db.link_entry_to_source(entry.id, "url", f"https://many-refs.com/{i}",
+                                     source_id=added_source.id)
+
+        # Get first page (limit 2)
+        page1 = db.get_source_backlinks(added_source.id, limit=2, offset=0)
+        assert len(page1) == 2
+
+        # Get second page
+        page2 = db.get_source_backlinks(added_source.id, limit=2, offset=2)
+        assert len(page2) == 2
+
+        # Get third page (only 1 remaining)
+        page3 = db.get_source_backlinks(added_source.id, limit=2, offset=4)
+        assert len(page3) == 1
+
+        # Ensure no duplicates
+        all_ids = {e.id for e, _ in page1 + page2 + page3}
+        assert len(all_ids) == 5
+        db.close()
+
+    def test_count_source_backlinks(self, temp_db_path: Path):
+        """Should count entries citing a source."""
+        from rekall.db import Database
+        from rekall.models import Entry, Source, generate_ulid
+
+        db = Database(temp_db_path)
+        db.init()
+
+        source = Source(domain="count-test.com")
+        added_source = db.add_source(source)
+
+        # Initially 0
+        assert db.count_source_backlinks(added_source.id) == 0
+
+        # Add 3 entries
+        for i in range(3):
+            entry = Entry(id=generate_ulid(), title=f"Entry {i}", type="reference")
+            db.add(entry)
+            db.link_entry_to_source(entry.id, "url", f"https://count-test.com/{i}",
+                                     source_id=added_source.id)
+
+        # Should be 3
+        assert db.count_source_backlinks(added_source.id) == 3
+        db.close()
+
+    def test_get_backlinks_by_domain(self, temp_db_path: Path):
+        """Should get backlinks for all sources from a domain."""
+        from rekall.db import Database
+        from rekall.models import Entry, Source, generate_ulid
+
+        db = Database(temp_db_path)
+        db.init()
+
+        # Create two sources for same domain
+        source1 = Source(domain="github.com", url_pattern="/anthropics/*")
+        source2 = Source(domain="github.com", url_pattern="/openai/*")
+        added1 = db.add_source(source1)
+        added2 = db.add_source(source2)
+
+        # Create entries linked to different patterns
+        entry1 = Entry(id=generate_ulid(), title="Anthropic code", type="reference")
+        entry2 = Entry(id=generate_ulid(), title="OpenAI code", type="reference")
+        db.add(entry1)
+        db.add(entry2)
+
+        db.link_entry_to_source(entry1.id, "url", "https://github.com/anthropics/claude",
+                                 source_id=added1.id)
+        db.link_entry_to_source(entry2.id, "url", "https://github.com/openai/gpt",
+                                 source_id=added2.id)
+
+        # Get all github.com backlinks
+        backlinks = db.get_backlinks_by_domain("github.com")
+        assert len(backlinks) == 2
+
+        titles = {e.title for e, _ in backlinks}
+        assert titles == {"Anthropic code", "OpenAI code"}
         db.close()

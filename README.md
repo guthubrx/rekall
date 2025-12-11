@@ -34,6 +34,7 @@
 - [Interface](#the-interface)
 - [What It Automates](#what-rekall-does-for-you)
 - [Entry Types](#what-can-you-capture)
+- [Sources](#track-your-sources)
 - [Privacy](#100-local-100-yours)
 - [Getting Started](#getting-started)
 - [MCP Server](#mcp-server-works-with-any-ai-assistant)
@@ -293,6 +294,89 @@ rekall review  # Spaced repetition session
 | `reference` | Useful docs/links | "That one StackOverflow answer" |
 | `snippet` | Code worth keeping | "Generic debounce function" |
 | `til` | Quick learnings | "Git rebase -i can reorder commits" |
+
+---
+
+## Track your sources
+
+> **Philosophy:** Every piece of knowledge came from somewhere. Rekall helps you track *where* — so you can evaluate reliability, revisit original sources, and see which sources are most valuable to you.
+
+### Link entries to their sources
+
+When you capture knowledge, you can attach sources:
+
+```bash
+# Add a bug with a URL source
+rekall add bug "Safari CORS fix" -t cors,safari
+# Then link the source URL
+rekall source link 01HX7... --url "https://stackoverflow.com/q/12345"
+
+# Or use the TUI: open entry → Add source
+rekall
+```
+
+### Three source types
+
+| Type | For | Example |
+|------|-----|---------|
+| `url` | Web pages, documentation | Stack Overflow, MDN, blog posts |
+| `theme` | Recurring topics or mentors | "Code reviews with Alice", "Architecture meetings" |
+| `file` | Local documents | PDFs, internal docs, notes |
+
+### Reliability ratings (Admiralty System)
+
+Not all sources are equally trustworthy. Rekall uses a simplified **Admiralty System**:
+
+| Rating | Meaning | Examples |
+|--------|---------|----------|
+| **A** | Highly reliable, authoritative | Official docs, peer-reviewed, known experts |
+| **B** | Generally reliable | Reputable blogs, SO accepted answers |
+| **C** | Questionable or unverified | Random forum posts, untested suggestions |
+
+### Personal score: What matters *to you*
+
+Each source gets a **personal score** (0-100) based on:
+
+```
+Score = Usage × Recency × Reliability
+
+- Usage: How often you cite this source
+- Recency: When you last used it (decays over time)
+- Reliability: A=1.0, B=0.8, C=0.6
+```
+
+Sources you use frequently and recently rank higher — regardless of how "authoritative" they are globally. Your personal experience matters.
+
+### Backlinks: See all entries from a source
+
+Click any source to see all entries that reference it:
+
+```
+┌─ Source: stackoverflow.com/questions/* ─────────────────┐
+│  Reliability: B  │  Score: 85  │  Used: 12 times        │
+├─────────────────────────────────────────────────────────┤
+│  Entries citing this source:                            │
+│                                                         │
+│  [1] bug: CORS fails on Safari                          │
+│  [2] bug: Fetch timeout on slow networks                │
+│  [3] pattern: Error handling for API calls              │
+└─────────────────────────────────────────────────────────┘
+```
+
+### Link rot detection
+
+Web sources can go offline. Rekall periodically checks URL sources and flags inaccessible ones:
+
+```bash
+rekall sources --verify  # Check all sources
+rekall sources --status inaccessible  # List broken links
+```
+
+The TUI Sources dashboard shows:
+- **Top sources** by personal score
+- **Emerging sources** (recently cited multiple times)
+- **Dormant sources** (not used in 6+ months)
+- **Inaccessible sources** (link rot detected)
 
 ---
 

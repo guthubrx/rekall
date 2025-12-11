@@ -14,8 +14,8 @@ from rich.text import Text
 from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.message import Message
 from textual.containers import Container, VerticalScroll
+from textual.message import Message
 from textual.widgets import (
     DataTable,
     Footer,
@@ -2996,7 +2996,7 @@ def action_install_ide():
         menu_options.append("─── INTEGRATIONS ───")
         actions.append(None)
 
-        menu_options.append(f"  ⚙ Intégration IDE")
+        menu_options.append("  ⚙ Intégration IDE")
         actions.append("ide")
 
         # MCP Server status
@@ -3004,7 +3004,7 @@ def action_install_ide():
         menu_options.append(f"  {mcp_icon} Installation MCP")
         actions.append("configure_mcp")
 
-        menu_options.append(f"  📦 Intégration Speckit")
+        menu_options.append("  📦 Intégration Speckit")
         actions.append("speckit")
 
         # Spacer + SETTINGS section (Feature 007)
@@ -3510,6 +3510,363 @@ def action_search():
     app.run()
 
 
+# =============================================================================
+# Sources Dashboard (Feature 009)
+# =============================================================================
+
+
+def action_sources():
+    """Sources Dashboard - manage documentary sources."""
+    db = get_db()
+
+    while True:
+        # Get statistics
+        stats = db.get_source_statistics()
+
+        # Build dashboard menu
+        menu_options = []
+        actions = []
+
+        # ─── STATISTICS ───
+        menu_options.append(f"─── {t('dashboard.statistics').upper()} ───")
+        actions.append(None)
+
+        menu_options.append(f"  {t('dashboard.total_sources')}: {stats.get('total', 0)}")
+        actions.append(None)
+
+        menu_options.append(f"  {t('dashboard.total_links')}: {stats.get('total_links', 0)}")
+        actions.append(None)
+
+        menu_options.append(f"  {t('dashboard.avg_score')}: {stats.get('avg_score', 0):.1f}")
+        actions.append(None)
+
+        # ─── TOP SOURCES ───
+        menu_options.append("")
+        actions.append(None)
+
+        menu_options.append(f"─── {t('dashboard.top_sources').upper()} ───")
+        actions.append(None)
+
+        top_sources = db.get_top_sources(limit=5)
+        if top_sources:
+            for source in top_sources:
+                score_bar = _score_bar(source.personal_score)
+                menu_options.append(f"  {score_bar} {source.domain}")
+                actions.append(("view_source", source))
+        else:
+            menu_options.append(f"  [dim]{t('source.no_sources')}[/dim]")
+            actions.append(None)
+
+        # ─── DORMANT SOURCES ───
+        dormant = db.get_dormant_sources(limit=3)
+        if dormant:
+            menu_options.append("")
+            actions.append(None)
+            menu_options.append(f"─── {t('dashboard.dormant_sources').upper()} ───")
+            actions.append(None)
+
+            for source in dormant:
+                last_used = source.last_used.strftime("%Y-%m-%d") if source.last_used else t("source_detail.never_used")
+                menu_options.append(f"  💤 {source.domain} ({last_used})")
+                actions.append(("view_source", source))
+
+        # ─── INACCESSIBLE SOURCES ───
+        inaccessible = db.get_inaccessible_sources(limit=3)
+        if inaccessible:
+            menu_options.append("")
+            actions.append(None)
+            menu_options.append(f"─── {t('dashboard.inaccessible_sources').upper()} ───")
+            actions.append(None)
+
+            for source in inaccessible:
+                menu_options.append(f"  ⚠️ {source.domain}")
+                actions.append(("view_source", source))
+
+        # ─── ACTIONS ───
+        menu_options.append("")
+        actions.append(None)
+        menu_options.append("─── ACTIONS ───")
+        actions.append(None)
+
+        menu_options.append(f"  🔍 {t('dashboard.verify_links')}")
+        actions.append("verify_links")
+
+        menu_options.append(f"  ➕ {t('dashboard.add_source')}")
+        actions.append("add_source")
+
+        menu_options.append(f"  📋 {t('sources.manage')}")
+        actions.append("list_all")
+
+        # ─── BACK ───
+        menu_options.append("")
+        actions.append(None)
+        menu_options.append(f"← {t('common.back')}")
+        actions.append("back")
+
+        # Show menu
+        app = SimpleMenuApp(t("menu.sources"), menu_options)
+        idx = app.run()
+
+        if idx is None or actions[idx] == "back":
+            return
+
+        action = actions[idx]
+
+        if action == "verify_links":
+            _verify_source_links(db)
+        elif action == "add_source":
+            _add_standalone_source(db)
+        elif action == "list_all":
+            _list_all_sources(db)
+        elif isinstance(action, tuple) and action[0] == "view_source":
+            _show_source_detail(db, action[1])
+
+
+def _score_bar(score: float, width: int = 5) -> str:
+    """Create a visual score bar."""
+    filled = int((score / 100) * width)
+    empty = width - filled
+    return f"[green]{'█' * filled}[/green][dim]{'░' * empty}[/dim]"
+
+
+def _verify_source_links(db):
+    """Verify accessibility of source links."""
+    from rekall.link_rot import verify_sources
+
+    show_toast("🔍 Vérification des liens en cours...")
+
+    try:
+        results = verify_sources(db, limit=50)
+        msg = (
+            f"✓ Vérification terminée:\n"
+            f"  • Vérifiés: {results['verified']}\n"
+            f"  • Accessibles: {results['accessible']}\n"
+            f"  • Inaccessibles: {results['inaccessible']}"
+        )
+        show_info(msg)
+    except Exception as e:
+        show_toast(f"⚠ Erreur: {e}")
+
+
+def _add_standalone_source(db):
+    """Add a new source without linking to an entry."""
+    from rekall.models import Source
+    from rekall.utils import extract_domain, is_valid_url
+
+    # Get domain/URL
+    url_input = prompt_input(t("sources.enter_url"))
+    if not url_input:
+        return
+
+    if not is_valid_url(url_input):
+        show_toast("⚠ URL invalide")
+        return
+
+    domain = extract_domain(url_input)
+
+    # Check if source exists
+    existing = db.get_source_by_domain(domain)
+    if existing:
+        show_toast(f"⚠ Source existe déjà: {domain}")
+        return
+
+    # Get reliability
+    rel_options = ["A - Très fiable", "B - Fiable", "C - À vérifier"]
+    rel_app = SimpleMenuApp("Fiabilité", rel_options)
+    rel_idx = rel_app.run()
+    reliability = ["A", "B", "C"][rel_idx] if rel_idx is not None else "B"
+
+    # Create source
+    source = Source(domain=domain, reliability=reliability)
+    db.add_source(source)
+    show_toast(f"✓ Source ajoutée: {domain}")
+
+
+def _list_all_sources(db):
+    """List all sources with pagination."""
+    sources = db.list_sources(limit=20)
+
+    if not sources:
+        show_toast(t("source.no_sources"))
+        return
+
+    while True:
+        menu_options = []
+        for source in sources:
+            score_bar = _score_bar(source.personal_score)
+            status_icon = "✓" if source.status == "active" else "⚠️"
+            menu_options.append(f"{status_icon} {score_bar} {source.domain}")
+
+        menu_options.append("")
+        menu_options.append(f"← {t('common.back')}")
+
+        app = SimpleMenuApp(t("sources.manage"), menu_options)
+        idx = app.run()
+
+        if idx is None or idx >= len(sources):
+            return
+
+        _show_source_detail(db, sources[idx])
+
+
+def _show_source_detail(db, source):
+    """Show source details with backlinks."""
+    # Get backlinks count
+    backlink_count = db.count_source_backlinks(source.id)
+
+    # Build detail
+    lines = [
+        f"[bold cyan]━━━ {source.domain} ━━━[/bold cyan]",
+        "",
+        f"[cyan]ID:[/cyan]          {source.id}",
+        f"[cyan]Status:[/cyan]      {source.status}",
+        f"[cyan]Fiabilité:[/cyan]   {source.reliability}",
+        f"[cyan]Score:[/cyan]       {source.personal_score:.1f}/100",
+        f"[cyan]Utilisations:[/cyan] {source.usage_count}",
+    ]
+
+    if source.url_pattern:
+        lines.append(f"[cyan]Pattern:[/cyan]     {source.url_pattern}")
+
+    if source.last_used:
+        lines.append(f"[cyan]Dernière utilisation:[/cyan] {source.last_used.strftime('%Y-%m-%d')}")
+    else:
+        lines.append(f"[cyan]Dernière utilisation:[/cyan] {t('source_detail.never_used')}")
+
+    if source.last_verified:
+        lines.append(f"[cyan]Dernière vérification:[/cyan] {source.last_verified.strftime('%Y-%m-%d')}")
+
+    # Backlinks
+    lines.append("")
+    if backlink_count == 1:
+        lines.append(f"[yellow]{t('backlinks.cited_by_one')}[/yellow]")
+    elif backlink_count > 1:
+        lines.append(f"[yellow]{t('backlinks.cited_by', count=backlink_count)}[/yellow]")
+    else:
+        lines.append(f"[dim]{t('backlinks.no_backlinks')}[/dim]")
+
+    show_info("\n".join(lines))
+
+    # Action menu
+    action_options = [
+        f"← {t('common.back')}",
+    ]
+
+    if backlink_count > 0:
+        action_options.insert(0, f"📋 {t('backlinks.title')}")
+
+    app = SimpleMenuApp(t("source_detail.title"), action_options)
+    action_idx = app.run()
+
+    if action_idx == 0 and backlink_count > 0:
+        _show_source_backlinks(db, source)
+
+
+def _show_source_backlinks(db, source):
+    """Show entries citing this source."""
+    backlinks = db.get_source_backlinks(source.id, limit=20)
+
+    if not backlinks:
+        show_toast(t("backlinks.no_backlinks"))
+        return
+
+    menu_options = []
+    for entry, entry_source in backlinks:
+        type_short = entry.type[:3].upper()
+        menu_options.append(f"  [{type_short}] {entry.title[:40]}")
+
+    menu_options.append("")
+    menu_options.append(f"← {t('common.back')}")
+
+    app = SimpleMenuApp(f"{t('backlinks.title')} - {source.domain}", menu_options)
+    idx = app.run()
+
+    if idx is not None and idx < len(backlinks):
+        entry, _ = backlinks[idx]
+        _show_entry_detail(entry)
+
+
+def _add_source_to_entry(db, entry):
+    """Add a source to an entry."""
+    from rekall.models import Source
+    from rekall.utils import extract_domain, extract_url_pattern, is_valid_url
+
+    # Select source type
+    type_options = [
+        f"📚 {t('source.type.theme')} - Thème/Catégorie",
+        f"🔗 {t('source.type.url')} - URL Web",
+        f"📄 {t('source.type.file')} - Fichier local",
+        f"← {t('common.back')}",
+    ]
+    type_app = SimpleMenuApp(t("sources.select_type"), type_options)
+    type_idx = type_app.run()
+
+    if type_idx is None or type_idx == 3:
+        return
+
+    source_types = ["theme", "url", "file"]
+    source_type = source_types[type_idx]
+
+    # Get source reference based on type
+    if source_type == "theme":
+        source_ref = prompt_input(t("sources.enter_theme"))
+        if not source_ref:
+            return
+        # Link directly without curated source
+        db.link_entry_to_source(entry.id, "theme", source_ref)
+        show_toast(f"✓ {t('entry_source.added')}: {source_ref}")
+
+    elif source_type == "url":
+        url = prompt_input(t("sources.enter_url"))
+        if not url:
+            return
+
+        if not is_valid_url(url):
+            show_toast("⚠ URL invalide")
+            return
+
+        domain = extract_domain(url)
+        url_pattern = extract_url_pattern(url)
+
+        # Check if source exists or create it
+        existing_source = db.get_source_by_domain(domain, url_pattern)
+        if not existing_source:
+            # Optionally ask about reliability for new source
+            rel_options = ["A - Très fiable", "B - Fiable", "C - À vérifier", "Ne pas créer"]
+            rel_app = SimpleMenuApp(f"Nouvelle source: {domain}", rel_options)
+            rel_idx = rel_app.run()
+
+            if rel_idx is None or rel_idx == 3:
+                # Still link without curated source
+                db.link_entry_to_source(entry.id, "url", url)
+                show_toast(f"✓ {t('entry_source.added')}: {url[:30]}...")
+                return
+
+            reliability = ["A", "B", "C"][rel_idx]
+            new_source = Source(
+                domain=domain,
+                url_pattern=url_pattern,
+                reliability=reliability,
+            )
+            existing_source = db.add_source(new_source)
+
+        # Link with curated source
+        note = prompt_input(t("sources.optional_note"), required=False)
+        db.link_entry_to_source(
+            entry.id, "url", url,
+            source_id=existing_source.id,
+            note=note if note else None,
+        )
+        show_toast(f"✓ {t('entry_source.added')}: {domain}")
+
+    elif source_type == "file":
+        file_path = prompt_input(t("sources.enter_file"))
+        if not file_path:
+            return
+        db.link_entry_to_source(entry.id, "file", file_path)
+        show_toast(f"✓ {t('entry_source.added')}: {file_path[:30]}...")
+
+
 def action_browse():
     """Browse all entries with Textual DataTable and live detail preview."""
     db = get_db()
@@ -3759,6 +4116,8 @@ def _create_link_to_entry(db, source_entry, target_entry, relation_types, relati
 
 def _show_entry_detail(entry):
     """Display entry details with navigation options using Textual."""
+    db = get_db()
+
     while True:
         # Build detail content
         stars = '★' * entry.confidence + '☆' * (5 - entry.confidence)
@@ -3780,6 +4139,17 @@ def _show_entry_detail(entry):
         if entry.content:
             lines.extend(["", f"[cyan]{t('browse.content')}:[/cyan]", entry.content])
 
+        # Show sources linked to this entry (Feature 009)
+        entry_sources = db.get_entry_sources(entry.id)
+        if entry_sources:
+            lines.extend(["", f"[cyan]{t('source.linked_sources')}:[/cyan]"])
+            for es in entry_sources:
+                type_icon = {"theme": "📚", "url": "🔗", "file": "📄"}.get(es.source_type, "•")
+                if es.source:
+                    lines.append(f"  {type_icon} {es.source.domain} ({es.source_ref[:30]}...)")
+                else:
+                    lines.append(f"  {type_icon} {es.source_ref[:50]}")
+
         # Show details using Textual
         show_info("\n".join(lines))
 
@@ -3787,6 +4157,7 @@ def _show_entry_detail(entry):
         action_options = [
             f"← {t('browse.back_to_list')}",
             t("browse.edit_entry"),
+            f"📎 {t('sources.add_to_entry')}",
             t("browse.delete_entry"),
         ]
         app = SimpleMenuApp(t('action.actions'), action_options)
@@ -3798,6 +4169,10 @@ def _show_entry_detail(entry):
             _edit_entry(entry)
             return
         elif action_idx == 2:
+            _add_source_to_entry(db, entry)
+            # Refresh entry data
+            entry = db.get(entry.id, update_access=False) or entry
+        elif action_idx == 3:
             if _delete_entry(entry):
                 return
 
@@ -5383,11 +5758,15 @@ def get_menu_items():
         ("__section__", "RECHERCHE", ""),
         ("research", t("menu.research"), t("menu.research.desc")),
         ("__spacer__", "", ""),
-        # Section 3: Données
+        # Section 3: Sources (Feature 009)
+        ("__section__", "SOURCES", ""),
+        ("sources", t("menu.sources"), t("menu.sources.desc")),
+        ("__spacer__", "", ""),
+        # Section 4: Données
         ("__section__", "DONNÉES", ""),
         ("export", t("menu.export"), t("menu.export.desc")),
         ("__spacer__", "", ""),
-        # Section 4: Quitter
+        # Section 5: Quitter
         ("quit", t("menu.quit"), t("menu.quit.desc")),
     ]
 
@@ -5411,6 +5790,7 @@ def run_tui():
         "config": action_install_ide,  # Unified config & maintenance menu
         "research": action_research,
         "browse": action_browse,
+        "sources": action_sources,  # Feature 009 - Sources Dashboard
         "export": action_export_import,
         "quit": None,
     }

@@ -406,8 +406,8 @@ class EmbeddingService:
             List of (Entry, combined_score, semantic_score, matched_keywords) tuples
         """
         from rekall.context_extractor import (
-            extract_keywords,
             calculate_keyword_score,
+            extract_keywords,
             get_matching_keywords,
         )
 

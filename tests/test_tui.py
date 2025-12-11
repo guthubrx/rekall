@@ -4,7 +4,6 @@ from pathlib import Path
 
 from conftest import make_config_with_db_path
 
-
 # ============================================================================
 # Feature 007: Migration Overlay Tests (Phase 2)
 # ============================================================================

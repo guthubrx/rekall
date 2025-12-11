@@ -1,6 +1,5 @@
 """Tests for context extraction utilities (Feature 006 - Phase 3)."""
 
-import pytest
 
 
 class TestExtractKeywords:

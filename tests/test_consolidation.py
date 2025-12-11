@@ -1,7 +1,6 @@
 """Tests for consolidation module (Feature 006 - Phase 5)."""
 
-import pytest
-from unittest.mock import Mock, MagicMock
+from unittest.mock import Mock
 
 
 class TestClusterAnalysis:
@@ -30,7 +29,7 @@ class TestAnalyzeCluster:
     def test_analyze_cluster_with_shared_keywords(self):
         """Should find common keywords across entries."""
         from rekall.consolidation import analyze_cluster
-        from rekall.models import Entry, StructuredContext
+        from rekall.models import StructuredContext
 
         # Mock entries
         entries = [
@@ -85,7 +84,7 @@ class TestFindConsolidationOpportunities:
     def test_finds_clusters_by_keywords(self):
         """Should find entries that share keywords."""
         from rekall.consolidation import find_consolidation_opportunities
-        from rekall.models import Entry, StructuredContext
+        from rekall.models import StructuredContext
 
         # Mock entries with structured context
         entry1 = Mock(id="e1", title="Nginx timeout fix")

@@ -11,9 +11,11 @@ from typing import Optional
 from rekall.models import (
     Embedding,
     Entry,
+    EntrySource,
     Link,
     ReviewItem,
     SearchResult,
+    Source,
     StructuredContext,
     Suggestion,
     calculate_consolidation_score,
@@ -32,8 +34,9 @@ from rekall.models import (
 #   5 = Link reason (reason column for justification)
 #   6 = Structured context (context_structured JSON column for disambiguation)
 #   7 = Unified context (context_blob compressed + keywords index table)
+#   8 = Sources integration (sources, entry_sources tables for bidirectional linking)
 
-CURRENT_SCHEMA_VERSION = 7
+CURRENT_SCHEMA_VERSION = 8
 
 # Migrations dict: version -> list of SQL statements
 # Each migration upgrades from version N-1 to version N
@@ -140,6 +143,46 @@ MIGRATIONS: dict[int, list[str]] = {
         )""",
         "CREATE INDEX IF NOT EXISTS idx_context_keywords ON context_keywords(keyword)",
     ],
+    8: [
+        # Sources table for curated documentary sources with adaptive scoring (Feature 009)
+        """CREATE TABLE IF NOT EXISTS sources (
+            id TEXT PRIMARY KEY,
+            domain TEXT NOT NULL,
+            url_pattern TEXT,
+            usage_count INTEGER DEFAULT 0,
+            last_used TEXT,
+            personal_score REAL DEFAULT 50.0,
+            reliability TEXT DEFAULT 'B',
+            decay_rate TEXT DEFAULT 'medium',
+            last_verified TEXT,
+            status TEXT DEFAULT 'active',
+            created_at TEXT NOT NULL,
+            CHECK (reliability IN ('A', 'B', 'C')),
+            CHECK (decay_rate IN ('fast', 'medium', 'slow')),
+            CHECK (status IN ('active', 'inaccessible', 'archived'))
+        )""",
+        # Entry-source links for bidirectional tracking (Feature 009)
+        """CREATE TABLE IF NOT EXISTS entry_sources (
+            id TEXT PRIMARY KEY,
+            entry_id TEXT NOT NULL,
+            source_id TEXT,
+            source_type TEXT NOT NULL,
+            source_ref TEXT NOT NULL,
+            note TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (entry_id) REFERENCES entries(id) ON DELETE CASCADE,
+            FOREIGN KEY (source_id) REFERENCES sources(id) ON DELETE SET NULL,
+            CHECK (source_type IN ('theme', 'url', 'file'))
+        )""",
+        # Indexes for sources table
+        "CREATE INDEX IF NOT EXISTS idx_sources_domain ON sources(domain)",
+        "CREATE INDEX IF NOT EXISTS idx_sources_score ON sources(personal_score DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_sources_status ON sources(status)",
+        # Indexes for entry_sources table
+        "CREATE INDEX IF NOT EXISTS idx_entry_sources_entry ON entry_sources(entry_id)",
+        "CREATE INDEX IF NOT EXISTS idx_entry_sources_source ON entry_sources(source_id)",
+        "CREATE INDEX IF NOT EXISTS idx_entry_sources_type ON entry_sources(source_type)",
+    ],
 }
 
 # Expected columns for schema verification (Option C - hybrid)
@@ -152,7 +195,7 @@ EXPECTED_ENTRY_COLUMNS = {
     "context_blob",  # Feature 007: Compressed structured context
 }
 
-EXPECTED_TABLES = {"entries", "tags", "links", "entries_fts", "embeddings", "suggestions", "metadata", "context_keywords"}
+EXPECTED_TABLES = {"entries", "tags", "links", "entries_fts", "embeddings", "suggestions", "metadata", "context_keywords", "sources", "entry_sources"}
 
 
 # SQL statements for schema creation
@@ -958,21 +1001,6 @@ class Database:
                 related.append((entry, link))
 
         return related
-
-    def count_links(self, entry_id: str) -> int:
-        """Count total links for an entry.
-
-        Args:
-            entry_id: Entry ULID
-
-        Returns:
-            Number of links (both directions)
-        """
-        cursor = self.conn.execute(
-            "SELECT COUNT(*) FROM links WHERE source_id = ? OR target_id = ?",
-            (entry_id, entry_id),
-        )
-        return cursor.fetchone()[0]
 
     def count_links_by_direction(self, entry_id: str) -> tuple[int, int]:
         """Count incoming and outgoing links for an entry.
@@ -2094,3 +2122,905 @@ class Database:
             """
         ).fetchone()
         return row["count"] if row else 0
+
+    # =========================================================================
+    # Source Methods (Feature 009 - Sources Integration)
+    # =========================================================================
+
+    def add_source(self, source: Source) -> Source:
+        """Add a new source to the database.
+
+        Args:
+            source: Source to add (id will be generated if empty)
+
+        Returns:
+            Source with id populated
+
+        Raises:
+            ValueError: If source already exists with same domain+url_pattern
+        """
+        if not source.id:
+            source.id = generate_ulid()
+
+        try:
+            self.conn.execute(
+                """
+                INSERT INTO sources
+                (id, domain, url_pattern, usage_count, last_used, personal_score,
+                 reliability, decay_rate, last_verified, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    source.id,
+                    source.domain,
+                    source.url_pattern,
+                    source.usage_count,
+                    source.last_used.isoformat() if source.last_used else None,
+                    source.personal_score,
+                    source.reliability,
+                    source.decay_rate,
+                    source.last_verified.isoformat() if source.last_verified else None,
+                    source.status,
+                    source.created_at.isoformat(),
+                ),
+            )
+            self.conn.commit()
+        except sqlite3.IntegrityError as e:
+            raise ValueError(f"Source already exists: {source.domain}") from e
+
+        return source
+
+    def get_source(self, source_id: str) -> Optional[Source]:
+        """Get a source by ID.
+
+        Args:
+            source_id: Source ULID
+
+        Returns:
+            Source if found, None otherwise
+        """
+        row = self.conn.execute(
+            "SELECT * FROM sources WHERE id = ?",
+            (source_id,),
+        ).fetchone()
+
+        if row is None:
+            return None
+
+        return self._row_to_source(row)
+
+    def get_source_by_domain(
+        self, domain: str, url_pattern: Optional[str] = None
+    ) -> Optional[Source]:
+        """Get a source by domain (and optional URL pattern).
+
+        Args:
+            domain: Domain to search for (e.g., "stackoverflow.com")
+            url_pattern: Optional URL pattern for more specific match
+
+        Returns:
+            Source if found, None otherwise
+        """
+        if url_pattern:
+            row = self.conn.execute(
+                "SELECT * FROM sources WHERE domain = ? AND url_pattern = ?",
+                (domain, url_pattern),
+            ).fetchone()
+        else:
+            row = self.conn.execute(
+                "SELECT * FROM sources WHERE domain = ? AND url_pattern IS NULL",
+                (domain,),
+            ).fetchone()
+
+        if row is None:
+            return None
+
+        return self._row_to_source(row)
+
+    def _row_to_source(self, row: sqlite3.Row) -> Source:
+        """Convert a database row to a Source object.
+
+        Args:
+            row: Database row
+
+        Returns:
+            Source object
+        """
+        return Source(
+            id=row["id"],
+            domain=row["domain"],
+            url_pattern=row["url_pattern"],
+            usage_count=row["usage_count"] or 0,
+            last_used=(
+                datetime.fromisoformat(row["last_used"])
+                if row["last_used"]
+                else None
+            ),
+            personal_score=row["personal_score"] or 50.0,
+            reliability=row["reliability"] or "B",
+            decay_rate=row["decay_rate"] or "medium",
+            last_verified=(
+                datetime.fromisoformat(row["last_verified"])
+                if row["last_verified"]
+                else None
+            ),
+            status=row["status"] or "active",
+            created_at=datetime.fromisoformat(row["created_at"]),
+        )
+
+    def link_entry_to_source(
+        self,
+        entry_id: str,
+        source_type: str,
+        source_ref: str,
+        source_id: Optional[str] = None,
+        note: Optional[str] = None,
+    ) -> EntrySource:
+        """Link an entry to a source.
+
+        Args:
+            entry_id: Entry ULID
+            source_type: Type of source ("theme", "url", "file")
+            source_ref: Reference (theme name, URL, or file path)
+            source_id: Optional Source ULID (for URL sources with curated Source)
+            note: Optional note about this specific reference
+
+        Returns:
+            Created EntrySource link
+
+        Raises:
+            ValueError: If entry doesn't exist
+        """
+        # Verify entry exists
+        if self.get(entry_id, update_access=False) is None:
+            raise ValueError(f"Entry not found: {entry_id}")
+
+        link = EntrySource(
+            id=generate_ulid(),
+            entry_id=entry_id,
+            source_id=source_id,
+            source_type=source_type,
+            source_ref=source_ref,
+            note=note,
+        )
+
+        self.conn.execute(
+            """
+            INSERT INTO entry_sources
+            (id, entry_id, source_id, source_type, source_ref, note, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                link.id,
+                link.entry_id,
+                link.source_id,
+                link.source_type,
+                link.source_ref,
+                link.note,
+                link.created_at.isoformat(),
+            ),
+        )
+        self.conn.commit()
+
+        # Update source usage stats if linked to a curated source (US3 integration)
+        if source_id:
+            self.update_source_usage(source_id)
+
+        return link
+
+    def get_entry_sources(self, entry_id: str) -> list[EntrySource]:
+        """Get all sources linked to an entry.
+
+        Args:
+            entry_id: Entry ULID
+
+        Returns:
+            List of EntrySource objects with joined Source data
+        """
+        rows = self.conn.execute(
+            """
+            SELECT es.*, s.domain, s.url_pattern, s.usage_count, s.last_used,
+                   s.personal_score, s.reliability, s.decay_rate, s.last_verified,
+                   s.status, s.created_at as source_created_at
+            FROM entry_sources es
+            LEFT JOIN sources s ON es.source_id = s.id
+            WHERE es.entry_id = ?
+            ORDER BY es.created_at DESC
+            """,
+            (entry_id,),
+        ).fetchall()
+
+        result = []
+        for row in rows:
+            # Build Source if source_id exists
+            source = None
+            if row["source_id"] and row["domain"]:
+                source = Source(
+                    id=row["source_id"],
+                    domain=row["domain"],
+                    url_pattern=row["url_pattern"],
+                    usage_count=row["usage_count"] or 0,
+                    last_used=(
+                        datetime.fromisoformat(row["last_used"])
+                        if row["last_used"]
+                        else None
+                    ),
+                    personal_score=row["personal_score"] or 50.0,
+                    reliability=row["reliability"] or "B",
+                    decay_rate=row["decay_rate"] or "medium",
+                    last_verified=(
+                        datetime.fromisoformat(row["last_verified"])
+                        if row["last_verified"]
+                        else None
+                    ),
+                    status=row["status"] or "active",
+                    created_at=datetime.fromisoformat(row["source_created_at"]),
+                )
+
+            entry_source = EntrySource(
+                id=row["id"],
+                entry_id=row["entry_id"],
+                source_id=row["source_id"],
+                source_type=row["source_type"],
+                source_ref=row["source_ref"],
+                note=row["note"],
+                created_at=datetime.fromisoformat(row["created_at"]),
+                source=source,
+            )
+            result.append(entry_source)
+
+        return result
+
+    def unlink_entry_from_source(self, entry_source_id: str) -> bool:
+        """Remove a link between an entry and a source.
+
+        Args:
+            entry_source_id: EntrySource ULID
+
+        Returns:
+            True if deleted, False if not found
+        """
+        cursor = self.conn.execute(
+            "DELETE FROM entry_sources WHERE id = ?",
+            (entry_source_id,),
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def update_source(self, source: Source) -> bool:
+        """Update an existing source.
+
+        Args:
+            source: Source with updated fields
+
+        Returns:
+            True if updated, False if not found
+        """
+        cursor = self.conn.execute(
+            """
+            UPDATE sources SET
+                domain = ?,
+                url_pattern = ?,
+                usage_count = ?,
+                last_used = ?,
+                personal_score = ?,
+                reliability = ?,
+                decay_rate = ?,
+                last_verified = ?,
+                status = ?
+            WHERE id = ?
+            """,
+            (
+                source.domain,
+                source.url_pattern,
+                source.usage_count,
+                source.last_used.isoformat() if source.last_used else None,
+                source.personal_score,
+                source.reliability,
+                source.decay_rate,
+                source.last_verified.isoformat() if source.last_verified else None,
+                source.status,
+                source.id,
+            ),
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def delete_source(self, source_id: str) -> bool:
+        """Delete a source (entry_sources.source_id will be set to NULL).
+
+        Args:
+            source_id: Source ULID
+
+        Returns:
+            True if deleted, False if not found
+        """
+        cursor = self.conn.execute(
+            "DELETE FROM sources WHERE id = ?",
+            (source_id,),
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    # =========================================================================
+    # Backlink Methods (Feature 009 - US2)
+    # =========================================================================
+
+    def get_source_backlinks(
+        self,
+        source_id: str,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[tuple[Entry, EntrySource]]:
+        """Get all entries that cite a specific source (backlinks).
+
+        Args:
+            source_id: Source ULID
+            limit: Maximum entries to return
+            offset: Pagination offset
+
+        Returns:
+            List of (Entry, EntrySource) tuples for entries citing this source
+        """
+        rows = self.conn.execute(
+            """
+            SELECT e.*, es.id as es_id, es.entry_id, es.source_id, es.source_type,
+                   es.source_ref, es.note, es.created_at as es_created_at
+            FROM entry_sources es
+            JOIN entries e ON es.entry_id = e.id
+            WHERE es.source_id = ?
+            ORDER BY es.created_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            (source_id, limit, offset),
+        ).fetchall()
+
+        result = []
+        for row in rows:
+            # Get tags for entry
+            tag_cursor = self.conn.execute(
+                "SELECT tag FROM tags WHERE entry_id = ?", (row["id"],)
+            )
+            tags = [r[0] for r in tag_cursor.fetchall()]
+
+            entry = self._row_to_entry(row, tags)
+
+            entry_source = EntrySource(
+                id=row["es_id"],
+                entry_id=row["entry_id"],
+                source_id=row["source_id"],
+                source_type=row["source_type"],
+                source_ref=row["source_ref"],
+                note=row["note"],
+                created_at=datetime.fromisoformat(row["es_created_at"]),
+            )
+
+            result.append((entry, entry_source))
+
+        return result
+
+    def count_source_backlinks(self, source_id: str) -> int:
+        """Count entries citing a specific source.
+
+        Args:
+            source_id: Source ULID
+
+        Returns:
+            Number of entries citing this source
+        """
+        row = self.conn.execute(
+            "SELECT COUNT(*) as count FROM entry_sources WHERE source_id = ?",
+            (source_id,),
+        ).fetchone()
+        return row["count"] if row else 0
+
+    def get_backlinks_by_domain(
+        self,
+        domain: str,
+        limit: int = 50,
+    ) -> list[tuple[Entry, EntrySource]]:
+        """Get entries citing any source from a given domain.
+
+        Useful for finding all entries that reference a site like
+        stackoverflow.com regardless of specific URL pattern.
+
+        Args:
+            domain: Domain to search for (e.g., "stackoverflow.com")
+            limit: Maximum entries to return
+
+        Returns:
+            List of (Entry, EntrySource) tuples
+        """
+        rows = self.conn.execute(
+            """
+            SELECT e.*, es.id as es_id, es.entry_id, es.source_id, es.source_type,
+                   es.source_ref, es.note, es.created_at as es_created_at
+            FROM entry_sources es
+            JOIN entries e ON es.entry_id = e.id
+            JOIN sources s ON es.source_id = s.id
+            WHERE s.domain = ?
+            ORDER BY es.created_at DESC
+            LIMIT ?
+            """,
+            (domain, limit),
+        ).fetchall()
+
+        result = []
+        for row in rows:
+            tag_cursor = self.conn.execute(
+                "SELECT tag FROM tags WHERE entry_id = ?", (row["id"],)
+            )
+            tags = [r[0] for r in tag_cursor.fetchall()]
+
+            entry = self._row_to_entry(row, tags)
+
+            entry_source = EntrySource(
+                id=row["es_id"],
+                entry_id=row["entry_id"],
+                source_id=row["source_id"],
+                source_type=row["source_type"],
+                source_ref=row["source_ref"],
+                note=row["note"],
+                created_at=datetime.fromisoformat(row["es_created_at"]),
+            )
+
+            result.append((entry, entry_source))
+
+        return result
+
+    # =========================================================================
+    # Scoring Methods (Feature 009 - US3)
+    # =========================================================================
+
+    def calculate_source_score(self, source: Source) -> float:
+        """Calculate personal score for a source using composite formula.
+
+        Formula: base_score * usage_factor * recency_factor * reliability_factor
+
+        - base_score: 50 (starting point)
+        - usage_factor: log2(usage_count + 1) / 5, capped at 2.0
+        - recency_factor: decay based on days since last use
+        - reliability_factor: A=1.2, B=1.0, C=0.8
+
+        Args:
+            source: Source to calculate score for
+
+        Returns:
+            Calculated score (0-100)
+        """
+        from math import log2
+
+        from rekall.models import DECAY_RATE_HALF_LIVES
+
+        base_score = 50.0
+
+        # Usage factor: logarithmic growth, capped
+        usage_factor = min(2.0, log2(source.usage_count + 1) / 5 + 1)
+
+        # Recency factor: exponential decay based on days since last use
+        recency_factor = 1.0
+        if source.last_used:
+            days_since = (datetime.now() - source.last_used).days
+            half_life = DECAY_RATE_HALF_LIVES.get(source.decay_rate, 180)
+            # Exponential decay: 0.5^(days/half_life)
+            recency_factor = 0.5 ** (days_since / half_life)
+            # Minimum factor of 0.2 to prevent scores from going to zero
+            recency_factor = max(0.2, recency_factor)
+
+        # Reliability factor
+        reliability_factors = {"A": 1.2, "B": 1.0, "C": 0.8}
+        reliability_factor = reliability_factors.get(source.reliability, 1.0)
+
+        # Calculate final score
+        score = base_score * usage_factor * recency_factor * reliability_factor
+
+        # Clamp to 0-100 range
+        return min(100.0, max(0.0, score))
+
+    def update_source_usage(self, source_id: str) -> Optional[Source]:
+        """Increment usage count and recalculate score for a source.
+
+        Should be called when a source is cited in a new entry.
+
+        Args:
+            source_id: Source ULID
+
+        Returns:
+            Updated Source with new score, or None if not found
+        """
+        source = self.get_source(source_id)
+        if source is None:
+            return None
+
+        # Increment usage
+        source.usage_count += 1
+        source.last_used = datetime.now()
+
+        # Recalculate score
+        source.personal_score = self.calculate_source_score(source)
+
+        # Save
+        self.update_source(source)
+
+        return source
+
+    def recalculate_source_score(self, source_id: str) -> Optional[float]:
+        """Recalculate and update score for a source (e.g., for decay).
+
+        Args:
+            source_id: Source ULID
+
+        Returns:
+            New score, or None if source not found
+        """
+        source = self.get_source(source_id)
+        if source is None:
+            return None
+
+        # Calculate new score
+        new_score = self.calculate_source_score(source)
+        source.personal_score = new_score
+
+        # Save
+        self.update_source(source)
+
+        return new_score
+
+    def recalculate_all_scores(self) -> int:
+        """Recalculate scores for all active sources.
+
+        Useful for daily batch update to apply decay.
+
+        Returns:
+            Number of sources updated
+        """
+        rows = self.conn.execute(
+            "SELECT id FROM sources WHERE status = 'active'"
+        ).fetchall()
+
+        count = 0
+        for row in rows:
+            if self.recalculate_source_score(row["id"]) is not None:
+                count += 1
+
+        return count
+
+    def get_top_sources(
+        self,
+        limit: int = 20,
+        min_score: float = 0.0,
+    ) -> list[Source]:
+        """Get sources sorted by personal score (descending).
+
+        Args:
+            limit: Maximum sources to return
+            min_score: Minimum score threshold
+
+        Returns:
+            List of Source objects sorted by score
+        """
+        rows = self.conn.execute(
+            """
+            SELECT * FROM sources
+            WHERE status = 'active' AND personal_score >= ?
+            ORDER BY personal_score DESC
+            LIMIT ?
+            """,
+            (min_score, limit),
+        ).fetchall()
+
+        return [self._row_to_source(row) for row in rows]
+
+    def list_sources(
+        self,
+        status: Optional[str] = None,
+        min_score: Optional[float] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[Source]:
+        """List sources with optional filters and pagination.
+
+        Args:
+            status: Filter by status (optional)
+            min_score: Minimum score threshold (optional)
+            limit: Maximum sources to return
+            offset: Pagination offset
+
+        Returns:
+            List of Source objects
+        """
+        sql = "SELECT * FROM sources WHERE 1=1"
+        params: list = []
+
+        if status:
+            sql += " AND status = ?"
+            params.append(status)
+
+        if min_score is not None:
+            sql += " AND personal_score >= ?"
+            params.append(min_score)
+
+        sql += " ORDER BY personal_score DESC, usage_count DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+
+        rows = self.conn.execute(sql, params).fetchall()
+        return [self._row_to_source(row) for row in rows]
+
+    # =========================================================================
+    # Search Boost Methods (Feature 009 - US4)
+    # =========================================================================
+
+    def get_prioritized_sources_for_theme(
+        self,
+        theme: str,
+        limit: int = 10,
+        min_score: float = 20.0,
+    ) -> list[Source]:
+        """Get sources prioritized by score for a given theme.
+
+        Used for boosting search queries with trusted sources.
+
+        Args:
+            theme: Theme to find sources for
+            limit: Maximum sources to return
+            min_score: Minimum score threshold (default 20 to exclude low-value sources)
+
+        Returns:
+            List of Source objects sorted by score
+        """
+        # Find entry_sources that match the theme
+        rows = self.conn.execute(
+            """
+            SELECT DISTINCT s.*
+            FROM sources s
+            JOIN entry_sources es ON s.id = es.source_id
+            WHERE es.source_type = 'theme'
+            AND es.source_ref LIKE ?
+            AND s.status = 'active'
+            AND s.personal_score >= ?
+            ORDER BY s.personal_score DESC
+            LIMIT ?
+            """,
+            (f"%{theme}%", min_score, limit),
+        ).fetchall()
+
+        return [self._row_to_source(row) for row in rows]
+
+    def get_sources_for_domain_boost(
+        self,
+        limit: int = 20,
+        min_score: float = 20.0,
+    ) -> list[Source]:
+        """Get top sources for search domain boosting.
+
+        Returns unique domains with highest scores for building
+        site:domain search queries.
+
+        Args:
+            limit: Maximum sources to return
+            min_score: Minimum score threshold
+
+        Returns:
+            List of Source objects (one per domain, highest score)
+        """
+        # Get best source per domain
+        rows = self.conn.execute(
+            """
+            SELECT s.*
+            FROM sources s
+            INNER JOIN (
+                SELECT domain, MAX(personal_score) as max_score
+                FROM sources
+                WHERE status = 'active' AND personal_score >= ?
+                GROUP BY domain
+            ) best ON s.domain = best.domain AND s.personal_score = best.max_score
+            ORDER BY s.personal_score DESC
+            LIMIT ?
+            """,
+            (min_score, limit),
+        ).fetchall()
+
+        return [self._row_to_source(row) for row in rows]
+
+    # =========================================================================
+    # Dashboard Methods (Feature 009 - US5)
+    # =========================================================================
+
+    def get_dormant_sources(
+        self,
+        months: int = 6,
+        limit: int = 20,
+    ) -> list[Source]:
+        """Get sources not used in the specified number of months.
+
+        Args:
+            months: Number of months of inactivity (default 6)
+            limit: Maximum sources to return
+
+        Returns:
+            List of dormant Source objects
+        """
+        from datetime import timedelta
+
+        cutoff = datetime.now() - timedelta(days=months * 30)
+
+        rows = self.conn.execute(
+            """
+            SELECT * FROM sources
+            WHERE status = 'active'
+            AND (last_used IS NULL OR last_used < ?)
+            ORDER BY last_used ASC NULLS FIRST
+            LIMIT ?
+            """,
+            (cutoff.isoformat(), limit),
+        ).fetchall()
+
+        return [self._row_to_source(row) for row in rows]
+
+    def get_emerging_sources(
+        self,
+        min_citations: int = 3,
+        days: int = 30,
+        limit: int = 20,
+    ) -> list[Source]:
+        """Get sources with high recent citation activity.
+
+        Identifies sources that are being frequently cited recently,
+        indicating emerging importance.
+
+        Args:
+            min_citations: Minimum citations in the period (default 3)
+            days: Number of days to look back (default 30)
+            limit: Maximum sources to return
+
+        Returns:
+            List of emerging Source objects with citation counts
+        """
+        from datetime import timedelta
+
+        cutoff = datetime.now() - timedelta(days=days)
+
+        rows = self.conn.execute(
+            """
+            SELECT s.*, COUNT(es.id) as recent_citations
+            FROM sources s
+            JOIN entry_sources es ON s.id = es.source_id
+            WHERE s.status = 'active'
+            AND es.created_at >= ?
+            GROUP BY s.id
+            HAVING COUNT(es.id) >= ?
+            ORDER BY recent_citations DESC, s.personal_score DESC
+            LIMIT ?
+            """,
+            (cutoff.isoformat(), min_citations, limit),
+        ).fetchall()
+
+        return [self._row_to_source(row) for row in rows]
+
+    def get_source_statistics(self) -> dict:
+        """Get aggregate statistics about sources.
+
+        Returns:
+            Dictionary with source statistics
+        """
+        stats = {}
+
+        # Total counts
+        row = self.conn.execute(
+            "SELECT COUNT(*) as total FROM sources"
+        ).fetchone()
+        stats["total"] = row["total"] if row else 0
+
+        # By status
+        rows = self.conn.execute(
+            "SELECT status, COUNT(*) as count FROM sources GROUP BY status"
+        ).fetchall()
+        stats["by_status"] = {row["status"]: row["count"] for row in rows}
+
+        # Average score
+        row = self.conn.execute(
+            "SELECT AVG(personal_score) as avg_score FROM sources WHERE status = 'active'"
+        ).fetchone()
+        stats["avg_score"] = round(row["avg_score"], 2) if row and row["avg_score"] else 0
+
+        # Total usage
+        row = self.conn.execute(
+            "SELECT SUM(usage_count) as total_usage FROM sources"
+        ).fetchone()
+        stats["total_usage"] = row["total_usage"] if row and row["total_usage"] else 0
+
+        # Count of entry_sources links
+        row = self.conn.execute(
+            "SELECT COUNT(*) as total_links FROM entry_sources"
+        ).fetchone()
+        stats["total_links"] = row["total_links"] if row else 0
+
+        return stats
+
+    # =========================================================================
+    # Link Rot Detection Methods (Feature 009 - US6)
+    # =========================================================================
+
+    def get_sources_to_verify(
+        self,
+        days_since_check: int = 1,
+        limit: int = 100,
+    ) -> list[Source]:
+        """Get sources that need accessibility verification.
+
+        Returns sources that haven't been verified recently or never.
+
+        Args:
+            days_since_check: Minimum days since last check (default 1)
+            limit: Maximum sources to return
+
+        Returns:
+            List of Source objects needing verification
+        """
+        from datetime import timedelta
+
+        cutoff = datetime.now() - timedelta(days=days_since_check)
+
+        rows = self.conn.execute(
+            """
+            SELECT * FROM sources
+            WHERE domain IS NOT NULL AND domain != ''
+            AND (last_verified IS NULL OR last_verified < ?)
+            ORDER BY last_verified ASC NULLS FIRST
+            LIMIT ?
+            """,
+            (cutoff.isoformat(), limit),
+        ).fetchall()
+
+        return [self._row_to_source(row) for row in rows]
+
+    def update_source_status(
+        self,
+        source_id: str,
+        status: str,
+        last_verified: Optional[datetime] = None,
+    ) -> bool:
+        """Update source status after verification.
+
+        Args:
+            source_id: Source ULID
+            status: New status ("active", "inaccessible", "archived")
+            last_verified: When the check was performed
+
+        Returns:
+            True if updated, False if not found
+        """
+        verify_time = last_verified or datetime.now()
+
+        cursor = self.conn.execute(
+            """
+            UPDATE sources SET
+                status = ?,
+                last_verified = ?
+            WHERE id = ?
+            """,
+            (status, verify_time.isoformat(), source_id),
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def get_inaccessible_sources(self, limit: int = 50) -> list[Source]:
+        """Get sources marked as inaccessible.
+
+        Args:
+            limit: Maximum sources to return
+
+        Returns:
+            List of inaccessible Source objects
+        """
+        rows = self.conn.execute(
+            """
+            SELECT * FROM sources
+            WHERE status = 'inaccessible'
+            ORDER BY last_verified DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+
+        return [self._row_to_source(row) for row in rows]

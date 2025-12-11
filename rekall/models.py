@@ -311,6 +311,95 @@ class Suggestion:
 # Structured context types for v6 (Feature 006)
 ContextExtractionMethod = Literal["manual", "auto", "hybrid"]
 
+# Source types for v8 (Feature 009 - Sources Integration)
+SourceType = Literal["theme", "url", "file"]
+SourceReliability = Literal["A", "B", "C"]
+SourceDecayRate = Literal["fast", "medium", "slow"]
+SourceStatus = Literal["active", "inaccessible", "archived"]
+
+VALID_SOURCE_TYPES = ("theme", "url", "file")
+VALID_SOURCE_RELIABILITY = ("A", "B", "C")
+VALID_SOURCE_DECAY_RATES = ("fast", "medium", "slow")
+VALID_SOURCE_STATUSES = ("active", "inaccessible", "archived")
+
+# Decay rate half-lives in days
+DECAY_RATE_HALF_LIVES = {
+    "fast": 90,    # 3 months
+    "medium": 180,  # 6 months
+    "slow": 365,   # 12 months
+}
+
+
+@dataclass
+class Source:
+    """A curated documentary source with adaptive scoring.
+
+    Sources track usage patterns and calculate a personal score
+    based on frequency, recency, and reliability.
+    """
+
+    id: str = ""
+    domain: str = ""  # Normalized domain (e.g., "pinecone.io")
+    url_pattern: Optional[str] = None  # URL pattern (e.g., "https://pinecone.io/*")
+    usage_count: int = 0
+    last_used: Optional[datetime] = None
+    personal_score: float = 50.0  # Score 0-100
+    reliability: SourceReliability = "B"  # A/B/C (Admiralty simplified)
+    decay_rate: SourceDecayRate = "medium"  # fast/medium/slow
+    last_verified: Optional[datetime] = None  # Link rot check
+    status: SourceStatus = "active"  # active/inaccessible/archived
+    created_at: datetime = field(default_factory=datetime.now)
+
+    def __post_init__(self):
+        """Validate source fields after initialization."""
+        if self.id and not isinstance(self.id, str):
+            raise ValueError("id must be a string")
+        if self.reliability not in VALID_SOURCE_RELIABILITY:
+            raise ValueError(
+                f"invalid reliability: {self.reliability}. "
+                f"Valid: {', '.join(VALID_SOURCE_RELIABILITY)}"
+            )
+        if self.decay_rate not in VALID_SOURCE_DECAY_RATES:
+            raise ValueError(
+                f"invalid decay_rate: {self.decay_rate}. "
+                f"Valid: {', '.join(VALID_SOURCE_DECAY_RATES)}"
+            )
+        if self.status not in VALID_SOURCE_STATUSES:
+            raise ValueError(
+                f"invalid status: {self.status}. "
+                f"Valid: {', '.join(VALID_SOURCE_STATUSES)}"
+            )
+        if not 0 <= self.personal_score <= 100:
+            raise ValueError(f"personal_score must be 0-100, got: {self.personal_score}")
+
+
+@dataclass
+class EntrySource:
+    """A link between an entry (souvenir) and a source.
+
+    Tracks which sources were used to create or inform an entry,
+    enabling bidirectional backlinks and usage tracking.
+    """
+
+    id: str = ""
+    entry_id: str = ""
+    source_id: Optional[str] = None  # NULL if URL not curated
+    source_type: SourceType = "url"  # theme/url/file
+    source_ref: str = ""  # Actual reference (theme name, URL, file path)
+    note: Optional[str] = None  # Contextual note (e.g., "Section on chunking")
+    created_at: datetime = field(default_factory=datetime.now)
+
+    # Joined data (not persisted)
+    source: Optional[Source] = None
+
+    def __post_init__(self):
+        """Validate entry_source fields after initialization."""
+        if self.source_type not in VALID_SOURCE_TYPES:
+            raise ValueError(
+                f"invalid source_type: {self.source_type}. "
+                f"Valid: {', '.join(VALID_SOURCE_TYPES)}"
+            )
+
 
 @dataclass
 class StructuredContext:
@@ -396,3 +485,86 @@ class StructuredContext:
         if isinstance(data, str):
             data = json.loads(data)
         return cls.from_dict(data)
+
+
+# =============================================================================
+# Validation Functions for Sources (Feature 009)
+# =============================================================================
+
+
+def validate_source(source: Source) -> list[str]:
+    """Validate a Source object and return list of errors.
+
+    Args:
+        source: Source object to validate
+
+    Returns:
+        List of error messages (empty if valid)
+    """
+    errors = []
+
+    if not source.domain:
+        errors.append("domain is required")
+
+    if source.reliability not in VALID_SOURCE_RELIABILITY:
+        errors.append(
+            f"reliability must be one of {VALID_SOURCE_RELIABILITY}, "
+            f"got {source.reliability}"
+        )
+
+    if source.decay_rate not in VALID_SOURCE_DECAY_RATES:
+        errors.append(
+            f"decay_rate must be one of {VALID_SOURCE_DECAY_RATES}, "
+            f"got {source.decay_rate}"
+        )
+
+    if source.status not in VALID_SOURCE_STATUSES:
+        errors.append(
+            f"status must be one of {VALID_SOURCE_STATUSES}, "
+            f"got {source.status}"
+        )
+
+    if not 0 <= source.personal_score <= 100:
+        errors.append(f"personal_score must be 0-100, got {source.personal_score}")
+
+    if source.usage_count < 0:
+        errors.append(f"usage_count cannot be negative, got {source.usage_count}")
+
+    return errors
+
+
+def validate_entry_source(entry_source: EntrySource) -> list[str]:
+    """Validate an EntrySource object and return list of errors.
+
+    Args:
+        entry_source: EntrySource object to validate
+
+    Returns:
+        List of error messages (empty if valid)
+    """
+    errors = []
+
+    if not entry_source.entry_id:
+        errors.append("entry_id is required")
+
+    if entry_source.source_type not in VALID_SOURCE_TYPES:
+        errors.append(
+            f"source_type must be one of {VALID_SOURCE_TYPES}, "
+            f"got {entry_source.source_type}"
+        )
+
+    if not entry_source.source_ref:
+        errors.append("source_ref is required")
+
+    # Type-specific validation
+    if entry_source.source_type == "theme":
+        # Theme should reference a .md file
+        if not entry_source.source_ref.endswith(".md"):
+            errors.append("theme source_ref should be a .md filename")
+    elif entry_source.source_type == "url":
+        # URL should start with http:// or https://
+        if not entry_source.source_ref.startswith(("http://", "https://")):
+            errors.append("url source_ref must start with http:// or https://")
+    # file type: no specific validation (local paths vary)
+
+    return errors
