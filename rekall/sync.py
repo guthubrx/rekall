@@ -6,7 +6,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Literal
 
 from rekall.archive import RekallArchive
 from rekall.db import Database
@@ -56,7 +56,7 @@ class ImportResult:
     replaced: int = 0
     skipped: int = 0
     merged: int = 0
-    backup_path: Optional[Path] = None
+    backup_path: Path | None = None
     errors: list[str] = field(default_factory=list)
 
     @property
@@ -68,7 +68,7 @@ class ImportResult:
 ImportStrategy = Literal["skip", "replace", "merge", "interactive"]
 
 
-def detect_conflict(local: Entry, imported: Entry) -> Optional[Conflict]:
+def detect_conflict(local: Entry, imported: Entry) -> Conflict | None:
     """Detect conflict between local and imported entry.
 
     Args:
@@ -145,7 +145,7 @@ def build_import_plan(db: Database, imported_entries: list[Entry]) -> ImportPlan
 class ImportExecutor:
     """Executes import plan with specified strategy."""
 
-    def __init__(self, db: Database, backup_dir: Optional[Path] = None):
+    def __init__(self, db: Database, backup_dir: Path | None = None):
         """Initialize executor.
 
         Args:

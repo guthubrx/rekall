@@ -6,7 +6,6 @@ import sqlite3
 import zlib
 from datetime import date, datetime
 from pathlib import Path
-from typing import Optional
 
 from rekall.models import (
     Embedding,
@@ -21,6 +20,7 @@ from rekall.models import (
     calculate_consolidation_score,
     generate_ulid,
 )
+from rekall.utils import secure_file_permissions
 
 # =============================================================================
 # Schema Versioning (PRAGMA user_version)
@@ -319,7 +319,7 @@ class Database:
             db_path: Path to SQLite database file
         """
         self.db_path = db_path
-        self.conn: Optional[sqlite3.Connection] = None
+        self.conn: sqlite3.Connection | None = None
 
     def init(self) -> None:
         """Initialize database: create directory, connect, create schema."""
@@ -329,6 +329,9 @@ class Database:
         # Connect with row factory for dict-like access
         self.conn = sqlite3.connect(str(self.db_path))
         self.conn.row_factory = sqlite3.Row
+
+        # Secure file permissions (rw------- for sensitive data)
+        secure_file_permissions(self.db_path)
 
         # Enable WAL mode for better concurrency
         self.conn.execute("PRAGMA journal_mode=WAL")
@@ -549,7 +552,7 @@ class Database:
             ease_factor=row["ease_factor"] or 2.5,
         )
 
-    def get(self, entry_id: str, update_access: bool = True) -> Optional[Entry]:
+    def get(self, entry_id: str, update_access: bool = True) -> Entry | None:
         """Get an entry by ID.
 
         Args:
@@ -642,9 +645,9 @@ class Database:
     def search(
         self,
         query: str,
-        entry_type: Optional[str] = None,
-        project: Optional[str] = None,
-        memory_type: Optional[str] = None,
+        entry_type: str | None = None,
+        project: str | None = None,
+        memory_type: str | None = None,
         include_obsolete: bool = False,
         limit: int = 20,
         update_access: bool = True,
@@ -711,9 +714,9 @@ class Database:
 
     def list_all(
         self,
-        entry_type: Optional[str] = None,
-        project: Optional[str] = None,
-        memory_type: Optional[str] = None,
+        entry_type: str | None = None,
+        project: str | None = None,
+        memory_type: str | None = None,
         include_obsolete: bool = False,
         limit: int = 100,
         offset: int = 0,
@@ -818,7 +821,7 @@ class Database:
         source_id: str,
         target_id: str,
         relation_type: str = "related",
-        reason: Optional[str] = None,
+        reason: str | None = None,
     ) -> Link:
         """Create a link between two entries.
 
@@ -876,7 +879,7 @@ class Database:
     def get_links(
         self,
         entry_id: str,
-        relation_type: Optional[str] = None,
+        relation_type: str | None = None,
         direction: str = "both",
     ) -> list[Link]:
         """Get links for an entry.
@@ -936,7 +939,7 @@ class Database:
         self,
         source_id: str,
         target_id: str,
-        relation_type: Optional[str] = None,
+        relation_type: str | None = None,
     ) -> int:
         """Delete link(s) between two entries.
 
@@ -979,7 +982,7 @@ class Database:
     def get_related_entries(
         self,
         entry_id: str,
-        relation_type: Optional[str] = None,
+        relation_type: str | None = None,
     ) -> list[tuple[Entry, Link]]:
         """Get all entries related to a given entry with their links.
 
@@ -1073,7 +1076,7 @@ class Database:
 
         # Collect all connections
         # (direction, type, id, title, reason)
-        connections: list[tuple[str, str, str, str, Optional[str]]] = []
+        connections: list[tuple[str, str, str, str, str | None]] = []
 
         if show_outgoing:
             outgoing = self.get_links(entry_id, direction="outgoing")
@@ -1264,7 +1267,7 @@ class Database:
     def get_due_entries(
         self,
         limit: int = 10,
-        project: Optional[str] = None,
+        project: str | None = None,
     ) -> list[ReviewItem]:
         """Get entries due for spaced repetition review.
 
@@ -1388,7 +1391,7 @@ class Database:
 
     def get_embedding(
         self, entry_id: str, embedding_type: str
-    ) -> Optional[Embedding]:
+    ) -> Embedding | None:
         """Get embedding for entry by type.
 
         Args:
@@ -1445,7 +1448,7 @@ class Database:
         return embeddings
 
     def delete_embedding(
-        self, entry_id: str, embedding_type: Optional[str] = None
+        self, entry_id: str, embedding_type: str | None = None
     ) -> int:
         """Delete embedding(s) for entry.
 
@@ -1470,7 +1473,7 @@ class Database:
         return cursor.rowcount
 
     def get_all_embeddings(
-        self, embedding_type: Optional[str] = None
+        self, embedding_type: str | None = None
     ) -> list[Embedding]:
         """Get all embeddings, optionally filtered by type.
 
@@ -1574,7 +1577,7 @@ class Database:
         )
         self.conn.commit()
 
-    def get_suggestion(self, suggestion_id: str) -> Optional[Suggestion]:
+    def get_suggestion(self, suggestion_id: str) -> Suggestion | None:
         """Get suggestion by ID.
 
         Args:
@@ -1595,8 +1598,8 @@ class Database:
 
     def get_suggestions(
         self,
-        status: Optional[str] = None,
-        suggestion_type: Optional[str] = None,
+        status: str | None = None,
+        suggestion_type: str | None = None,
         limit: int = 100,
     ) -> list[Suggestion]:
         """Get suggestions with optional filters.
@@ -1700,7 +1703,7 @@ class Database:
     # Metadata Methods (Phase 0 - Smart Embeddings)
     # =========================================================================
 
-    def get_metadata(self, key: str) -> Optional[str]:
+    def get_metadata(self, key: str) -> str | None:
         """Get metadata value by key.
 
         Args:
@@ -1792,7 +1795,7 @@ class Database:
         )
         self.conn.commit()
 
-    def get_context(self, entry_id: str) -> Optional[str]:
+    def get_context(self, entry_id: str) -> str | None:
         """Retrieve and decompress context for an entry.
 
         Args:
@@ -1813,7 +1816,7 @@ class Database:
 
     def get_contexts_for_verification(
         self, entry_ids: list[str]
-    ) -> dict[str, Optional[str]]:
+    ) -> dict[str, str | None]:
         """Retrieve contexts for multiple entries (for suggestion verification).
 
         Args:
@@ -1896,7 +1899,7 @@ class Database:
 
         self.conn.commit()
 
-    def get_structured_context(self, entry_id: str) -> Optional[StructuredContext]:
+    def get_structured_context(self, entry_id: str) -> StructuredContext | None:
         """Get structured context for an entry.
 
         Reads from context_blob (compressed, v7+) with fallback to
@@ -2170,7 +2173,7 @@ class Database:
 
         return source
 
-    def get_source(self, source_id: str) -> Optional[Source]:
+    def get_source(self, source_id: str) -> Source | None:
         """Get a source by ID.
 
         Args:
@@ -2190,8 +2193,8 @@ class Database:
         return self._row_to_source(row)
 
     def get_source_by_domain(
-        self, domain: str, url_pattern: Optional[str] = None
-    ) -> Optional[Source]:
+        self, domain: str, url_pattern: str | None = None
+    ) -> Source | None:
         """Get a source by domain (and optional URL pattern).
 
         Args:
@@ -2253,8 +2256,8 @@ class Database:
         entry_id: str,
         source_type: str,
         source_ref: str,
-        source_id: Optional[str] = None,
-        note: Optional[str] = None,
+        source_id: str | None = None,
+        note: str | None = None,
     ) -> EntrySource:
         """Link an entry to a source.
 
@@ -2617,7 +2620,7 @@ class Database:
         # Clamp to 0-100 range
         return min(100.0, max(0.0, score))
 
-    def update_source_usage(self, source_id: str) -> Optional[Source]:
+    def update_source_usage(self, source_id: str) -> Source | None:
         """Increment usage count and recalculate score for a source.
 
         Should be called when a source is cited in a new entry.
@@ -2644,7 +2647,7 @@ class Database:
 
         return source
 
-    def recalculate_source_score(self, source_id: str) -> Optional[float]:
+    def recalculate_source_score(self, source_id: str) -> float | None:
         """Recalculate and update score for a source (e.g., for decay).
 
         Args:
@@ -2713,8 +2716,8 @@ class Database:
 
     def list_sources(
         self,
-        status: Optional[str] = None,
-        min_score: Optional[float] = None,
+        status: str | None = None,
+        min_score: float | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[Source]:
@@ -2978,7 +2981,7 @@ class Database:
         self,
         source_id: str,
         status: str,
-        last_verified: Optional[datetime] = None,
+        last_verified: datetime | None = None,
     ) -> bool:
         """Update source status after verification.
 

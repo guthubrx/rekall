@@ -6,7 +6,6 @@ import platform
 import sys
 from datetime import date, datetime
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich import box
@@ -26,6 +25,8 @@ from rekall.models import (
     StructuredContext,
     generate_ulid,
 )
+from rekall.utils import check_file_permissions, secure_file_permissions
+from rekall.validators import EntryValidator
 
 console = Console()
 
@@ -48,6 +49,80 @@ def show_banner():
     console.print(BANNER)
 
 
+def _check_and_fix_permissions() -> None:
+    """Check and fix file permissions at startup.
+
+    Verifies that DB and config files have secure permissions (0o600).
+    If not, warns the user and attempts to fix them automatically.
+    """
+    config = get_config()
+    files_to_check = [
+        ("Database", config.db_path),
+        ("Config", config.config_dir / "config.toml"),
+    ]
+
+    for name, path in files_to_check:
+        if path.exists() and not check_file_permissions(path):
+            current_mode = path.stat().st_mode & 0o777
+            console.print(
+                f"[yellow]⚠ {name} file has insecure permissions "
+                f"({oct(current_mode)}), fixing to 0o600...[/yellow]"
+            )
+            secure_file_permissions(path)
+
+
+def _display_validation_error(error: Exception, context: str = "Input") -> None:
+    """Display a Pydantic validation error with Rich formatting.
+
+    Args:
+        error: The Pydantic ValidationError
+        context: Context string (e.g., "Entry", "Config")
+    """
+    from pydantic import ValidationError as PydanticValidationError
+
+    if not isinstance(error, PydanticValidationError):
+        console.print(f"[red]Error: {error}[/red]")
+        return
+
+    # Build error panel
+    error_lines = []
+    suggestions = []
+
+    for err in error.errors():
+        field = ".".join(str(loc) for loc in err["loc"]) if err["loc"] else "input"
+        msg = err["msg"]
+        error_type = err["type"]
+
+        error_lines.append(f"• [bold]{field}[/bold]: {msg}")
+
+        # Add helpful suggestions based on error type
+        if error_type == "string_too_long":
+            if "title" in field:
+                suggestions.append("Hint: Keep titles under 500 characters")
+            elif "content" in field:
+                suggestions.append("Hint: Content is limited to 1MB")
+            elif "tag" in field.lower():
+                suggestions.append("Hint: Each tag should be under 100 characters")
+        elif error_type == "string_too_short" or "empty" in msg.lower():
+            suggestions.append(f"Hint: {field} cannot be empty")
+        elif "pattern" in error_type:
+            if "entry_type" in field:
+                suggestions.append("Hint: Valid types: bug, pattern, decision, config, pitfall, reference, note")
+        elif error_type == "value_error":
+            suggestions.append(f"Hint: Check the value for {field}")
+
+    # Create panel content
+    panel_content = "\n".join(error_lines)
+    if suggestions:
+        panel_content += "\n\n[dim]" + "\n".join(set(suggestions)) + "[/dim]"
+
+    console.print(Panel(
+        panel_content,
+        title=f"[red]✗ {context} Validation Error[/red]",
+        border_style="red",
+    ))
+
+
 # Create Typer app with Rich markup
 app = typer.Typer(
     name="rekall",
@@ -58,7 +133,7 @@ app = typer.Typer(
 )
 
 # Database instance (lazy loaded)
-_db: Optional[Database] = None
+_db: Database | None = None
 
 
 def get_db() -> Database:
@@ -123,6 +198,9 @@ def main(
         from rekall.paths import PathResolver
         paths = PathResolver.resolve(force_global=True)
         set_config(Config(paths=paths))
+
+    # Security check: verify/fix file permissions at startup
+    _check_and_fix_permissions()
 
     if ctx.invoked_subcommand is None:
         # Launch interactive TUI
@@ -308,19 +386,19 @@ def init(
 @app.command()
 def search(
     query: str = typer.Argument(..., help="Search query"),
-    entry_type: Optional[str] = typer.Option(
+    entry_type: str | None = typer.Option(
         None,
         "--type",
         "-t",
         help=f"Filter by type: {', '.join(VALID_TYPES)}",
     ),
-    project: Optional[str] = typer.Option(
+    project: str | None = typer.Option(
         None,
         "--project",
         "-p",
         help="Filter by project",
     ),
-    memory_type: Optional[str] = typer.Option(
+    memory_type: str | None = typer.Option(
         None,
         "--memory-type",
         "-m",
@@ -328,7 +406,7 @@ def search(
     ),
     limit: int = typer.Option(20, "--limit", "-l", help="Maximum results"),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON for AI agents"),
-    context: Optional[str] = typer.Option(
+    context: str | None = typer.Option(
         None,
         "--context",
         help="Conversation context for semantic search (AI agent use)",
@@ -415,7 +493,7 @@ def search(
         # Convert to SearchResult format
         from rekall.db import SearchResult
         results = []
-        for entry, combined_score, sem_score in hybrid_results:
+        for entry, _combined_score, sem_score in hybrid_results:
             results.append(SearchResult(entry=entry, rank=None))
             if sem_score is not None:
                 semantic_scores[entry.id] = sem_score
@@ -545,13 +623,13 @@ def add(
         help=f"Entry type: {', '.join(VALID_TYPES)}",
     ),
     title: str = typer.Argument(..., help="Entry title"),
-    tags: Optional[str] = typer.Option(
+    tags: str | None = typer.Option(
         None,
         "--tags",
         "-t",
         help="Comma-separated tags",
     ),
-    project: Optional[str] = typer.Option(
+    project: str | None = typer.Option(
         None,
         "--project",
         "-p",
@@ -565,7 +643,7 @@ def add(
         max=5,
         help="Confidence level (0-5)",
     ),
-    content: Optional[str] = typer.Option(
+    content: str | None = typer.Option(
         None,
         "--content",
         help="Entry content (markdown)",
@@ -576,12 +654,12 @@ def add(
         "-m",
         help=f"Memory type: {', '.join(VALID_MEMORY_TYPES)}",
     ),
-    context: Optional[str] = typer.Option(
+    context: str | None = typer.Option(
         None,
         "--context",
         help="Conversation context for semantic embedding (AI agent use)",
     ),
-    context_json: Optional[str] = typer.Option(
+    context_json: str | None = typer.Option(
         None,
         "--context-json",
         "-cj",
@@ -629,6 +707,27 @@ def add(
     entry_content = content or ""
     if not entry_content and not sys.stdin.isatty():
         entry_content = sys.stdin.read()
+
+    # Validate entry data with Pydantic (T017: Input validation)
+    from pydantic import ValidationError as PydanticValidationError
+
+    try:
+        validated = EntryValidator(
+            title=title,
+            content=entry_content,
+            tags=tag_list,
+            entry_type=entry_type,
+            confidence=confidence,
+            project=project,
+        )
+        # Use validated/normalized values
+        title = validated.title
+        entry_content = validated.content
+        tag_list = validated.tags
+    except PydanticValidationError as e:
+        # T018: Rich error messages with suggestions
+        _display_validation_error(e, "Entry")
+        raise typer.Exit(1)
 
     # Check context requirement based on config
     # Context can be provided via --context, --context-json, or --context-interactive
@@ -908,19 +1007,19 @@ def show(
 
 @app.command()
 def browse(
-    entry_type: Optional[str] = typer.Option(
+    entry_type: str | None = typer.Option(
         None,
         "--type",
         "-t",
         help=f"Filter by type: {', '.join(VALID_TYPES)}",
     ),
-    project: Optional[str] = typer.Option(
+    project: str | None = typer.Option(
         None,
         "--project",
         "-p",
         help="Filter by project",
     ),
-    memory_type: Optional[str] = typer.Option(
+    memory_type: str | None = typer.Option(
         None,
         "--memory-type",
         "-m",
@@ -972,7 +1071,7 @@ def browse(
 @app.command()
 def deprecate(
     entry_id: str = typer.Argument(..., help="Entry ID to deprecate"),
-    replaced_by: Optional[str] = typer.Option(
+    replaced_by: str | None = typer.Option(
         None,
         "--replaced-by",
         "-r",
@@ -1007,7 +1106,7 @@ def deprecate(
 
 @app.command()
 def install(
-    ide: Optional[str] = typer.Argument(
+    ide: str | None = typer.Argument(
         None,
         help="IDE/Agent to install integration for",
     ),
@@ -1110,7 +1209,7 @@ def get_research_topics() -> dict[str, Path]:
 
 @app.command()
 def research(
-    topic: Optional[str] = typer.Argument(
+    topic: str | None = typer.Argument(
         None,
         help="Research topic to display",
     ),
@@ -1241,19 +1340,19 @@ def export(
         ...,
         help="Output file path (.rekall.zip for archive, .md or .json for text)",
     ),
-    format: Optional[str] = typer.Option(
+    format: str | None = typer.Option(
         None,
         "--format",
         "-f",
         help="Export format: rekall (default), md, or json",
     ),
-    entry_type: Optional[str] = typer.Option(
+    entry_type: str | None = typer.Option(
         None,
         "--type",
         "-t",
         help="Filter by entry type",
     ),
-    project: Optional[str] = typer.Option(
+    project: str | None = typer.Option(
         None,
         "--project",
         "-p",
@@ -1459,7 +1558,7 @@ def link(
         "-t",
         help=f"Relation type: {', '.join(VALID_RELATION_TYPES)}",
     ),
-    reason: Optional[str] = typer.Option(
+    reason: str | None = typer.Option(
         None,
         "--reason",
         "-r",
@@ -1504,7 +1603,7 @@ def link(
 def unlink(
     source_id: str = typer.Argument(..., help="Source entry ID"),
     target_id: str = typer.Argument(..., help="Target entry ID"),
-    relation_type: Optional[str] = typer.Option(
+    relation_type: str | None = typer.Option(
         None,
         "--type",
         "-t",
@@ -1541,7 +1640,7 @@ def unlink(
 @app.command()
 def related(
     entry_id: str = typer.Argument(..., help="Entry ID"),
-    relation_type: Optional[str] = typer.Option(
+    relation_type: str | None = typer.Option(
         None,
         "--type",
         "-t",
@@ -1741,7 +1840,7 @@ def review(
         "-l",
         help="Number of entries to review",
     ),
-    project: Optional[str] = typer.Option(
+    project: str | None = typer.Option(
         None,
         "--project",
         "-p",
@@ -1828,7 +1927,7 @@ def review(
 @app.command()
 def generalize(
     entry_ids: list[str] = typer.Argument(..., help="Entry IDs to generalize (2+ required)"),
-    title: Optional[str] = typer.Option(
+    title: str | None = typer.Option(
         None,
         "--title",
         "-t",
@@ -2018,7 +2117,7 @@ def info():
 
 @app.command()
 def backup(
-    output: Optional[Path] = typer.Option(
+    output: Path | None = typer.Option(
         None,
         "--output",
         "-o",
@@ -2150,19 +2249,19 @@ def restore(
 
 @app.command()
 def suggest(
-    accept: Optional[str] = typer.Option(
+    accept: str | None = typer.Option(
         None,
         "--accept",
         "-a",
         help="Accept suggestion by ID (creates link or shows generalize command)",
     ),
-    reject: Optional[str] = typer.Option(
+    reject: str | None = typer.Option(
         None,
         "--reject",
         "-r",
         help="Reject suggestion by ID",
     ),
-    suggestion_type: Optional[str] = typer.Option(
+    suggestion_type: str | None = typer.Option(
         None,
         "--type",
         "-t",
@@ -2622,7 +2721,7 @@ def migrate(
 
 @app.command()
 def changelog(
-    version_filter: Optional[str] = typer.Argument(
+    version_filter: str | None = typer.Argument(
         None,
         help="Show changes for specific version (e.g., '0.2.0')",
     ),

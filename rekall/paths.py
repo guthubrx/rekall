@@ -22,7 +22,6 @@ import sys
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Optional
 
 # On macOS, force XDG-style paths instead of ~/Library/
 # This is per spec: "XDG uniquement sur Mac, identique à Linux"
@@ -117,8 +116,8 @@ class PathResolver:
     @classmethod
     def resolve(
         cls,
-        cli_db_path: Optional[Path] = None,
-        cli_config_path: Optional[Path] = None,
+        cli_db_path: Path | None = None,
+        cli_config_path: Path | None = None,
         force_global: bool = False,
     ) -> ResolvedPaths:
         """Resolve paths according to priority order.
@@ -163,9 +162,9 @@ class PathResolver:
     @classmethod
     def _from_cli(
         cls,
-        db_path: Optional[Path],
-        config_path: Optional[Path],
-    ) -> Optional[ResolvedPaths]:
+        db_path: Path | None,
+        config_path: Path | None,
+    ) -> ResolvedPaths | None:
         """Resolve from CLI arguments."""
         if db_path is None and config_path is None:
             return None
@@ -194,7 +193,7 @@ class PathResolver:
         )
 
     @classmethod
-    def _from_env(cls) -> Optional[ResolvedPaths]:
+    def _from_env(cls) -> ResolvedPaths | None:
         """Resolve from environment variables."""
         rekall_home = os.environ.get("REKALL_HOME")
         rekall_db_path = os.environ.get("REKALL_DB_PATH")
@@ -227,7 +226,7 @@ class PathResolver:
         return None
 
     @classmethod
-    def _from_local(cls) -> Optional[ResolvedPaths]:
+    def _from_local(cls) -> ResolvedPaths | None:
         """Resolve from local project .rekall/ directory."""
         local_dir = Path.cwd() / ".rekall"
 
@@ -244,7 +243,7 @@ class PathResolver:
         )
 
     @classmethod
-    def _from_config(cls) -> Optional[ResolvedPaths]:
+    def _from_config(cls) -> ResolvedPaths | None:
         """Resolve from user config file."""
         # Find config file in XDG or default location
         xdg_config = os.environ.get("XDG_CONFIG_HOME")
@@ -280,7 +279,7 @@ class PathResolver:
         )
 
     @classmethod
-    def _from_xdg(cls) -> Optional[ResolvedPaths]:
+    def _from_xdg(cls) -> ResolvedPaths | None:
         """Resolve from XDG environment variables."""
         xdg_config = os.environ.get("XDG_CONFIG_HOME")
         xdg_data = os.environ.get("XDG_DATA_HOME")
@@ -318,7 +317,7 @@ class PathResolver:
         )
 
 
-def check_legacy_migration() -> Optional[MigrationInfo]:
+def check_legacy_migration() -> MigrationInfo | None:
     """Check if legacy installation exists and needs migration.
 
     Returns:
@@ -398,7 +397,7 @@ def perform_migration(info: MigrationInfo) -> bool:
         return False
 
 
-def init_local_project(path: Optional[Path] = None, exclude_db_from_git: bool = False) -> Path:
+def init_local_project(path: Path | None = None, exclude_db_from_git: bool = False) -> Path:
     """Initialize a local .rekall/ project directory.
 
     Args:

@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import json
 import re
 from datetime import datetime
 
 from rekall.models import Entry
+from rekall.serializers import entries_to_json
 
 # Patterns for detecting sensitive data
 SENSITIVE_PATTERNS = [
@@ -88,22 +88,8 @@ def export_markdown(entries: list[Entry]) -> str:
 
 
 def export_json(entries: list[Entry]) -> str:
-    """Export entries to JSON format."""
-    data = []
-    for entry in entries:
-        entry_dict = {
-            "id": entry.id,
-            "title": entry.title,
-            "type": entry.type,
-            "content": entry.content,
-            "project": entry.project,
-            "tags": entry.tags,
-            "confidence": entry.confidence,
-            "status": entry.status,
-            "superseded_by": entry.superseded_by,
-            "created_at": entry.created_at.isoformat(),
-            "updated_at": entry.updated_at.isoformat(),
-        }
-        data.append(entry_dict)
+    """Export entries to JSON format.
 
-    return json.dumps(data, indent=2, ensure_ascii=False)
+    Uses centralized serialization from rekall.serializers.
+    """
+    return entries_to_json(entries)

@@ -8,10 +8,10 @@ import zipfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 from rekall import __version__
 from rekall.models import Entry
+from rekall.serializers import entries_from_json, entries_to_json
 
 
 @dataclass
@@ -48,7 +48,7 @@ class Manifest:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "Manifest":
+    def from_dict(cls, data: dict) -> Manifest:
         """Deserialize manifest from dictionary."""
         return cls(
             format_version=data["format_version"],
@@ -88,69 +88,12 @@ def calculate_checksum(data: bytes) -> str:
     return f"sha256:{hash_obj.hexdigest()}"
 
 
-def entries_to_json(entries: list[Entry]) -> str:
-    """Serialize entries to JSON string.
-
-    Args:
-        entries: List of Entry objects
-
-    Returns:
-        JSON string representation
-    """
-    data = []
-    for entry in entries:
-        entry_dict = {
-            "id": entry.id,
-            "title": entry.title,
-            "type": entry.type,
-            "content": entry.content,
-            "project": entry.project,
-            "tags": entry.tags,
-            "confidence": entry.confidence,
-            "status": entry.status,
-            "superseded_by": entry.superseded_by,
-            "created_at": entry.created_at.isoformat(),
-            "updated_at": entry.updated_at.isoformat(),
-        }
-        data.append(entry_dict)
-    return json.dumps(data, indent=2, ensure_ascii=False)
-
-
-def entries_from_json(json_str: str) -> list[Entry]:
-    """Deserialize entries from JSON string.
-
-    Args:
-        json_str: JSON string representation
-
-    Returns:
-        List of Entry objects
-    """
-    data = json.loads(json_str)
-    entries = []
-    for item in data:
-        entry = Entry(
-            id=item["id"],
-            title=item["title"],
-            type=item["type"],
-            content=item.get("content", ""),
-            project=item.get("project"),
-            tags=item.get("tags", []),
-            confidence=item.get("confidence", 2),
-            status=item.get("status", "active"),
-            superseded_by=item.get("superseded_by"),
-            created_at=datetime.fromisoformat(item["created_at"]),
-            updated_at=datetime.fromisoformat(item["updated_at"]),
-        )
-        entries.append(entry)
-    return entries
-
-
 class RekallArchive:
     """Handler for .rekall archive files."""
 
     FORMAT_VERSION = "1.0"
 
-    def __init__(self, path: Path, zipf: Optional[zipfile.ZipFile] = None):
+    def __init__(self, path: Path, zipf: zipfile.ZipFile | None = None):
         """Initialize archive handler.
 
         Args:
@@ -159,11 +102,11 @@ class RekallArchive:
         """
         self.path = path
         self._zipf = zipf
-        self._manifest: Optional[Manifest] = None
-        self._entries: Optional[list[Entry]] = None
+        self._manifest: Manifest | None = None
+        self._entries: list[Entry] | None = None
 
     @classmethod
-    def create(cls, path: Path, entries: list[Entry]) -> "RekallArchive":
+    def create(cls, path: Path, entries: list[Entry]) -> RekallArchive:
         """Create a new archive file.
 
         Args:
@@ -209,7 +152,7 @@ class RekallArchive:
         return cls(path)
 
     @classmethod
-    def open(cls, path: Path) -> Optional["RekallArchive"]:
+    def open(cls, path: Path) -> RekallArchive | None:
         """Open an existing archive file.
 
         Args:

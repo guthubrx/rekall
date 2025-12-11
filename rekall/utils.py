@@ -2,7 +2,55 @@
 
 from __future__ import annotations
 
+import logging
+import os
+from pathlib import Path
 from urllib.parse import urlparse
+
+from rekall.constants import FILE_PERMISSIONS
+
+logger = logging.getLogger(__name__)
+
+
+def secure_file_permissions(path: Path | str, mode: int = FILE_PERMISSIONS) -> None:
+    """Set secure permissions on a file.
+
+    Ensures the file is only readable/writable by the owner (mode 600 by default).
+    This is critical for sensitive files like the database and config.
+
+    Args:
+        path: Path to the file
+        mode: Permission mode (default: 0o600 = rw-------)
+
+    Raises:
+        OSError: If chmod fails (e.g., file doesn't exist)
+
+    Example:
+        >>> secure_file_permissions(Path.home() / ".rekall.db")
+    """
+    path = Path(path)
+    if path.exists():
+        current_mode = path.stat().st_mode & 0o777
+        if current_mode != mode:
+            logger.debug(f"Changing permissions on {path}: {oct(current_mode)} -> {oct(mode)}")
+            os.chmod(path, mode)
+
+
+def check_file_permissions(path: Path | str, expected_mode: int = FILE_PERMISSIONS) -> bool:
+    """Check if a file has the expected permissions.
+
+    Args:
+        path: Path to the file
+        expected_mode: Expected permission mode (default: 0o600)
+
+    Returns:
+        True if permissions match, False otherwise
+    """
+    path = Path(path)
+    if not path.exists():
+        return True  # File doesn't exist yet, will be created with correct perms
+    current_mode = path.stat().st_mode & 0o777
+    return current_mode == expected_mode
 
 
 def extract_domain(url: str) -> str:
