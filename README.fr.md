@@ -1,24 +1,45 @@
+<div align="center">
+
+<!-- LOGO: Décommenter quand logo.png est prêt
+<img src="docs/images/logo.png" alt="Logo Rekall" width="120">
+-->
+
 # Rekall
 
-```
-        ██████╗ ███████╗██╗  ██╗ █████╗ ██╗     ██╗
-        ██╔══██╗██╔════╝██║ ██╔╝██╔══██╗██║     ██║
-        ██████╔╝█████╗  █████╔╝ ███████║██║     ██║
-        ██╔══██╗██╔══╝  ██╔═██╗ ██╔══██║██║     ██║
-        ██║  ██║███████╗██║  ██╗██║  ██║███████╗███████╗
-        ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚══════╝
-```
+**Tes connaissances de développeur, rappelées instantanément.**
 
-<p align="center">
+<p>
   <img src="https://img.shields.io/badge/100%25-Local-blue?style=flat-square" alt="100% Local">
-  <img src="https://img.shields.io/badge/No_API_Keys-green?style=flat-square" alt="No API Keys">
-  <img src="https://img.shields.io/badge/MCP-Compatible-purple?style=flat-square" alt="MCP Compatible">
+  <img src="https://img.shields.io/badge/Pas_de_clé_API-green?style=flat-square" alt="Pas de clé API">
+  <img src="https://img.shields.io/badge/MCP-Compatible-purple?style=flat-square" alt="Compatible MCP">
   <img src="https://img.shields.io/badge/Python-3.9+-yellow?style=flat-square" alt="Python 3.9+">
 </p>
 
-> *"Get your ass to Mars. Quaid... crush those bugs"*
+*« Get your ass to Mars. Quaid... crush those bugs »*
+
+[Documentation](#sommaire) · [Installation](#pour-commencer) · [Intégration MCP](#serveur-mcp--compatible-avec-tous-les-assistants-ia)
 
 **Traductions :** [English](README.md) | [Español](README.es.md) | [Deutsch](README.de.md) | [中文](README.zh-CN.md)
+
+</div>
+
+---
+
+## Sommaire
+
+- [TL;DR](#tldr)
+- [Le problème](#tu-as-déjà-résolu-ce-problème)
+- [La solution](#et-si-ton-assistant-ia-se-souvenait-pour-toi-)
+- [Comment ça marche](#comment-ça-marche-en-pratique)
+- [Interface](#linterface)
+- [Ce qu'il automatise](#ce-que-rekall-fait-pour-toi)
+- [Types d'entrées](#quest-ce-que-tu-peux-capturer-)
+- [Vie privée](#100--local-100--à-toi)
+- [Pour commencer](#pour-commencer)
+- [Serveur MCP](#serveur-mcp--compatible-avec-tous-les-assistants-ia)
+- [Intégration Speckit](#intégration-avec-speckit)
+- [Sous le capot](#sous-le-capot--comment-fonctionne-la-recherche) *(technique)*
+- [Basé sur la science](#basé-sur-la-science) *(recherche)*
 
 ---
 
@@ -62,7 +83,7 @@ Tu repars de zéro. Encore deux heures de perdues.
 
 **Ça arrive à tous les développeurs.** Selon les études, les entreprises du Fortune 500 perdent 31,5 milliards de dollars par an parce que les leçons apprises ne sont jamais capturées. Pas par négligence — mais parce qu'on est humains, et les humains oublient.
 
----
+<br>
 
 ## Et si ton assistant IA se souvenait pour toi ?
 
@@ -90,9 +111,20 @@ Ton assistant IA a maintenant du contexte. Il sait ce qui a marché avant. Il ne
   <img src="docs/screenshots/demo.gif" alt="Rekall en action" width="700">
 </p>
 
----
+<!--
+Placeholder screenshots - ajoute tes images dans docs/screenshots/
+Options:
+- demo.gif: GIF animé montrant le workflow (recommandé)
+- tui.png: Screenshot de l'interface terminal
+- search.png: Résultats de recherche
+- mcp.png: Intégration MCP avec Claude/Cursor
+-->
+
+<br>
 
 ## Un second cerveau qui pense comme toi
+
+> **Idée clé :** Rekall est construit sur le fonctionnement réel de la mémoire humaine — connecter les connaissances liées, extraire des patterns des épisodes, et faire remonter l'information oubliée avant qu'elle ne s'efface.
 
 Rekall n'est pas juste une appli de notes. Il est construit sur le fonctionnement réel de la mémoire humaine :
 
@@ -122,9 +154,11 @@ Quand tu résous quelque chose, les connaissances liées remontent automatiqueme
 
 ### Les événements deviennent sagesse
 
-Chaque bug que tu corriges est un **épisode** — un événement spécifique avec son contexte. Mais des patterns émergent. Après avoir corrigé trois bugs de timeout similaires, Rekall t'aide à extraire le **principe** : "Toujours ajouter du retry avec backoff exponentiel pour les APIs externes."
+Chaque bug que tu corriges est un **épisode** — un événement spécifique avec son contexte. Mais des patterns émergent. Après avoir corrigé trois bugs de timeout similaires, Rekall t'aide à extraire le **principe** : « Toujours ajouter du retry avec backoff exponentiel pour les APIs externes. »
 
 Les épisodes sont la matière première. Les patterns sont la connaissance réutilisable.
+
+<br>
 
 ### Les connaissances oubliées refont surface
 
@@ -154,7 +188,7 @@ C'est fait. Ton futur toi te remerciera.
 
 ### 2. Cherche par le sens, pas juste les mots-clés
 
-Tu ne te souviens plus si tu avais appelé ça "CORS" ou "cross-origin" ? Peu importe.
+Tu ne te souviens plus si tu avais appelé ça « CORS » ou « cross-origin » ? Peu importe.
 
 ```bash
 rekall search "navigateur qui bloque mes appels API"
@@ -251,18 +285,18 @@ rekall review  # Session de répétition espacée
 
 | Type | Pour | Exemple |
 |------|------|---------|
-| `bug` | Problèmes résolus | "CORS Safari avec credentials" |
-| `pattern` | Approches réutilisables | "Retry avec backoff exponentiel" |
-| `decision` | Pourquoi X plutôt que Y | "PostgreSQL plutôt que MongoDB pour ce projet" |
-| `pitfall` | Erreurs à éviter | "Jamais de SELECT * en production" |
-| `config` | Config qui marche | "Config debug Python VS Code" |
-| `reference` | Docs/liens utiles | "Cette réponse StackOverflow là" |
-| `snippet` | Code à garder | "Fonction debounce générique" |
-| `til` | Apprentissages rapides | "Git rebase -i peut réordonner les commits" |
+| `bug` | Problèmes résolus | « CORS Safari avec credentials » |
+| `pattern` | Approches réutilisables | « Retry avec backoff exponentiel » |
+| `decision` | Pourquoi X plutôt que Y | « PostgreSQL plutôt que MongoDB pour ce projet » |
+| `pitfall` | Erreurs à éviter | « Jamais de SELECT * en production » |
+| `config` | Config qui marche | « Config debug Python VS Code » |
+| `reference` | Docs/liens utiles | « Cette réponse StackOverflow là » |
+| `snippet` | Code à garder | « Fonction debounce générique » |
+| `til` | Apprentissages rapides | « Git rebase -i peut réordonner les commits » |
 
 ---
 
-## 100% local. 100% à toi.
+## 100 % local. 100 % à toi.
 
 ```
 Ta machine
@@ -540,6 +574,8 @@ Le résultat : recherche **exhaustive** (rien n'est manqué) avec **rapidité** 
 <details>
 <summary><h2>Basé sur la science</h2></summary>
 
+> **TL;DR :** Graphes de connaissances (+20% de précision), répétition espacée (+6-9% de rétention), récupération contextuelle (-67% d'échecs), le tout basé sur la recherche évaluée par les pairs.
+
 Rekall n'est pas une collection d'intuitions — il est construit sur la recherche en sciences cognitives et en récupération d'information évaluée par les pairs. Voici ce qu'on a appris et comment on l'a appliqué :
 
 ### Graphes de connaissances : +20% de précision de récupération
@@ -584,24 +620,22 @@ score = 0.6 × facteur_fréquence + 0.4 × facteur_fraîcheur
 
 Les entrées que tu accèdes souvent et récemment ont une haute consolidation (connaissance stable). Les entrées que tu n'as pas touchées depuis des mois ont une basse consolidation (à risque d'être oubliées).
 
----
-
 **On a lu les papiers pour que tu n'aies pas à le faire. Puis on a construit un outil qui les applique.**
 
 </details>
 
 <br>
 
----
-
 ## En savoir plus
 
 | Ressource | Description |
 |-----------|-------------|
-| `rekall --help` | Référence complète des commandes |
-| `rekall version` | Version et info base de données |
-| `rekall changelog` | Quoi de neuf |
-| [CHANGELOG.md](CHANGELOG.md) | Historique détaillé des versions |
+| [Premiers pas](docs/getting-started.md) | Installation et premiers pas |
+| [Référence CLI](docs/usage.md) | Documentation complète des commandes |
+| [Intégration MCP](docs/mcp-integration.md) | Connexion aux assistants IA |
+| [Architecture](docs/architecture.md) | Diagrammes techniques et internals |
+| [Contribuer](CONTRIBUTING.md) | Comment contribuer |
+| [Changelog](CHANGELOG.md) | Historique des versions |
 
 ---
 

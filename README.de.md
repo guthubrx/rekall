@@ -1,50 +1,71 @@
+<div align="center">
+
+<!-- LOGO: Auskommentieren wenn logo.png bereit ist
+<img src="docs/images/logo.png" alt="Rekall Logo" width="120">
+-->
+
 # Rekall
 
-```
-        ██████╗ ███████╗██╗  ██╗ █████╗ ██╗     ██╗
-        ██╔══██╗██╔════╝██║ ██╔╝██╔══██╗██║     ██║
-        ██████╔╝█████╗  █████╔╝ ███████║██║     ██║
-        ██╔══██╗██╔══╝  ██╔═██╗ ██╔══██║██║     ██║
-        ██║  ██║███████╗██║  ██╗██║  ██║███████╗███████╗
-        ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚══════╝
-```
+**Dein Entwicklerwissen, sofort abrufbar.**
 
-<p align="center">
-  <img src="https://img.shields.io/badge/100%25-Local-blue?style=flat-square" alt="100% Local">
-  <img src="https://img.shields.io/badge/No_API_Keys-green?style=flat-square" alt="No API Keys">
-  <img src="https://img.shields.io/badge/MCP-Compatible-purple?style=flat-square" alt="MCP Compatible">
+<p>
+  <img src="https://img.shields.io/badge/100%25-Lokal-blue?style=flat-square" alt="100% Lokal">
+  <img src="https://img.shields.io/badge/Keine_API_Keys-green?style=flat-square" alt="Keine API Keys">
+  <img src="https://img.shields.io/badge/MCP-Kompatibel-purple?style=flat-square" alt="MCP Kompatibel">
   <img src="https://img.shields.io/badge/Python-3.9+-yellow?style=flat-square" alt="Python 3.9+">
 </p>
 
-> *"Get your ass to Mars. Quaid... crush those bugs"*
+*"Get your ass to Mars. Quaid... crush those bugs"*
+
+[Dokumentation](#inhalt) · [Installation](#erste-schritte) · [MCP-Integration](#mcp-server-funktioniert-mit-jedem-ki-assistenten)
 
 **Übersetzungen:** [English](README.md) | [Français](README.fr.md) | [Español](README.es.md) | [中文](README.zh-CN.md)
+
+</div>
+
+---
+
+## Inhalt
+
+- [TL;DR](#tldr)
+- [Das Problem](#du-hast-dieses-problem-schon-mal-gelöst)
+- [Die Lösung](#was-wäre-wenn-dein-ki-assistent-sich-für-dich-erinnern-würde)
+- [Wie es in der Praxis funktioniert](#wie-es-in-der-praxis-funktioniert)
+- [Das Interface](#das-interface)
+- [Was es automatisiert](#was-rekall-für-dich-tut)
+- [Eintragstypen](#was-kannst-du-erfassen)
+- [Datenschutz](#100-lokal-100-deins)
+- [Erste Schritte](#erste-schritte)
+- [MCP Server](#mcp-server-funktioniert-mit-jedem-ki-assistenten)
+- [Speckit-Integration](#integration-mit-speckit)
+- [Unter der Haube](#unter-der-haube-wie-die-suche-funktioniert) *(technisch)*
+- [Basiert auf Wissenschaft](#basiert-auf-wissenschaft) *(Forschung)*
 
 ---
 
 ### TL;DR
 
-**Das Problem:** Jeder Entwickler hat denselben Bug zweimal gelöst. Nicht aus Nachlässigkeit — weil wir Menschen sind, und Menschen vergessen. Studien zeigen, dass Fortune-500-Unternehmen jährlich 31,5 Milliarden Dollar durch nie erfasstes Wissen verlieren.
+**Das Problem:** Jeder Entwickler hat schon mal denselben Bug zweimal gelöst. Nicht weil er unachtsam war — sondern weil Menschen vergessen. Forschung zeigt, dass Fortune-500-Unternehmen jährlich 31,5 Milliarden Dollar verlieren durch Wissen, das nie erfasst wurde.
 
-**Unser Ansatz:** Rekall ist eine persönliche Wissensbasis, die auf kognitionswissenschaftlicher Forschung aufbaut. Wir haben studiert, wie das menschliche Gedächtnis wirklich funktioniert — episodisches vs. semantisches Gedächtnis, verteilte Wiederholung, Wissensgraphen — und es auf Entwickler-Workflows angewandt.
+**Unser Ansatz:** Rekall ist eine persönliche Wissensdatenbank (personal knowledge base), die auf kognitionswissenschaftlicher Forschung basiert. Wir haben untersucht, wie menschliches Gedächtnis tatsächlich funktioniert — episodisches vs. semantisches Gedächtnis (episodic vs semantic memory), verteilte Wiederholung (spaced repetition), Wissensgraphen (knowledge graphs) — und es auf Entwickler-Workflows angewendet.
 
-**Was es macht:** Erfasse Bugs, Patterns, Entscheidungen, Konfigurationen während du arbeitest. Suche nach Bedeutung, nicht nur Keywords — Rekall verwendet optionale lokale Embeddings (EmbeddingGemma) kombiniert mit Volltextsuche, um relevante Einträge zu finden, auch wenn deine Wörter nicht genau übereinstimmen. Speichert reichen Kontext (Situation, Lösung, was fehlschlug) um ähnliche Probleme später eindeutig zuzuordnen.
+**Was es tut:** Erfasse Bugs, Patterns, Entscheidungen, Configs während du arbeitest. Suche nach Bedeutung, nicht nur Keywords — Rekall nutzt optionale lokale Embeddings (EmbeddingGemma) kombiniert mit Volltextsuche (full-text search), um relevante Einträge zu finden, selbst wenn deine Wörter nicht exakt übereinstimmen. Speichere reichhaltigen Kontext (Situation, Lösung, was nicht funktioniert hat), um ähnliche Probleme später zu unterscheiden.
 
-**Funktioniert mit deinen Tools:** Rekall stellt einen MCP-Server bereit, der mit den meisten KI-gestützten Entwicklungstools kompatibel ist — Claude Code, Claude Desktop, Cursor, Windsurf, Continue.dev und jedem MCP-Client. Ein Befehl (`rekall mcp`) und deine KI konsultiert dein Wissen vor jedem Fix.
+**Funktioniert mit deinen Tools:** Rekall stellt einen MCP-Server (Model Context Protocol) bereit, der mit den meisten KI-gestützten Entwicklungstools kompatibel ist — Claude Code, Claude Desktop, Cursor, Windsurf, Continue.dev und jedem MCP-kompatiblen Client. Ein Befehl (`rekall mcp`) und deine KI konsultiert dein Wissen vor jedem Fix.
 
-**Was es automatisiert:** Keyword-Extraktion, Konsolidierungs-Scoring, Pattern-Erkennung, Link-Vorschläge, Review-Planung (SM-2 verteilte Wiederholung). Du konzentrierst dich aufs Erfassen — Rekall kümmert sich um den Rest.
+**Was es automatisiert:** Keyword-Extraktion, Konsolidierungs-Scoring (consolidation scoring), Pattern-Erkennung, Link-Vorschläge, Review-Planung (SM-2 spaced repetition). Du konzentrierst dich aufs Erfassen — Rekall kümmert sich um den Rest.
 
 ```bash
 # Installation
 uv tool install git+https://github.com/guthubrx/rekall.git
 
-# Erfassen (interaktiver Modus führt dich)
-rekall add bug "CORS schlägt auf Safari fehl" --context-interactive
+# Erfassen (interaktiver Modus führt dich durch den Prozess)
+rekall add bug "CORS funktioniert nicht in Safari" --context-interactive
 
 # Suchen (versteht Bedeutung, nicht nur Keywords)
 rekall search "Browser blockiert API"
 
-# KI verbinden (ein Befehl, funktioniert mit Claude/Cursor/Windsurf)
+# Mit KI verbinden (ein Befehl, funktioniert mit Claude/Cursor/Windsurf)
 rekall mcp
 ```
 
@@ -52,37 +73,37 @@ rekall mcp
 
 <br>
 
-## Du hast dieses Problem schon gelöst.
+## Du hast dieses Problem schon mal gelöst.
 
-Vor drei Monaten hast du zwei Stunden damit verbracht, einen kryptischen Fehler zu debuggen. Du hast die Lösung gefunden. Du bist weitergezogen.
+Vor drei Monaten hast du zwei Stunden mit dem Debugging eines kryptischen Fehlers verbracht. Du hast den Fix gefunden. Du bist weitergezogen.
 
-Heute erscheint derselbe Fehler. Du starrst ihn an. Er kommt dir bekannt vor. Aber wo war diese Lösung nochmal?
+Heute taucht derselbe Fehler wieder auf. Du starrst ihn an. Er sieht bekannt aus. Aber wo war nochmal die Lösung?
 
-Du fängst von vorne an. Noch zwei Stunden verloren.
+Du fängst von vorne an. Weitere zwei Stunden weg.
 
-**Das passiert jedem Entwickler.** Laut Studien verlieren Fortune-500-Unternehmen jährlich 31,5 Milliarden Dollar, weil gelernte Lektionen nie festgehalten werden. Nicht aus Nachlässigkeit — sondern weil wir Menschen sind, und Menschen vergessen.
+**Das passiert jedem Entwickler.** Laut Forschung verlieren Fortune-500-Unternehmen jährlich 31,5 Milliarden Dollar, weil gelernte Lektionen nie erfasst werden. Nicht weil Menschen unachtsam sind — sondern weil wir Menschen sind, und Menschen vergessen.
 
----
+<br>
 
 ## Was wäre, wenn dein KI-Assistent sich für dich erinnern würde?
 
-Stell dir vor: Du bittest Claude oder Cursor, einen Bug zu beheben. Bevor eine einzige Zeile Code geschrieben wird, durchsucht er deine persönliche Wissensdatenbank:
+Stell dir vor: Du bittest Claude oder Cursor, einen Bug zu fixen. Bevor es eine einzige Zeile Code schreibt, prüft es deine persönliche Wissensdatenbank:
 
 ```
 🔍 Durchsuche dein Wissen...
 
 2 relevante Einträge gefunden:
 
-[1] bug: CORS-Fehler auf Safari (85% Übereinstimmung)
-    "credentials: include und korrekte Access-Control-Header hinzufügen"
+[1] bug: CORS-Fehler in Safari (85% Übereinstimmung)
+    "Füge credentials: include und korrekte Access-Control-Header hinzu"
     → Du hast das vor 3 Monaten gelöst
 
-[2] pattern: Cross-Origin-Request-Behandlung (72% Übereinstimmung)
-    "Immer auf Safari testen - strengere CORS-Durchsetzung"
-    → Pattern aus 4 ähnlichen Bugs extrahiert
+[2] pattern: Cross-origin Request-Handling (72% Übereinstimmung)
+    "Teste immer in Safari - es hat strengere CORS-Regeln"
+    → Pattern extrahiert aus 4 ähnlichen Bugs
 ```
 
-Dein KI-Assistent hat jetzt Kontext. Er weiß, was vorher funktioniert hat. Er wird das Rad nicht neu erfinden — er baut auf deiner vergangenen Erfahrung auf.
+Dein KI-Assistent hat jetzt Kontext. Er weiß, was vorher funktioniert hat. Er wird das Rad nicht neu erfinden — er baut auf deiner früheren Erfahrung auf.
 
 **Das ist Rekall.**
 
@@ -90,27 +111,38 @@ Dein KI-Assistent hat jetzt Kontext. Er weiß, was vorher funktioniert hat. Er w
   <img src="docs/screenshots/demo.gif" alt="Rekall in Aktion" width="700">
 </p>
 
----
+<!--
+Screenshots Platzhalter - füge deine Bilder zu docs/screenshots/ hinzu
+Optionen:
+- demo.gif: Animiertes GIF, das den Workflow zeigt (empfohlen)
+- tui.png: Terminal-UI Screenshot
+- search.png: Suchergebnisse
+- mcp.png: MCP-Integration mit Claude/Cursor
+-->
+
+<br>
 
 ## Ein zweites Gehirn, das denkt wie du
 
-Rekall ist nicht nur eine Notiz-App. Es basiert auf der tatsächlichen Funktionsweise des menschlichen Gedächtnisses:
+> **Kernidee:** Rekall basiert darauf, wie menschliches Gedächtnis tatsächlich funktioniert — verwandtes Wissen verbinden, Patterns aus Episoden extrahieren und vergessene Informationen wieder an die Oberfläche bringen, bevor sie verblassen.
+
+Rekall ist nicht nur eine Notiz-App. Es basiert darauf, wie menschliches Gedächtnis tatsächlich funktioniert:
 
 ### Dein Wissen, verbunden
 
-Wenn du etwas löst, taucht verwandtes Wissen automatisch auf. Hast du einen Timeout-Bug behoben? Rekall zeigt dir die drei anderen Timeout-Probleme, die du gelöst hast, und das Retry-Pattern, das du daraus extrahiert hast.
+Wenn du etwas löst, taucht automatisch verwandtes Wissen auf. Einen Timeout-Bug gefixt? Rekall zeigt dir die drei anderen Timeout-Probleme, die du gelöst hast, und das Retry-Pattern, das du daraus extrahiert hast.
 
 ```
               ┌──────────────┐
               │ Auth Timeout │
               │   (heute)    │
               └──────┬───────┘
-                     │ ähnlich wie...
+                     │ ähnlich zu...
         ┌────────────┼────────────┐
         ▼            ▼            ▼
   ┌──────────┐ ┌──────────┐ ┌──────────┐
   │ DB #47   │ │ API #52  │ │ Cache #61│
-  │(2 Wochen)│ │ (1 Monat)│ │(3 Monate)│
+  │(2 Wochen)│ │(1 Monat) │ │(3 Monate)│
   └────┬─────┘ └────┬─────┘ └──────────┘
        └──────┬─────┘
               ▼
@@ -122,63 +154,65 @@ Wenn du etwas löst, taucht verwandtes Wissen automatisch auf. Hast du einen Tim
 
 ### Ereignisse werden zu Weisheit
 
-Jeder Bug, den du behebst, ist eine **Episode** — ein spezifisches Ereignis mit Kontext. Aber Muster entstehen. Nach dem Beheben von drei ähnlichen Timeout-Bugs hilft dir Rekall, das **Prinzip** zu extrahieren: "Immer Retry mit exponentiellem Backoff für externe APIs hinzufügen."
+Jeder Bug, den du fixst, ist eine **Episode** — ein spezifisches Ereignis mit Kontext. Aber Patterns entstehen. Nachdem du drei ähnliche Timeout-Bugs gefixt hast, hilft dir Rekall, das **Prinzip** zu extrahieren: "Füge immer Retry mit exponentiellem Backoff für externe APIs hinzu."
 
 Episoden sind Rohmaterial. Patterns sind wiederverwendbares Wissen.
 
+<br>
+
 ### Vergessenes Wissen taucht wieder auf
 
-Rekall verfolgt, was du abrufst und wann. Wissen, das du seit Monaten nicht berührt hast? Es erinnert dich daran, bevor es vollständig verblasst. Denk daran als Spaced Repetition für dein Entwickler-Gehirn.
+Rekall trackt, was du wann aufrufst. Wissen, das du seit Monaten nicht berührt hast? Es erinnert dich daran, bevor es komplett verblasst. Denk daran wie an verteilte Wiederholung (spaced repetition) für dein Entwickler-Gehirn.
 
 ---
 
 ## Wie es in der Praxis funktioniert
 
-### 1. Erfasse Wissen während der Arbeit
+### 1. Erfasse Wissen während du arbeitest
 
-Nach dem Lösen von etwas Kniffligem, erfasse es in 10 Sekunden:
+Nachdem du etwas Kniffliges gelöst hast, erfasse es in 10 Sekunden:
 
 ```bash
-rekall add bug "CORS schlägt auf Safari fehl" --context-interactive
+rekall add bug "CORS funktioniert nicht in Safari" --context-interactive
 ```
 
-Rekall fragt: *Was ist passiert? Was hat es behoben? Welche Schlüsselwörter sollten das auslösen?*
+Rekall fragt: *Was ist passiert? Was hat es gefixt? Welche Keywords sollen das triggern?*
 
 ```
-> Situation: Safari blockiert Anfragen trotz gesetzter CORS-Header
-> Lösung: credentials: 'include' und explizites Allow-Origin hinzufügen
-> Schlüsselwörter: cors, safari, cross-origin, fetch, credentials
+> Situation: Safari blockiert Anfragen, obwohl CORS-Header gesetzt sind
+> Lösung: Füge credentials: 'include' und explizites Allow-Origin hinzu
+> Keywords: cors, safari, cross-origin, fetch, credentials
 ```
 
-Fertig. Dein zukünftiges Ich wird es dir danken.
+Fertig. Dein zukünftiges Ich wird dir danken.
 
-### 2. Suche nach Bedeutung, nicht nur Schlüsselwörtern
+### 2. Suche nach Bedeutung, nicht nur Keywords
 
-Erinnerst du dich nicht, ob du es "CORS" oder "Cross-Origin" genannt hast? Egal.
+Kannst du dich nicht erinnern, ob du es "CORS" oder "cross-origin" genannt hast? Egal.
 
 ```bash
 rekall search "Browser blockiert meine API-Aufrufe"
 ```
 
-Rekall versteht die Bedeutung. Es findet relevante Einträge, auch wenn deine Wörter nicht genau übereinstimmen.
+Rekall versteht Bedeutung. Es findet relevante Einträge, selbst wenn deine Wörter nicht exakt übereinstimmen.
 
 ### 3. Lass deinen KI-Assistenten es nutzen
 
-Verbinde Rekall mit Claude, Cursor oder jeder MCP-kompatiblen KI:
+Verbinde Rekall mit Claude, Cursor oder jeder KI, die MCP unterstützt:
 
 ```bash
-rekall mcp  # Startet den Server
+rekall mcp  # Server starten
 ```
 
-Jetzt konsultiert deine KI dein Wissen vor jeder Korrektur. Sie zitiert deine vergangenen Lösungen. Sie schlägt vor, neue zu speichern. Dein Wissen akkumuliert sich über die Zeit.
+Jetzt konsultiert deine KI dein Wissen vor jedem Fix. Sie zitiert deine früheren Lösungen. Sie schlägt vor, neue zu speichern. Dein Wissen wächst im Laufe der Zeit.
 
 ---
 
-## Die Oberfläche
+## Das Interface
 
 ### Terminal UI
 ```bash
-rekall  # Startet die visuelle Oberfläche
+rekall  # Startet das visuelle Interface
 ```
 
 ```
@@ -186,76 +220,79 @@ rekall  # Startet die visuelle Oberfläche
 │  🔍 Suche: cors safari                                  │
 ├─────────────────────────────────────────────────────────┤
 │                                                         │
-│  [1] bug: CORS schlägt auf Safari fehl     85% ██████   │
+│  [1] bug: CORS funktioniert nicht in Safari 85% ██████  │
 │      safari, cors, fetch  •  vor 3 Monaten              │
-│      "credentials: include hinzufügen..."               │
+│      "Füge credentials: include hinzu..."               │
 │                                                         │
-│  [2] pattern: Cross-Origin-Behandlung      72% █████    │
-│      architektur  •  vor 1 Monat                        │
-│      "Safari ist strenger bei CORS"                     │
+│  [2] pattern: Cross-origin Handling         72% █████   │
+│      architecture  •  vor 1 Monat                       │
+│      "Safari hat strengere CORS-Regeln"                 │
+│                                                         │
+│  [3] reference: MDN CORS-Guide              68% ████    │
+│      docs, mdn  •  vor 6 Monaten                        │
 │                                                         │
 ├─────────────────────────────────────────────────────────┤
-│  [/] Suchen  [a] Hinzufügen  [Enter] Ansehen  [q] Ende  │
+│  [/] Suche  [a] Hinzufügen  [Enter] Ansehen  [q] Beenden│
 └─────────────────────────────────────────────────────────┘
 ```
 
 ### Kommandozeile
 ```bash
 rekall add bug "Fix: null pointer in auth" -t auth,null
-rekall search "Authentifizierungsfehler"
+rekall search "authentication error"
 rekall show 01HX7...
 rekall link 01HX7 01HY2 --type related
-rekall review  # Spaced-Repetition-Sitzung
+rekall review  # Spaced-Repetition-Session
 ```
 
 <br>
 
 ## Was Rekall für dich tut
 
-> **Philosophie:** Du konzentrierst dich auf das Erfassen deines Wissens. Rekall kümmert sich um alles andere.
+> **Philosophie:** Du konzentrierst dich aufs Erfassen von Wissen. Rekall kümmert sich um alles andere.
 
 ### Bei jedem Eintrag, den du hinzufügst
 
-- **Keyword-Extraktion** — Analysiert Titel und Inhalt, schlägt relevante Keywords vor
+- **Keyword-Extraktion** — Analysiert deinen Titel und Inhalt, schlägt relevante Keywords vor
 - **Kontext-Validierung** — Warnt, wenn Situation/Lösung zu vage oder generisch ist
 - **Embedding-Generierung** — Erstellt semantische Vektoren für intelligente Suche (wenn aktiviert)
-- **Automatische Indexierung** — Der Volltext-Suchindex wird in Echtzeit aktualisiert
+- **Automatisches Indexing** — Volltextsuche-Index wird in Echtzeit aktualisiert
 
 ### Bei jeder Suche
 
-- **Hybrides Matching** — Kombiniert exakte Wörter (FTS5) + Bedeutung (Embeddings) + Trigger (Keywords)
-- **Null Konfiguration** — Funktioniert out of the box, kein Tuning nötig
-- **Verknüpfte Einträge** — Zeigt automatisch verwandtes Wissen
+- **Hybrid-Matching** — Kombiniert exakte Wörter (FTS5) + Bedeutung (embeddings) + Trigger (keywords)
+- **Keine Konfiguration** — Funktioniert out of the box, kein Tuning nötig
+- **Verwandte Einträge** — Zeigt verknüpftes Wissen automatisch
 
 ### Im Hintergrund (du tust nichts)
 
-- **Zugriffs-Tracking** — Jede Abfrage aktualisiert Häufigkeits- und Aktualitäts-Statistiken
-- **Konsolidierungs-Score** — Berechnet, wie "stabil" jede Erinnerung ist (60% Häufigkeit + 40% Frische)
-- **Pattern-Erkennung** — Findet Cluster ähnlicher Einträge, schlägt Pattern-Erstellung vor
+- **Access-Tracking** — Jede Ansicht aktualisiert Häufigkeits- und Aktualitäts-Statistiken
+- **Konsolidierungs-Scoring** — Berechnet, wie "stabil" jede Erinnerung ist (60% Häufigkeit + 40% Frische)
+- **Pattern-Erkennung** — Findet Cluster ähnlicher Einträge, schlägt Erstellung eines Patterns vor
 - **Link-Vorschläge** — Erkennt verwandte Einträge, schlägt Verbindungen vor
-- **Review-Planung** — SM-2-Algorithmus plant optimale Wiederholungszeitpunkte (Spaced Repetition)
-- **Kontext-Komprimierung** — Speichert ausführlichen Kontext mit 70-85% weniger Größe
+- **Review-Planung** — SM-2-Algorithmus plant optimale Review-Zeiten (spaced repetition)
+- **Kontext-Kompression** — Speichert ausführlichen Kontext 70-85% kleiner
 
 ### Wenn du `rekall review` ausführst
 
-- **Lädt fällige Einträge** — Basierend auf SM-2-Planung, nicht willkürlichen Daten
-- **Passt Schwierigkeit an** — Deine Bewertung (0-5) aktualisiert den Leichtigkeitsfaktor automatisch
-- **Plant um** — Berechnet das nächste optimale Review-Datum
+- **Lädt fällige Einträge** — Basierend auf SM-2-Planung, nicht auf willkürlichen Daten
+- **Passt Schwierigkeit an** — Deine Bewertung (0-5) aktualisiert den Ease-Factor automatisch
+- **Plant neu** — Berechnet das nächste optimale Review-Datum
 
 ---
 
 ## Was kannst du erfassen?
 
 | Typ | Für | Beispiel |
-|-----|-----|----------|
-| `bug` | Gelöste Probleme | "Safari CORS mit credentials" |
+|------|-----|---------|
+| `bug` | Probleme, die du gelöst hast | "Safari CORS mit credentials" |
 | `pattern` | Wiederverwendbare Ansätze | "Retry mit exponentiellem Backoff" |
-| `decision` | Warum X statt Y | "PostgreSQL statt MongoDB für dieses Projekt" |
-| `pitfall` | Zu vermeidende Fehler | "Niemals SELECT * in Produktion" |
-| `config` | Funktionierende Konfiguration | "VS Code Python Debug-Konfiguration" |
-| `reference` | Nützliche Docs/Links | "Diese eine StackOverflow-Antwort" |
-| `snippet` | Code zum Aufheben | "Generische Debounce-Funktion" |
-| `til` | Schnelle Erkenntnisse | "Git rebase -i kann Commits umsortieren" |
+| `decision` | Warum du X statt Y gewählt hast | "PostgreSQL statt MongoDB für dieses Projekt" |
+| `pitfall` | Fehler, die zu vermeiden sind | "Nutze nie SELECT * in Produktion" |
+| `config` | Setup, das funktioniert | "VS Code Python Debugging Config" |
+| `reference` | Nützliche Docs/Links | "Die eine StackOverflow-Antwort" |
+| `snippet` | Code, der es wert ist, behalten zu werden | "Generische Debounce-Funktion" |
+| `til` | Schnelle Learnings | "Git rebase -i kann Commits umsortieren" |
 
 ---
 
@@ -269,16 +306,16 @@ Dein Rechner
 │  ~/.local/share/rekall/             │
 │                                     │
 │  Alles bleibt hier.                 │
-│  Keine Cloud. Kein Konto.           │
+│  Keine Cloud. Kein Account.         │
 │  Kein Tracking.                     │
 │                                     │
 └─────────────────────────────────────┘
      │
      ▼
-  Nirgendwo anders. Niemals.
+  Nirgendwo sonst. Niemals.
 ```
 
-Dein Wissen gehört dir. Rekall telefoniert nicht nach Hause. Es erfordert kein Konto. Es funktioniert offline. Deine Debug-Historie, deine Architekturentscheidungen, deine hart erarbeitete Weisheit — alles privat, alles lokal.
+Dein Wissen gehört dir. Rekall telefoniert nicht nach Hause. Es benötigt keinen Account. Es funktioniert offline. Deine Debugging-History, deine Architektur-Entscheidungen, deine hart erkämpfte Weisheit — alles privat, alles lokal.
 
 ---
 
@@ -294,7 +331,7 @@ uv tool install git+https://github.com/guthubrx/rekall.git
 pipx install git+https://github.com/guthubrx/rekall.git
 ```
 
-### Probiere es aus
+### Ausprobieren
 
 ```bash
 # Füge deinen ersten Eintrag hinzu
@@ -303,34 +340,34 @@ rekall add bug "Mein erster erfasster Bug" -t test
 # Suche danach
 rekall search "erster"
 
-# Öffne die visuelle Oberfläche
+# Öffne das visuelle Interface
 rekall
 ```
 
 ---
 
-## MCP-Server: Funktioniert mit jedem KI-Assistenten
+## MCP Server: Funktioniert mit jedem KI-Assistenten
 
-Rekall stellt deine Wissensbasis über das **Model Context Protocol (MCP)** bereit — der offene Standard zur Verbindung von KI-Assistenten mit externen Tools.
+Rekall stellt deine Wissensdatenbank über das **Model Context Protocol (MCP)** bereit — der offene Standard zum Verbinden von KI-Assistenten mit externen Tools.
 
-### Ein Befehl, universeller Zugang
+### Ein Befehl, universeller Zugriff
 
 ```bash
-rekall mcp  # Startet den MCP-Server
+rekall mcp  # MCP-Server starten
 ```
 
-### Kompatibel mit führenden KI-Tools
+### Kompatibel mit wichtigen KI-Tools
 
 | Tool | Status | Konfiguration |
 |------|--------|---------------|
-| **Claude Code** | ✅ Nativ | Automatisch erkannt |
+| **Claude Code** | ✅ Nativ | Auto-erkannt |
 | **Claude Desktop** | ✅ Nativ | Zu `claude_desktop_config.json` hinzufügen |
 | **Cursor** | ✅ Unterstützt | MCP-Einstellungen |
 | **Windsurf** | ✅ Unterstützt | MCP-Einstellungen |
 | **Continue.dev** | ✅ Unterstützt | MCP-Konfiguration |
 | **Jeder MCP-Client** | ✅ Kompatibel | Standard-MCP-Protokoll |
 
-### Konfigurationsbeispiel (Claude Desktop)
+### Konfigurations-Beispiel (Claude Desktop)
 
 Füge zu deiner `claude_desktop_config.json` hinzu:
 
@@ -347,29 +384,29 @@ Füge zu deiner `claude_desktop_config.json` hinzu:
 
 ### Was deine KI tun kann
 
-Einmal verbunden, kann dein KI-Assistent:
+Sobald verbunden, kann dein KI-Assistent:
 
-- **Suchen** in deiner Wissensbasis vor dem Antworten
-- **Zitieren** deiner vergangenen Lösungen in seinen Antworten
-- **Vorschlagen** neues Wissen nach dem Lösen von Problemen zu erfassen
-- **Verknüpfen** verwandter Einträge automatisch
-- **Aufzeigen** von Patterns in deiner Debug-Historie
+- **Durchsuchen** — Deine Wissensdatenbank durchsuchen, bevor er antwortet
+- **Zitieren** — Deine früheren Lösungen in seinen Antworten zitieren
+- **Vorschlagen** — Vorschlagen, neues Wissen nach dem Lösen von Problemen zu erfassen
+- **Verknüpfen** — Automatisch verwandte Einträge verlinken
+- **Aufdecken** — Patterns in deiner Debugging-History aufdecken
 
-Dein Wissen akkumuliert sich automatisch — je mehr du es nutzt, desto intelligenter wird es.
+Dein Wissen wächst automatisch — je mehr du es nutzt, desto schlauer wird es.
 
 ---
 
 ## Integration mit Speckit
 
-[Speckit](https://github.com/YOUR_USERNAME/speckit) ist ein spezifikationsgetriebenes Entwicklungs-Toolkit. Kombiniert mit Rekall entsteht ein leistungsstarker Workflow, bei dem deine Spezifikationen deine Wissensbasis füttern.
+[Speckit](https://github.com/YOUR_USERNAME/speckit) ist ein spezifikationsgesteuertes Entwicklungs-Toolkit (specification-driven development toolkit). In Kombination mit Rekall entsteht ein kraftvoller Workflow, bei dem deine Spezifikationen deine Wissensdatenbank füttern.
 
 ### Warum integrieren?
 
-- **Specs werden zu durchsuchbarem Wissen**: Entscheidungen während des Spec-Schreibens werden erfasst
-- **Patterns entstehen**: Gemeinsame Architekturentscheidungen tauchen projektübergreifend auf
+- **Specs werden zu durchsuchbarem Wissen**: Entscheidungen, die während des Spec-Schreibens getroffen wurden, werden erfasst
+- **Patterns entstehen**: Häufige Architektur-Entscheidungen tauchen projektübergreifend auf
 - **Kontext bleibt erhalten**: Das "Warum" hinter Specs geht nie verloren
 
-### Installation
+### Setup
 
 1. Installiere beide Tools:
 ```bash
@@ -377,12 +414,12 @@ uv tool install git+https://github.com/guthubrx/rekall.git
 uv tool install git+https://github.com/YOUR_USERNAME/speckit.git
 ```
 
-2. Konfiguriere Speckit für Rekall (in deiner `.speckit/config.yaml`):
+2. Konfiguriere Speckit zur Nutzung von Rekall (in deiner `.speckit/config.yaml`):
 ```yaml
 integrations:
   rekall:
     enabled: true
-    auto_capture: true  # Automatische Erfassung von Entscheidungen
+    auto_capture: true  # Entscheidungen automatisch erfassen
     types:
       - decision
       - pattern
@@ -390,20 +427,20 @@ integrations:
 ```
 
 3. Während der Spec-Arbeit wird Speckit:
-   - Rekall nach relevanten vergangenen Entscheidungen befragen
-   - Vorschlagen, neue Architekturentscheidungen zu erfassen
+   - Rekall nach relevanten früheren Entscheidungen abfragen
+   - Vorschlagen, neue Architektur-Entscheidungen zu erfassen
    - Specs mit verwandten Wissenseinträgen verknüpfen
 
 ### Beispiel-Workflow
 
 ```bash
-# Beginne eine Feature zu spezifizieren
-speckit specify "Benutzer-Authentifizierungssystem"
+# Spezifiziere ein Feature
+speckit specify "User-Authentifizierungssystem"
 
-# Speckit fragt Rekall: "Hast du schon Auth-Entscheidungen getroffen?"
-# → Zeigt deine vergangene OAuth vs JWT Entscheidung aus einem anderen Projekt
+# Speckit fragt Rekall: "Hast du vorher Auth-Entscheidungen getroffen?"
+# → Zeigt deine frühere OAuth vs JWT Entscheidung aus einem anderen Projekt
 
-# Nach Abschluss der Spec
+# Nach Finalisierung der Spec
 speckit plan
 
 # Rekall erfasst: decision "JWT für stateless Auth in Microservices"
@@ -414,17 +451,17 @@ speckit plan
 <details>
 <summary><h2>Unter der Haube: Wie die Suche funktioniert</h2></summary>
 
-> **TL;DR:** Hybridsuche kombiniert FTS5 (50%) + semantische Embeddings (30%) + Keywords (20%). Optionales lokales Modell, keine API-Schlüssel.
+> **TL;DR:** Hybrid-Suche kombiniert FTS5 (50%) + semantische Embeddings (30%) + Keywords (20%). Optionales lokales Modell, keine API-Keys.
 
 Rekall macht nicht nur Keyword-Matching. Es versteht, was du meinst.
 
 ### Das Problem mit einfacher Suche
 
-Du hast einen Bug erfasst: "CORS-Fehler auf Safari." Später suchst du nach "Browser blockiert meine API-Aufrufe." Eine einfache Keyword-Suche findet nichts — die Wörter stimmen nicht überein.
+Du hast einen Bug über "CORS-Fehler in Safari" erfasst. Später suchst du nach "Browser blockiert API-Aufrufe". Eine einfache Keyword-Suche findet nichts — die Wörter stimmen nicht überein.
 
-### Hybridsuche: vollständig UND schnell
+### Hybrid-Suche: Erschöpfend UND schnell
 
-Rekall kombiniert drei Suchstrategien:
+Rekall kombiniert drei Such-Strategien:
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -435,41 +472,41 @@ Rekall kombiniert drei Suchstrategien:
            ┌───────────────────────┼───────────────────────┐
            ▼                       ▼                       ▼
     ┌─────────────┐        ┌─────────────┐        ┌─────────────┐
-    │   FTS5      │        │ Semantisch  │        │ Schlüssel-  │
-    │  (50%)      │        │   (30%)     │        │ wörter (20%)│
+    │   FTS5      │        │  Semantisch │        │  Keywords   │
+    │  (50%)      │        │   (30%)     │        │   (20%)     │
     │             │        │             │        │             │
-    │ Exakte      │        │ Bedeutung   │        │ Strukturierte│
-    │ Übereinstim.│        │ via Embed.  │        │ Trigger     │
+    │ Exakte Wort-│        │ Bedeutung   │        │ Struktur.   │
+    │ Übereinstim.│        │ via Embeddi.│        │ Trigger     │
     └──────┬──────┘        └──────┬──────┘        └──────┬──────┘
            │                      │                      │
            └───────────────────────┼───────────────────────┘
                                    ▼
                         ┌─────────────────┐
-                        │  FINAL SCORE    │
-                        │  85% match      │
+                        │  FINALER SCORE  │
+                        │  85% Match      │
                         └─────────────────┘
 ```
 
-- **Volltextsuche (50%)**: SQLite FTS5 findet exakte und partielle Übereinstimmungen
-- **Semantische Suche (30%)**: Embeddings finden konzeptuell ähnlichen Inhalt — "Browser" passt zu "Safari", "blockiert" passt zu "CORS-Fehler"
-- **Keyword-Index (20%)**: Deine strukturierten Kontext-Keywords liefern explizite Trigger
+- **Volltextsuche (50%)**: SQLite FTS5 findet exakte und partielle Wort-Übereinstimmungen
+- **Semantische Suche (30%)**: Embeddings finden konzeptionell ähnlichen Inhalt — "Browser" passt zu "Safari", "blockiert" passt zu "CORS-Fehler"
+- **Keywords-Index (20%)**: Deine strukturierten Kontext-Keywords liefern explizite Trigger
 
-### Lokale Embeddings: Optional aber leistungsstark
+### Lokale Embeddings: Optional aber mächtig
 
 Semantische Suche ist **optional**. Rekall funktioniert perfekt mit FTS5-Volltextsuche allein — kein Modell erforderlich.
 
-Aber wenn du semantisches Verständnis möchtest, verwendet Rekall **EmbeddingGemma** (308M Parameter), ein State-of-the-Art Embedding-Modell, das vollständig auf deinem Rechner läuft:
+Aber wenn du semantisches Verständnis möchtest, nutzt Rekall **EmbeddingGemma** (308M Parameter), ein hochmodernes Embedding-Modell, das vollständig auf deinem Rechner läuft:
 
-- **100% lokal**: Keine Daten verlassen deinen Computer, keine API-Schlüssel, keine Cloud
-- **Mehrsprachig**: Funktioniert in über 100 Sprachen
+- **100% lokal**: Keine Daten verlassen deinen Computer, keine API-Keys, keine Cloud
+- **Mehrsprachig**: Funktioniert in 100+ Sprachen
 - **Schnell**: ~500ms pro Embedding auf einem Standard-Laptop-CPU
-- **Kompakt**: ~200MB RAM mit int8-Quantisierung
+- **Klein**: ~200MB RAM mit int8-Quantisierung
 
 ```bash
 # Nur-FTS-Modus (Standard, kein Modell nötig)
-rekall search "CORS Fehler"
+rekall search "CORS-Fehler"
 
-# Semantische Suche aktivieren (lädt Modell bei erster Verwendung)
+# Semantische Suche aktivieren (lädt Modell beim ersten Gebrauch)
 rekall config set embeddings.enabled true
 ```
 
@@ -478,13 +515,13 @@ rekall config set embeddings.enabled true
 Wenn du Wissen erfasst, speichert Rekall zwei Embeddings:
 
 1. **Summary-Embedding**: Titel + Inhalt + Tags — für fokussierte Suchen
-2. **Kontext-Embedding**: Die vollständige Situation/Lösung — für explorative Suchen
+2. **Kontext-Embedding**: Die volle Situation/Lösung — für explorative Suchen
 
-Das löst ein fundamentales Problem beim Retrieval: Zusammenfassungen verlieren Kontext. Wenn du nach "Stack Trace Safari" suchst, wird das Summary "Fix CORS" nicht passen — aber der vollständige Kontext, den du erfasst hast (der den Stack Trace erwähnt), schon.
+Das löst ein fundamentales Problem beim Retrieval: Zusammenfassungen verlieren Kontext. Wenn du nach "stack trace Safari" suchst, passt die Zusammenfassung "Fix CORS" nicht — aber der vollständige Kontext, den du erfasst hast (der den Stack-Trace erwähnt), wird passen.
 
-### Strukturierter Kontext: Eindeutige Zuordnung
+### Strukturierter Kontext: Disambiguierung, die funktioniert
 
-Du hast 5 verschiedene "Timeout"-Bugs behoben. Wie findest du später den richtigen? Keywords allein helfen nicht — alle sind mit "Timeout" getaggt.
+Du hast 5 verschiedene "Timeout"-Bugs gefixt. Wie findest du später den richtigen? Keywords allein helfen nicht — sie sind alle mit "timeout" getaggt.
 
 Rekall erfasst **strukturierten Kontext** für jeden Eintrag:
 
@@ -499,36 +536,37 @@ Rekall erfasst **strukturierten Kontext** für jeden Eintrag:
 └─────────────────────────────────────────────────────────────┘
 ```
 
-Bei der Suche nutzt Rekall diesen Kontext zur eindeutigen Zuordnung:
+Wenn du suchst, nutzt Rekall diesen Kontext zur Disambiguierung:
 
-- **"Timeout nach Deploy"** → Findet den Connection-Pool-Bug (Situations-Match)
+- **"timeout nach deploy"** → Findet den Connection-Pool-Bug (passt zur Situation)
 - **"ETIMEDOUT"** → Findet Einträge mit genau dieser Fehlermeldung
-- **"Retry hat nicht funktioniert"** → Findet Einträge, wo Retry versucht wurde und fehlschlug
+- **"retry hat nicht funktioniert"** → Findet Einträge, wo Retry versucht und gescheitert ist
 
 Das `--context-interactive` Flag führt dich durch die Erfassung:
 
 ```bash
-rekall add bug "Timeout in Prod" --context-interactive
-# Rekall fragt: Was ist passiert? Was hat es behoben? Was hat nicht funktioniert?
+rekall add bug "Timeout in Produktion" --context-interactive
+# Rekall fragt: Was ist passiert? Was hat es gefixt? Was hat nicht funktioniert?
 # Deine Antworten werden zu durchsuchbarem Disambiguierungs-Kontext
 ```
 
-### Komprimierte Speicherung
+### Komprimierter Speicher
 
-Kontext kann ausführlich sein. Rekall komprimiert strukturierten Kontext mit zlib und pflegt einen separaten Keyword-Index für schnelle Suche:
+Kontext kann ausführlich sein. Rekall komprimiert strukturierten Kontext mit zlib und pflegt einen separaten Keywords-Index für schnelle Suche:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    ENTRY-SPEICHERUNG                        │
+│                    EINTRAG-SPEICHER                         │
 ├─────────────────────────────────────────────────────────────┤
-│  context_blob     │  Komprimiertes JSON (zlib) │  ~70% kleiner│
-│  context_keywords │  Indexierte Tabelle        │  O(1) Lookup │
-│  emb_summary      │  768-dim Vektor            │  Semantisch  │
-│  emb_context      │  768-dim Vektor            │  Semantisch  │
+│  context_blob     │  Komprimiertes JSON (zlib) │ ~70% kleiner│
+│  context_keywords │  Indexierte Tabelle für    │ O(1) Lookup │
+│                   │  Suche                     │             │
+│  emb_summary      │  768-dim Vektor (Summary)  │ Semantisch  │
+│  emb_context      │  768-dim Vektor (Kontext)  │ Semantisch  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-Das Ergebnis: **vollständige** Suche (nichts wird übersehen) mit **Geschwindigkeit** (Sub-Sekunden-Antworten bei tausenden Einträgen).
+Das Ergebnis: **Erschöpfende** Suche (nichts wird übersehen) mit **Geschwindigkeit** (sub-Sekunden-Antworten bei Tausenden Einträgen).
 
 </details>
 
@@ -537,41 +575,43 @@ Das Ergebnis: **vollständige** Suche (nichts wird übersehen) mit **Geschwindig
 <details>
 <summary><h2>Basiert auf Wissenschaft</h2></summary>
 
-Rekall ist keine Sammlung von Vermutungen — es basiert auf peer-reviewed Forschung in Kognitionswissenschaft und Information Retrieval. Hier ist, was wir gelernt haben und wie wir es anwenden:
+> **TL;DR:** Wissensgraphen (+20% Genauigkeit), Spaced Repetition (+6-9% Retention), Kontextuelles Retrieval (-67% Fehler), alles untermauert durch peer-reviewed Forschung.
 
-### Wissensgraphen: +20% Abrufgenauigkeit
+Rekall ist keine Sammlung von Vermutungen — es basiert auf peer-reviewed kognitionswissenschaftlicher und Information-Retrieval-Forschung. Hier ist, was wir gelernt und wie wir es angewendet haben:
 
-**Forschung**: Studien zu Wissensgraphen in RAG-Systemen zeigen, dass verbundene Information leichter abzurufen ist als isolierte Fakten.
+### Wissensgraphen: +20% Retrieval-Genauigkeit
 
-**Anwendung**: Rekall lässt dich Einträge mit typisierten Beziehungen verknüpfen (`related`, `supersedes`, `derived_from`, `contradicts`). Bei der Suche boosten verknüpfte Einträge gegenseitig ihre Scores. Wenn du einen neuen Timeout-Bug behebst, zeigt Rekall dir die drei anderen Timeout-Probleme, die du gelöst hast — und das Pattern, das du daraus extrahiert hast.
+**Forschung**: Studien zu Wissensgraphen in RAG-Systemen zeigen, dass verbundene Informationen einfacher abzurufen sind als isolierte Fakten.
+
+**Anwendung**: Rekall lässt dich Einträge mit typisierten Beziehungen verknüpfen (`related`, `supersedes`, `derived_from`, `contradicts`). Wenn du suchst, boosten verknüpfte Einträge gegenseitig ihre Scores. Wenn du einen neuen Timeout-Bug fixst, zeigt Rekall die drei anderen Timeout-Probleme, die du gelöst hast — und das Pattern, das du daraus extrahiert hast.
 
 ### Episodisches vs. semantisches Gedächtnis: Wie dein Gehirn organisiert
 
-**Forschung**: Tulving (1972) stellte fest, dass das menschliche Gedächtnis zwei unterschiedliche Systeme hat — episodisch (spezifische Ereignisse: "Ich habe diesen Bug am Dienstag behoben") und semantisch (allgemeines Wissen: "Immer Retry für externe APIs hinzufügen").
+**Forschung**: Tulving (1972) etablierte, dass menschliches Gedächtnis zwei unterschiedliche Systeme hat — episodisch (spezifische Ereignisse: "Ich habe diesen Bug am Dienstag gefixt") und semantisch (allgemeines Wissen: "Füge immer Retry für externe APIs hinzu").
 
-**Anwendung**: Rekall unterscheidet `episodic`-Einträge (was passiert ist) von `semantic`-Einträgen (was du gelernt hast). Der `generalize`-Befehl hilft dir, Patterns aus Episoden zu extrahieren. Das spiegelt wider, wie sich Expertise entwickelt: Du sammelst Erfahrungen, dann destillierst du sie zu Prinzipien.
+**Anwendung**: Rekall unterscheidet `episodische` Einträge (was ist passiert) von `semantischen` Einträgen (was du gelernt hast). Der `generalize`-Befehl hilft dir, Patterns aus Episoden zu extrahieren. Das spiegelt wider, wie sich Expertise entwickelt: Du sammelst Erfahrungen, destillierst sie dann zu Prinzipien.
 
-### Verteilte Wiederholung: +6-9% Retention
+### Spaced Repetition: +6-9% Retention
 
-**Forschung**: Der Spacing-Effekt (Ebbinghaus, 1885) und der SM-2-Algorithmus zeigen, dass Wiederholung in wachsenden Intervallen die Retention dramatisch verbessert.
+**Forschung**: Der Spacing-Effekt (Ebbinghaus, 1885) und SM-2-Algorithmus zeigen, dass das Wiederholen von Information in zunehmenden Intervallen die Retention dramatisch verbessert.
 
-**Anwendung**: Rekall verfolgt, wann du auf jeden Eintrag zugreifst, und berechnet einen Konsolidierungs-Score. Der `review`-Befehl zeigt Wissen, das kurz vor dem Verblassen steht. Der `stale`-Befehl findet Einträge, die du seit Monaten nicht berührt hast — bevor sie vergessen werden.
+**Anwendung**: Rekall trackt, wann du jeden Eintrag aufrufst und berechnet einen Konsolidierungs-Score. Der `review`-Befehl bringt Wissen an die Oberfläche, das zu verblassen droht. Der `stale`-Befehl findet Einträge, die du seit Monaten nicht berührt hast — bevor sie vergessen werden.
 
-### Kontextuelles Retrieval: -67% Suchfehler
+### Kontextuelles Retrieval: -67% Such-Fehler
 
-**Forschung**: Anthropics Contextual Retrieval Paper zeigte, dass traditionelle RAG-Systeme scheitern, weil sie beim Encoding den Kontext entfernen. Das Hinzufügen von 50-100 Token Kontext reduziert Retrieval-Fehler um 67%.
+**Forschung**: Anthropics Contextual Retrieval Paper zeigte, dass traditionelle RAG-Systeme scheitern, weil sie Kontext beim Encoding entfernen. Das Hinzufügen von 50-100 Tokens Kontext reduziert Retrieval-Fehler um 67%.
 
 **Anwendung**: Rekalls strukturierter Kontext (Situation, Lösung, Keywords) bewahrt das "Warum" neben dem "Was". Die Doppel-Embedding-Strategie stellt sicher, dass sowohl fokussierte Anfragen als auch explorative Suchen relevante Einträge finden.
 
-### Progressive Offenlegung: -98% Token-Nutzung
+### Progressive Disclosure: -98% Token-Nutzung
 
-**Forschung**: Anthropics Engineering-Blog dokumentierte, dass kompakte Zusammenfassungen statt vollständigem Inhalt die Token-Nutzung um 98% reduzieren, während der Aufgabenerfolg erhalten bleibt.
+**Forschung**: Anthropics Engineering-Blog dokumentierte, dass das Zurückgeben kompakter Zusammenfassungen statt vollständigem Inhalt die Token-Nutzung um 98% reduziert, während der Task-Erfolg erhalten bleibt.
 
-**Anwendung**: Rekalls MCP-Server gibt kompakte Ergebnisse zurück (ID, Titel, Score, Snippet) mit einem Hinweis zum Abrufen vollständiger Details. Dein KI-Assistent bekommt, was er braucht, ohne sein Kontextfenster zu sprengen.
+**Anwendung**: Rekalls MCP-Server gibt kompakte Ergebnisse zurück (id, Titel, Score, Snippet) mit einem Hinweis, vollständige Details abzurufen. Dein KI-Assistent bekommt, was er braucht, ohne sein Kontext-Fenster zu sprengen.
 
 ### Konsolidierungs-Score: Vergessen modellieren
 
-**Forschung**: Die Vergessenskurve zeigt, dass Erinnerungen ohne Verstärkung exponentiell verfallen. Sowohl Zugriffshäufigkeit als auch Aktualität zählen.
+**Forschung**: Die Forgetting-Curve zeigt, dass Erinnerungen exponentiell zerfallen ohne Verstärkung. Zugriffshäufigkeit und Aktualität zählen beide.
 
 **Anwendung**: Rekall berechnet einen Konsolidierungs-Score für jeden Eintrag:
 
@@ -579,33 +619,31 @@ Rekall ist keine Sammlung von Vermutungen — es basiert auf peer-reviewed Forsc
 score = 0.6 × frequency_factor + 0.4 × freshness_factor
 ```
 
-Einträge, auf die du oft und kürzlich zugreifst, haben hohe Konsolidierung (stabiles Wissen). Einträge, die du seit Monaten nicht berührt hast, haben niedrige Konsolidierung (Gefahr des Vergessens).
+Einträge, die du oft und kürzlich aufrufst, haben hohe Konsolidierung (stabiles Wissen). Einträge, die du seit Monaten nicht berührt hast, haben niedrige Konsolidierung (Risiko vergessen zu werden).
 
----
-
-**Wir haben die Paper gelesen, damit du es nicht musst. Dann haben wir ein Tool gebaut, das sie anwendet.**
+**Wir haben die Papers gelesen, damit du es nicht musst. Dann haben wir ein Tool gebaut, das sie anwendet.**
 
 </details>
 
 <br>
 
----
-
 ## Mehr erfahren
 
 | Ressource | Beschreibung |
-|-----------|--------------|
-| `rekall --help` | Vollständige Befehlsreferenz |
-| `rekall version` | Version und Datenbank-Info |
-| `rekall changelog` | Was ist neu |
-| [CHANGELOG.md](CHANGELOG.md) | Detaillierter Versionsverlauf |
+|----------|-------------|
+| [Erste Schritte](docs/getting-started.md) | Installation und erste Schritte |
+| [CLI-Referenz](docs/usage.md) | Vollständige Befehls-Dokumentation |
+| [MCP-Integration](docs/mcp-integration.md) | Verbindung mit KI-Assistenten |
+| [Architektur](docs/architecture.md) | Technische Diagramme und Interna |
+| [Contributing](CONTRIBUTING.md) | Wie du beitragen kannst |
+| [Changelog](CHANGELOG.md) | Release-Historie |
 
 ---
 
 ## Anforderungen
 
 - Python 3.9+
-- Das ist alles. Keine Cloud-Dienste. Keine API-Schlüssel. Keine Konten.
+- Das war's. Keine Cloud-Services. Keine API-Keys. Keine Accounts.
 
 ---
 
