@@ -1,0 +1,12 @@
+{"type": "human", "content": "Can you fetch the Python docs for me?", "timestamp": 1702000000}
+{"type": "tool_use", "name": "WebFetch", "input": {"url": "https://docs.python.org/3/library/asyncio.html"}, "timestamp": 1702000001}
+{"type": "tool_result", "content": "Python asyncio documentation content...", "timestamp": 1702000002}
+{"type": "assistant", "content": "Here's what I found about asyncio. You might also want to check https://realpython.com/async-io-python/ for tutorials.", "timestamp": 1702000003}
+{"type": "human", "content": "What about the requests library?", "timestamp": 1702000010}
+{"type": "tool_use", "name": "WebFetch", "input": {"url": "https://requests.readthedocs.io/en/latest/"}, "timestamp": 1702000011}
+{"type": "assistant", "content": "The requests library is great for HTTP. See also https://httpx.org/ as an alternative.", "timestamp": 1702000012}
+{"type": "human", "content": "Can you check my local file?", "timestamp": 1702000020}
+{"type": "tool_use", "name": "WebFetch", "input": {"url": "file:///Users/test/secret.txt"}, "timestamp": 1702000021}
+{"type": "assistant", "content": "I can't access local files.", "timestamp": 1702000022}
+{"type": "human", "content": "What about localhost?", "timestamp": 1702000030}
+{"type": "tool_use", "name": "WebFetch", "input": {"url": "http://localhost:8000/api"}, "timestamp": 1702000031}

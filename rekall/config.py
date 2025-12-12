@@ -26,12 +26,19 @@ class Config:
     """Rekall configuration settings."""
 
     paths: ResolvedPaths = field(default_factory=_default_paths)
+<<<<<<< HEAD
     editor: str | None = None
     default_project: str | None = None
 
     # Legacy embedding settings (external providers)
     embeddings_provider: str | None = None  # ollama | openai
     embeddings_model: str | None = None  # e.g., nomic-embed-text
+=======
+
+    # Legacy embedding settings (external providers) - still read by cli.py
+    embeddings_provider: Optional[str] = None  # ollama | openai
+    embeddings_model: Optional[str] = None  # e.g., nomic-embed-text
+>>>>>>> 015-mcp-tools-expansion
 
     # Smart embeddings settings (local EmbeddingGemma)
     smart_embeddings_enabled: bool = False  # Enable semantic features
@@ -45,6 +52,21 @@ class Config:
 
     # UI settings
     ui_detail_panel_ratio: float = 1.0  # Detail panel height ratio (0.5 to 4.0)
+
+    # Promotion settings (Feature 013)
+    promotion_threshold: float = 70.0  # Score needed for auto-promotion
+    promotion_near_threshold_pct: float = 0.8  # 80% of threshold = "near"
+    promotion_citation_weight: float = 0.4  # Weight for citation count
+    promotion_project_weight: float = 0.3  # Weight for project diversity
+    promotion_recency_weight: float = 0.3  # Weight for recency
+    promotion_recency_half_life_days: float = 30.0  # Score halves every N days
+    promotion_max_citations: int = 10  # Citations cap
+    promotion_max_projects: int = 5  # Projects cap
+
+    # Auto-scan settings (Feature 013 extension)
+    autoscan_enabled: bool = True  # Enable periodic auto-scan
+    autoscan_interval_hours: float = 5.0  # Hours between auto-scans
+    autoscan_connectors: str = "cursor"  # Comma-separated list of connectors to scan
 
     @property
     def db_path(self) -> Path:
@@ -217,4 +239,174 @@ def apply_toml_config(config: Config) -> Config:
         if 0.5 <= ratio <= 4.0:
             config.ui_detail_panel_ratio = ratio
 
+    # Apply promotion settings if present (Feature 013)
+    promo = toml_data.get("promotion", {})
+    if "threshold" in promo:
+        config.promotion_threshold = float(promo["threshold"])
+    if "near_threshold_pct" in promo:
+        config.promotion_near_threshold_pct = float(promo["near_threshold_pct"])
+    if "citation_weight" in promo:
+        config.promotion_citation_weight = float(promo["citation_weight"])
+    if "project_weight" in promo:
+        config.promotion_project_weight = float(promo["project_weight"])
+    if "recency_weight" in promo:
+        config.promotion_recency_weight = float(promo["recency_weight"])
+    if "recency_half_life_days" in promo:
+        config.promotion_recency_half_life_days = float(promo["recency_half_life_days"])
+    if "max_citations" in promo:
+        config.promotion_max_citations = int(promo["max_citations"])
+    if "max_projects" in promo:
+        config.promotion_max_projects = int(promo["max_projects"])
+
+    # Apply autoscan settings if present (Feature 013 extension)
+    autoscan = toml_data.get("autoscan", {})
+    if "enabled" in autoscan:
+        config.autoscan_enabled = bool(autoscan["enabled"])
+    if "interval_hours" in autoscan:
+        config.autoscan_interval_hours = float(autoscan["interval_hours"])
+    if "connectors" in autoscan:
+        config.autoscan_connectors = str(autoscan["connectors"])
+
     return config
+
+
+def get_promotion_config() -> "PromotionConfig":
+    """Get promotion configuration from global config.
+
+    Returns:
+        PromotionConfig instance with current settings
+    """
+    from rekall.promotion import PromotionConfig
+
+    config = get_config()
+    return PromotionConfig(
+        citation_weight=config.promotion_citation_weight,
+        project_weight=config.promotion_project_weight,
+        recency_weight=config.promotion_recency_weight,
+        promotion_threshold=config.promotion_threshold,
+        near_threshold_pct=config.promotion_near_threshold_pct,
+        recency_half_life_days=config.promotion_recency_half_life_days,
+        max_citations=config.promotion_max_citations,
+        max_projects=config.promotion_max_projects,
+    )
+
+
+def set_promotion_config(
+    threshold: Optional[float] = None,
+    citation_weight: Optional[float] = None,
+    project_weight: Optional[float] = None,
+    recency_weight: Optional[float] = None,
+    recency_half_life_days: Optional[float] = None,
+    max_citations: Optional[int] = None,
+    max_projects: Optional[int] = None,
+) -> bool:
+    """Update promotion configuration and persist to config.toml.
+
+    Args:
+        threshold: Promotion threshold score (0-100)
+        citation_weight: Weight for citation count (0-1)
+        project_weight: Weight for project diversity (0-1)
+        recency_weight: Weight for recency (0-1)
+        recency_half_life_days: Half-life in days for recency decay
+        max_citations: Maximum citations for normalization
+        max_projects: Maximum projects for normalization
+
+    Returns:
+        True if successful, False otherwise
+    """
+    config = get_config()
+    updates = {}
+
+    if threshold is not None:
+        updates["threshold"] = threshold
+        config.promotion_threshold = threshold
+
+    if citation_weight is not None:
+        updates["citation_weight"] = citation_weight
+        config.promotion_citation_weight = citation_weight
+
+    if project_weight is not None:
+        updates["project_weight"] = project_weight
+        config.promotion_project_weight = project_weight
+
+    if recency_weight is not None:
+        updates["recency_weight"] = recency_weight
+        config.promotion_recency_weight = recency_weight
+
+    if recency_half_life_days is not None:
+        updates["recency_half_life_days"] = recency_half_life_days
+        config.promotion_recency_half_life_days = recency_half_life_days
+
+    if max_citations is not None:
+        updates["max_citations"] = max_citations
+        config.promotion_max_citations = max_citations
+
+    if max_projects is not None:
+        updates["max_projects"] = max_projects
+        config.promotion_max_projects = max_projects
+
+    if updates:
+        return save_config_to_toml(config.config_dir, {"promotion": updates})
+
+    return True
+
+
+@dataclass
+class AutoscanConfig:
+    """Configuration for periodic auto-scanning."""
+
+    enabled: bool = True
+    interval_hours: float = 5.0
+    connectors: list[str] = field(default_factory=lambda: ["cursor"])
+
+
+def get_autoscan_config() -> AutoscanConfig:
+    """Get autoscan configuration from global config.
+
+    Returns:
+        AutoscanConfig instance with current settings
+    """
+    config = get_config()
+    connectors = [c.strip() for c in config.autoscan_connectors.split(",") if c.strip()]
+    return AutoscanConfig(
+        enabled=config.autoscan_enabled,
+        interval_hours=config.autoscan_interval_hours,
+        connectors=connectors,
+    )
+
+
+def set_autoscan_config(
+    enabled: Optional[bool] = None,
+    interval_hours: Optional[float] = None,
+    connectors: Optional[list[str]] = None,
+) -> bool:
+    """Update autoscan configuration and persist to config.toml.
+
+    Args:
+        enabled: Enable/disable auto-scan
+        interval_hours: Hours between auto-scans
+        connectors: List of connector names to scan
+
+    Returns:
+        True if successful, False otherwise
+    """
+    config = get_config()
+    updates = {}
+
+    if enabled is not None:
+        updates["enabled"] = enabled
+        config.autoscan_enabled = enabled
+
+    if interval_hours is not None:
+        updates["interval_hours"] = interval_hours
+        config.autoscan_interval_hours = interval_hours
+
+    if connectors is not None:
+        connectors_str = ",".join(connectors)
+        updates["connectors"] = connectors_str
+        config.autoscan_connectors = connectors_str
+
+    if updates:
+        return save_config_to_toml(config.config_dir, {"autoscan": updates})
+
+    return True
