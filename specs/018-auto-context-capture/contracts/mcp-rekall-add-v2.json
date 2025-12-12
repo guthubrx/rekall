@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "rekall_add MCP Tool - v2 (Feature 018)",
+  "description": "Ajoute une entrée dans la base de connaissances Rekall avec support auto-capture contexte",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "enum": ["bug", "pattern", "decision", "pitfall", "config", "reference"],
+      "description": "Type de l'entrée"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 200,
+      "description": "Titre descriptif de l'entrée"
+    },
+    "content": {
+      "type": "string",
+      "description": "Contenu détaillé (optionnel si context complet)"
+    },
+    "context": {
+      "type": "object",
+      "description": "Contexte structuré de l'entrée",
+      "properties": {
+        "situation": {
+          "type": "string",
+          "description": "Description du problème initial"
+        },
+        "solution": {
+          "type": "string",
+          "description": "Comment le problème a été résolu"
+        },
+        "trigger_keywords": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Mots-clés pour retrouver cette entrée (auto-extraits si vide)"
+        },
+        "what_failed": {
+          "type": "string",
+          "description": "Ce qui n'a pas fonctionné avant la solution"
+        },
+        "conversation_excerpt": {
+          "type": "string",
+          "description": "Mode 1: Extrait de conversation fourni directement par l'agent"
+        },
+        "files_modified": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Liste des fichiers modifiés (auto-détectés si auto_detect_files=true)"
+        },
+        "error_messages": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Messages d'erreur rencontrés"
+        },
+        "time_of_day": {
+          "type": "string",
+          "enum": ["morning", "afternoon", "evening", "night"],
+          "description": "Moment de la journée (auto-généré si non fourni)"
+        },
+        "day_of_week": {
+          "type": "string",
+          "enum": ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"],
+          "description": "Jour de la semaine (auto-généré si non fourni)"
+        }
+      },
+      "required": ["situation", "solution"]
+    },
+    "tags": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Tags pour catégorisation"
+    },
+    "project": {
+      "type": "string",
+      "description": "Nom du projet associé"
+    },
+    "confidence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 3,
+      "default": 2,
+      "description": "Niveau de confiance (1=low, 2=medium, 3=high)"
+    },
+    "auto_capture_conversation": {
+      "type": "boolean",
+      "default": false,
+      "description": "Mode 2: Demander extraction des candidats depuis transcript"
+    },
+    "auto_detect_files": {
+      "type": "boolean",
+      "default": false,
+      "description": "Auto-détecter fichiers modifiés via git"
+    },
+    "conversation_excerpt_indices": {
+      "type": "array",
+      "items": {"type": "integer", "minimum": 0},
+      "maxItems": 10,
+      "description": "Mode 2 step 2: Indices des échanges sélectionnés par l'agent"
+    },
+    "_transcript_path": {
+      "type": "string",
+      "description": "Chemin vers le fichier transcript (injecté par hook ou fourni manuellement)"
+    },
+    "_transcript_format": {
+      "type": "string",
+      "enum": ["claude-jsonl", "cline-json", "continue-json", "raw-json"],
+      "description": "Format du transcript (auto-détecté si non fourni)"
+    },
+    "_cwd": {
+      "type": "string",
+      "description": "Répertoire de travail pour auto-détection git"
+    },
+    "_session_id": {
+      "type": "string",
+      "description": "ID de session Mode 2 pour corrélation"
+    }
+  },
+  "required": ["type", "title", "context"],
+  "additionalProperties": false
+}

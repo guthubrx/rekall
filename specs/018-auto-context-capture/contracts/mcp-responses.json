@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "rekall_add MCP Responses - Feature 018",
+  "description": "Réponses possibles du tool rekall_add v2",
+  "oneOf": [
+    {
+      "title": "SuccessResponse",
+      "type": "object",
+      "properties": {
+        "status": {"const": "success"},
+        "entry_id": {"type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"},
+        "title": {"type": "string"},
+        "context_summary": {
+          "type": "object",
+          "properties": {
+            "conversation_captured": {"type": "boolean"},
+            "files_detected": {"type": "integer"},
+            "temporal_markers": {"type": "boolean"},
+            "extraction_method": {"type": "string"}
+          }
+        }
+      },
+      "required": ["status", "entry_id", "title"]
+    },
+    {
+      "title": "CandidatesResponse",
+      "description": "Mode 2 Step 1: Candidats prêts pour filtrage",
+      "type": "object",
+      "properties": {
+        "status": {"const": "candidates_ready"},
+        "session_id": {"type": "string"},
+        "total_exchanges": {"type": "integer"},
+        "candidates": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "properties": {
+              "index": {"type": "integer"},
+              "role": {"enum": ["human", "assistant"]},
+              "content": {"type": "string", "maxLength": 500},
+              "timestamp": {"type": "string", "format": "date-time"}
+            },
+            "required": ["index", "role", "content"]
+          }
+        },
+        "instruction": {"type": "string"}
+      },
+      "required": ["status", "session_id", "candidates", "instruction"]
+    },
+    {
+      "title": "ErrorResponse",
+      "type": "object",
+      "properties": {
+        "status": {"const": "error"},
+        "error_code": {
+          "type": "string",
+          "enum": [
+            "TRANSCRIPT_NOT_FOUND",
+            "TRANSCRIPT_PARSE_ERROR",
+            "TRANSCRIPT_FORMAT_UNSUPPORTED",
+            "GIT_NOT_AVAILABLE",
+            "GIT_TIMEOUT",
+            "SESSION_NOT_FOUND",
+            "VALIDATION_ERROR"
+          ]
+        },
+        "message": {"type": "string"},
+        "suggestion": {"type": "string"}
+      },
+      "required": ["status", "error_code", "message"]
+    }
+  ]
+}

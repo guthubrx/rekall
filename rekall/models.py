@@ -468,6 +468,10 @@ class StructuredContext:
     files_modified: list[str] | None = None  # Fichiers touchés
     error_messages: list[str] | None = None  # Erreurs rencontrées
 
+    # Feature 018: Temporal markers (auto-generated or manual override)
+    time_of_day: str | None = None  # morning, afternoon, evening, night
+    day_of_week: str | None = None  # monday, tuesday, ...
+
     # Méta
     created_at: datetime = field(default_factory=datetime.now)
     extraction_method: ContextExtractionMethod = "manual"
@@ -495,6 +499,8 @@ class StructuredContext:
             "conversation_excerpt": self.conversation_excerpt,
             "files_modified": self.files_modified,
             "error_messages": self.error_messages,
+            "time_of_day": self.time_of_day,
+            "day_of_week": self.day_of_week,
             "created_at": self.created_at.isoformat(),
             "extraction_method": self.extraction_method,
         }
@@ -516,6 +522,8 @@ class StructuredContext:
             conversation_excerpt=data.get("conversation_excerpt"),
             files_modified=data.get("files_modified"),
             error_messages=data.get("error_messages"),
+            time_of_day=data.get("time_of_day"),
+            day_of_week=data.get("day_of_week"),
             created_at=(
                 datetime.fromisoformat(data["created_at"])
                 if data.get("created_at")

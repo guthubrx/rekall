@@ -435,8 +435,79 @@ rekall generalize ID1 ID2 ID3            # Créer pattern sémantique
     rekall_save_path = claude_dir / "rekall.save.md"
     rekall_save_path.write_text(content)
 
+    # ===== Feature 018: Install Claude hooks =====
+    _install_claude_hooks(base_path, global_install)
+
     # Return main skill path
     return rekall_skill_path
+
+
+def _install_claude_hooks(base_path: Path, global_install: bool) -> None:
+    """Install Rekall hooks for Claude Code.
+
+    Installs:
+    - rekall-webfetch.sh (PostToolUse hook for URL capture)
+
+    Also updates settings.json with hook configuration.
+
+    Args:
+        base_path: Project base path for local install
+        global_install: If True, install to ~/.claude/, else to .claude/
+    """
+    import json
+    import shutil
+
+    # Determine paths based on install type
+    if global_install:
+        hooks_dir = Path.home() / ".claude" / "hooks"
+        settings_path = Path.home() / ".claude" / "settings.json"
+    else:
+        hooks_dir = base_path / ".claude" / "hooks"
+        settings_path = base_path / ".claude" / "settings.json"
+
+    hooks_dir.mkdir(parents=True, exist_ok=True)
+
+    # Source hooks from package
+    source_dir = Path(__file__).parent.parent / "data" / "hooks"
+
+    # Install webfetch hook
+    source = source_dir / "rekall-webfetch.sh"
+    dest = hooks_dir / "rekall-webfetch.sh"
+
+    if source.exists():
+        shutil.copy2(source, dest)
+        dest.chmod(0o755)
+
+    # Update settings.json with hook configuration
+    settings = {}
+
+    if settings_path.exists():
+        try:
+            settings = json.loads(settings_path.read_text())
+        except json.JSONDecodeError:
+            settings = {}
+
+    hooks_config = settings.get("hooks", {})
+
+    # Configure PostToolUse hook (WebFetch capture)
+    post_tool_use = hooks_config.get("PostToolUse", [])
+    webfetch_hook_exists = any(
+        h.get("matcher") == "WebFetch" and
+        any("rekall-webfetch" in hh.get("command", "") for hh in h.get("hooks", []))
+        for h in post_tool_use
+    )
+    if not webfetch_hook_exists:
+        post_tool_use.append({
+            "matcher": "WebFetch",
+            "hooks": [{"type": "command", "command": str(dest)}]
+        })
+        hooks_config["PostToolUse"] = post_tool_use
+
+    settings["hooks"] = hooks_config
+
+    # Write updated settings
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(json.dumps(settings, indent=2))
 
 
 @register("copilot", "GitHub Copilot instructions", ".github/copilot-instructions.md", None)

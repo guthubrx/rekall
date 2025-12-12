@@ -215,7 +215,13 @@ AUTOMATICALLY after:
 - Avoiding a pitfall → type="pitfall"
 - Configuring something tricky → type="config"
 
-## Example call
+## Context Capture Modes
+### Mode 1 (Direct): Provide conversation_excerpt directly in context
+### Mode 2 (Auto-capture): Use auto_capture_conversation=true
+  - Step 1: Returns up to 20 candidate exchanges from transcript
+  - Step 2: Provide conversation_excerpt_indices to select relevant ones
+
+## Example call (Mode 1)
 rekall_add(
   type="bug",
   title="Fix 504 Gateway Timeout nginx",
@@ -224,9 +230,33 @@ rekall_add(
     "situation": "API timeout on requests > 30s",
     "solution": "nginx proxy_read_timeout 120s",
     "trigger_keywords": ["504", "nginx", "timeout"],
-    "what_failed": "Client-side timeout increase"
+    "what_failed": "Client-side timeout increase",
+    "conversation_excerpt": "User: The API keeps timing out..."
   }
-)""",
+)
+
+## Example call (Mode 2 - Step 1)
+rekall_add(
+  type="bug",
+  title="Fix 504 Gateway Timeout nginx",
+  context={"situation": "...", "solution": "..."},
+  auto_capture_conversation=true
+)
+# Returns: {status: "candidates_ready", session_id: "xxx", candidates: [...]}
+
+## Example call (Mode 2 - Step 2)
+rekall_add(
+  type="bug",
+  title="Fix 504 Gateway Timeout nginx",
+  context={"situation": "...", "solution": "..."},
+  conversation_excerpt_indices=[0, 3, 5],
+  _session_id="xxx"
+)
+
+## Auto-enrichment features
+- auto_detect_files=true: Automatically detects modified files via git
+- time_of_day/day_of_week: Auto-generated temporal markers (can be overridden)
+""",
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -266,20 +296,30 @@ rekall_add(
                                 },
                                 "conversation_excerpt": {
                                     "type": "string",
-                                    "description": "Relevant excerpt from conversation",
+                                    "description": "Mode 1: Relevant excerpt from conversation (provided directly)",
                                 },
                                 "files_modified": {
                                     "type": "array",
                                     "items": {"type": "string"},
-                                    "description": "Files that were modified",
+                                    "description": "Files modified (auto-detected if auto_detect_files=true)",
                                 },
                                 "error_messages": {
                                     "type": "array",
                                     "items": {"type": "string"},
                                     "description": "Error messages encountered",
                                 },
+                                "time_of_day": {
+                                    "type": "string",
+                                    "enum": ["morning", "afternoon", "evening", "night"],
+                                    "description": "Time of day (auto-generated if not provided)",
+                                },
+                                "day_of_week": {
+                                    "type": "string",
+                                    "enum": ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"],
+                                    "description": "Day of week (auto-generated if not provided)",
+                                },
                             },
-                            "required": ["situation", "solution", "trigger_keywords"],
+                            "required": ["situation", "solution"],
                         },
                         "tags": {
                             "type": "array",
@@ -292,8 +332,41 @@ rekall_add(
                         },
                         "confidence": {
                             "type": "integer",
-                            "description": "Confidence level (0-5)",
+                            "description": "Confidence level (1-3)",
                             "default": 2,
+                        },
+                        # ===== Feature 018: Auto-Capture Context =====
+                        "auto_capture_conversation": {
+                            "type": "boolean",
+                            "description": "Mode 2: Extract candidate exchanges from transcript",
+                            "default": False,
+                        },
+                        "auto_detect_files": {
+                            "type": "boolean",
+                            "description": "Auto-detect modified files via git",
+                            "default": False,
+                        },
+                        "conversation_excerpt_indices": {
+                            "type": "array",
+                            "items": {"type": "integer"},
+                            "description": "Mode 2 Step 2: Indices of selected candidate exchanges",
+                        },
+                        "_transcript_path": {
+                            "type": "string",
+                            "description": "Path to transcript file (injected by hook or provided manually)",
+                        },
+                        "_transcript_format": {
+                            "type": "string",
+                            "enum": ["claude-jsonl", "cline-json", "continue-json", "raw-json"],
+                            "description": "Transcript format (auto-detected if not provided)",
+                        },
+                        "_cwd": {
+                            "type": "string",
+                            "description": "Working directory for git auto-detection",
+                        },
+                        "_session_id": {
+                            "type": "string",
+                            "description": "Mode 2 session ID for correlation",
                         },
                     },
                     "required": ["type", "title", "context"],
@@ -565,6 +638,61 @@ rekall_add(
     return server
 
 
+def _auto_detect_git_files(cwd: str | None) -> list[str]:
+    """
+    Auto-detect modified files via git.
+
+    Feature 018: US2 - Auto-Détection Fichiers Modifiés
+
+    Args:
+        cwd: Working directory (optional)
+
+    Returns:
+        List of modified file paths, empty list on error
+    """
+    from pathlib import Path
+
+    from rekall.git_detector import (
+        GitError,
+        get_modified_files,
+    )
+
+    try:
+        path = Path(cwd) if cwd else None
+        return get_modified_files(cwd=path, timeout=5.0, filter_binary=True)
+    except GitError:
+        # Graceful fallback - don't fail if git is unavailable
+        return []
+    except Exception:
+        # Catch-all for unexpected errors
+        return []
+
+
+def _get_temporal_markers(
+    time_of_day: str | None,
+    day_of_week: str | None,
+) -> tuple[str, str]:
+    """
+    Get temporal markers with auto-generation support.
+
+    Feature 018: US3 - Temporal Markers Auto-Générés
+
+    Args:
+        time_of_day: Manual override for time of day (optional)
+        day_of_week: Manual override for day of week (optional)
+
+    Returns:
+        Tuple of (time_of_day, day_of_week) - auto-generated if not provided
+    """
+    from rekall.temporal import get_temporal_markers
+
+    markers = get_temporal_markers(
+        time_of_day=time_of_day,
+        day_of_week=day_of_week,
+    )
+    return markers.time_of_day, markers.day_of_week
+
+
 async def _handle_search(args: dict) -> list:
     """Handle rekall_search tool call."""
     from mcp.types import TextContent
@@ -682,12 +810,32 @@ async def _handle_show(args: dict) -> list:
 
 
 async def _handle_add(args: dict) -> list:
-    """Handle rekall_add tool call."""
+    """Handle rekall_add tool call.
+
+    Supports three modes:
+    - Mode 1: Direct - conversation_excerpt provided in context
+    - Mode 2 Step 1: auto_capture_conversation=true → returns candidates
+    - Mode 2 Step 2: conversation_excerpt_indices + _session_id → finalize
+    """
     from mcp.types import TextContent
 
     from rekall.config import get_config
     from rekall.models import Entry, StructuredContext, generate_ulid
 
+    # ===== Feature 018: Mode 2 Auto-Capture =====
+    auto_capture = args.get("auto_capture_conversation", False)
+    session_id = args.get("_session_id")
+    excerpt_indices = args.get("conversation_excerpt_indices")
+
+    # Mode 2 Step 1: Extract candidates from transcript
+    if auto_capture and not excerpt_indices:
+        return await _handle_auto_capture_step1(args)
+
+    # Mode 2 Step 2: Finalize with selected indices
+    if excerpt_indices and session_id:
+        return await _handle_auto_capture_step2(args)
+
+    # Mode 1: Standard flow (direct or no conversation excerpt)
     db = get_db()
     cfg = get_config()
 
@@ -740,6 +888,19 @@ async def _handle_add(args: dict) -> list:
                     text="Error: Could not extract keywords automatically. Provide trigger_keywords manually."
                 )]
 
+            # ===== Feature 018: Auto-detect git modified files =====
+            files_modified = context_arg.get("files_modified", [])
+            auto_detect_files = args.get("auto_detect_files", False)
+
+            if auto_detect_files and not files_modified:
+                files_modified = _auto_detect_git_files(args.get("_cwd"))
+
+            # ===== Feature 018: Auto-generate temporal markers =====
+            time_of_day, day_of_week = _get_temporal_markers(
+                time_of_day=args.get("time_of_day"),
+                day_of_week=args.get("day_of_week"),
+            )
+
             try:
                 structured_context = StructuredContext(
                     situation=context_arg["situation"],
@@ -747,8 +908,10 @@ async def _handle_add(args: dict) -> list:
                     trigger_keywords=trigger_keywords,
                     what_failed=context_arg.get("what_failed"),
                     conversation_excerpt=context_arg.get("conversation_excerpt"),
-                    files_modified=context_arg.get("files_modified"),
+                    files_modified=files_modified or None,
                     error_messages=context_arg.get("error_messages"),
+                    time_of_day=time_of_day,
+                    day_of_week=day_of_week,
                     extraction_method=extraction_method,
                 )
                 # Also create text for legacy compression
@@ -839,6 +1002,368 @@ async def _handle_add(args: dict) -> list:
             output += f"\n✓ Structured context stored with {len(structured_context.trigger_keywords)} keywords"
     elif not context_arg:
         output += "\n⚠ No context provided. Consider using structured context for better search."
+
+    return [TextContent(type="text", text=output)]
+
+
+# =============================================================================
+# Feature 018: Auto-Capture Mode 2 Handlers
+# =============================================================================
+
+
+async def _handle_auto_capture_step1(args: dict) -> list:
+    """
+    Mode 2 Step 1: Extract candidate exchanges from transcript.
+
+    Returns candidates for agent to filter, creating a session for Step 2.
+    """
+    import json
+    from pathlib import Path
+
+    from mcp.types import TextContent
+
+    from rekall.transcript import (
+        CandidateExchanges,
+        get_parser_for_path,
+        get_session_manager,
+    )
+    from rekall.transcript.parser_base import ParserError
+
+    # Get transcript path (required for Mode 2)
+    transcript_path = args.get("_transcript_path")
+    if not transcript_path:
+        return [TextContent(
+            type="text",
+            text=json.dumps({
+                "status": "error",
+                "error_code": "TRANSCRIPT_NOT_FOUND",
+                "message": "No transcript path provided. Use _transcript_path parameter or configure hook injection.",
+                "suggestion": "Provide _transcript_path pointing to your CLI's transcript file.",
+            })
+        )]
+
+    path = Path(transcript_path)
+    if not path.exists():
+        return [TextContent(
+            type="text",
+            text=json.dumps({
+                "status": "error",
+                "error_code": "TRANSCRIPT_NOT_FOUND",
+                "message": f"Transcript file not found: {transcript_path}",
+                "suggestion": "Check the path or ensure the transcript file exists.",
+            })
+        )]
+
+    # Get parser (auto-detect format or use hint)
+    format_hint = args.get("_transcript_format")
+    try:
+        parser, detected_format = get_parser_for_path(path, format_hint)
+    except ValueError as e:
+        return [TextContent(
+            type="text",
+            text=json.dumps({
+                "status": "error",
+                "error_code": "TRANSCRIPT_FORMAT_UNSUPPORTED",
+                "message": f"Unsupported transcript format: {e}",
+                "suggestion": "Supported formats: claude-jsonl, cline-json, continue-json, raw-json",
+            })
+        )]
+
+    # Parse last 20 messages
+    try:
+        messages, total = parser.parse_last_n(path, n=20)
+    except ParserError as e:
+        return [TextContent(
+            type="text",
+            text=json.dumps({
+                "status": "error",
+                "error_code": "TRANSCRIPT_PARSE_ERROR",
+                "message": str(e),
+                "suggestion": "Check transcript file format and content.",
+            })
+        )]
+    except Exception as e:
+        return [TextContent(
+            type="text",
+            text=json.dumps({
+                "status": "error",
+                "error_code": "TRANSCRIPT_PARSE_ERROR",
+                "message": f"Failed to parse transcript: {e}",
+                "suggestion": "Check transcript file integrity.",
+            })
+        )]
+
+    if not messages:
+        return [TextContent(
+            type="text",
+            text=json.dumps({
+                "status": "error",
+                "error_code": "TRANSCRIPT_PARSE_ERROR",
+                "message": "No messages found in transcript.",
+                "suggestion": "The transcript may be empty or in an unexpected format.",
+            })
+        )]
+
+    # Create CandidateExchanges
+    candidates = CandidateExchanges(
+        session_id="",  # Will be set by session manager
+        total_exchanges=total,
+        candidates=messages,
+    )
+
+    # Create session for Step 2
+    session_manager = get_session_manager()
+    session_id = session_manager.create_session(
+        candidates=candidates,
+        entry_type=args.get("type"),
+        title=args.get("title"),
+        context=args.get("context"),
+        tags=args.get("tags"),
+        project=args.get("project"),
+        confidence=args.get("confidence", 2),
+    )
+
+    # Return candidates response
+    response = candidates.to_mcp_response()
+    response["instruction"] = (
+        "Review the candidates above and select the indices of exchanges "
+        "relevant to this knowledge entry. Then call rekall_add again with:\n"
+        f'  conversation_excerpt_indices: [<selected indices>],\n'
+        f'  _session_id: "{session_id}"'
+    )
+
+    return [TextContent(type="text", text=json.dumps(response, indent=2))]
+
+
+async def _handle_auto_capture_step2(args: dict) -> list:
+    """
+    Mode 2 Step 2: Finalize entry with selected indices.
+
+    Retrieves session, formats selected exchanges, and creates the entry.
+    """
+    import json
+
+    from mcp.types import TextContent
+
+    from rekall.config import get_config
+    from rekall.models import Entry, StructuredContext, generate_ulid
+    from rekall.transcript import get_session_manager
+
+    session_id = args["_session_id"]
+    indices = args["conversation_excerpt_indices"]
+
+    # Retrieve session
+    session_manager = get_session_manager()
+    session = session_manager.get_session(session_id)
+
+    if session is None:
+        return [TextContent(
+            type="text",
+            text=json.dumps({
+                "status": "error",
+                "error_code": "SESSION_NOT_FOUND",
+                "message": f"Session not found or expired: {session_id}",
+                "suggestion": "Session may have expired (5 min TTL). Retry with auto_capture_conversation=true.",
+            })
+        )]
+
+    # Validate indices
+    max_index = len(session.candidates.candidates) - 1
+    invalid_indices = [i for i in indices if i < 0 or i > max_index]
+    if invalid_indices:
+        return [TextContent(
+            type="text",
+            text=json.dumps({
+                "status": "error",
+                "error_code": "VALIDATION_ERROR",
+                "message": f"Invalid indices: {invalid_indices}. Valid range: 0-{max_index}",
+                "suggestion": "Use indices from the candidates response.",
+            })
+        )]
+
+    # Format selected exchanges as conversation excerpt
+    conversation_excerpt = session.candidates.format_as_excerpt(indices)
+
+    # Merge context from session with any new context from args
+    context_arg = args.get("context") or session.context or {}
+    context_arg["conversation_excerpt"] = conversation_excerpt
+
+    # Create the entry using the standard flow
+    db = get_db()
+    cfg = get_config()
+
+    # Validate required fields
+    if not context_arg.get("situation"):
+        db.close()
+        session_manager.delete_session(session_id)
+        return [TextContent(
+            type="text",
+            text=json.dumps({
+                "status": "error",
+                "error_code": "VALIDATION_ERROR",
+                "message": "context.situation is required.",
+                "suggestion": "Provide situation describing the initial problem.",
+            })
+        )]
+    if not context_arg.get("solution"):
+        db.close()
+        session_manager.delete_session(session_id)
+        return [TextContent(
+            type="text",
+            text=json.dumps({
+                "status": "error",
+                "error_code": "VALIDATION_ERROR",
+                "message": "context.solution is required.",
+                "suggestion": "Provide solution describing how it was resolved.",
+            })
+        )]
+
+    # Auto-extract keywords if not provided
+    trigger_keywords = context_arg.get("trigger_keywords", [])
+    extraction_method = "manual"
+
+    if not trigger_keywords:
+        from rekall.context_extractor import extract_keywords
+
+        title = args.get("title") or session.title or ""
+        content = args.get("content", "")
+        text_for_extraction = " ".join([
+            title,
+            content,
+            context_arg.get("situation", ""),
+            context_arg.get("solution", ""),
+            conversation_excerpt[:500],  # Include excerpt for keyword extraction
+        ])
+        trigger_keywords = extract_keywords(title, text_for_extraction, max_keywords=5)
+        extraction_method = "auto"
+
+    if not trigger_keywords:
+        db.close()
+        session_manager.delete_session(session_id)
+        return [TextContent(
+            type="text",
+            text=json.dumps({
+                "status": "error",
+                "error_code": "VALIDATION_ERROR",
+                "message": "Could not extract keywords automatically.",
+                "suggestion": "Provide trigger_keywords manually in context.",
+            })
+        )]
+
+    # ===== Feature 018: Auto-detect git modified files =====
+    files_modified = context_arg.get("files_modified", [])
+    auto_detect_files = args.get("auto_detect_files", False)
+
+    if auto_detect_files and not files_modified:
+        files_modified = _auto_detect_git_files(args.get("_cwd"))
+
+    # ===== Feature 018: Auto-generate temporal markers =====
+    time_of_day, day_of_week = _get_temporal_markers(
+        time_of_day=args.get("time_of_day"),
+        day_of_week=args.get("day_of_week"),
+    )
+
+    # Build structured context
+    try:
+        structured_context = StructuredContext(
+            situation=context_arg["situation"],
+            solution=context_arg["solution"],
+            trigger_keywords=trigger_keywords,
+            what_failed=context_arg.get("what_failed"),
+            conversation_excerpt=conversation_excerpt,
+            files_modified=files_modified or None,
+            error_messages=context_arg.get("error_messages"),
+            time_of_day=time_of_day,
+            day_of_week=day_of_week,
+            extraction_method=extraction_method,
+        )
+        context_text = f"Situation: {structured_context.situation}\nSolution: {structured_context.solution}"
+    except ValueError as e:
+        db.close()
+        session_manager.delete_session(session_id)
+        return [TextContent(
+            type="text",
+            text=json.dumps({
+                "status": "error",
+                "error_code": "VALIDATION_ERROR",
+                "message": f"Error in context: {e}",
+                "suggestion": "Check context field values.",
+            })
+        )]
+
+    # Create entry
+    entry = Entry(
+        id=generate_ulid(),
+        title=args.get("title") or session.title or "Untitled",
+        type=args.get("type") or session.entry_type or "reference",
+        content=args.get("content", ""),
+        tags=args.get("tags") or session.tags or [],
+        project=args.get("project") or session.project,
+        confidence=args.get("confidence") or session.confidence or 2,
+    )
+
+    db.add(entry)
+
+    # Store structured context
+    db.store_structured_context(entry.id, structured_context)
+    db.store_context(entry.id, context_text)
+
+    # Calculate embeddings if enabled
+    similar_entries = []
+    if cfg.smart_embeddings_enabled:
+        from rekall.embeddings import get_embedding_service
+        from rekall.models import Embedding
+
+        service = get_embedding_service(dimensions=cfg.smart_embeddings_dimensions)
+
+        if service.available:
+            embeddings = service.calculate_for_entry(entry, context=context_text)
+
+            if embeddings["summary"] is not None:
+                emb = Embedding.from_numpy(
+                    entry.id, "summary", embeddings["summary"], service.model_name
+                )
+                db.add_embedding(emb)
+
+            if embeddings["context"] is not None:
+                emb = Embedding.from_numpy(
+                    entry.id, "context", embeddings["context"], service.model_name
+                )
+                db.add_embedding(emb)
+
+            similar = service.find_similar(entry.id, db, limit=3)
+            similar_entries = [(e.id, e.title, score) for e, score in similar]
+
+    db.close()
+
+    # Cleanup session
+    session_manager.delete_session(session_id)
+
+    # Build success response
+    response = {
+        "status": "success",
+        "entry_id": entry.id,
+        "title": entry.title,
+        "context_summary": {
+            "conversation_captured": True,
+            "exchanges_selected": len(indices),
+            "files_detected": len(structured_context.files_modified or []),
+            "temporal_markers": {
+                "time_of_day": structured_context.time_of_day,
+                "day_of_week": structured_context.day_of_week,
+            },
+            "extraction_method": extraction_method,
+        },
+    }
+
+    output = json.dumps(response, indent=2)
+
+    # Add similar entries hint
+    if similar_entries:
+        output += "\n\nSimilar entries found:\n"
+        for eid, title, score in similar_entries:
+            output += f"- [{eid}] {title} ({score:.0%} similar)\n"
+        output += "\nConsider using rekall_link to connect related entries."
 
     return [TextContent(type="text", text=output)]
 

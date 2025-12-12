@@ -4639,5 +4639,214 @@ def consolidation_cmd(
     console.print(json.dumps(output, indent=2, default=str))
 
 
+# =============================================================================
+# Feature 018: Hooks CLI Commands
+# =============================================================================
+
+hooks_app = typer.Typer(
+    help="Manage Rekall hooks for proactive reminders."
+)
+app.add_typer(hooks_app, name="hooks")
+
+
+@hooks_app.command("install")
+def hooks_install(
+    cli: str = typer.Option(
+        "claude",
+        "--cli", "-c",
+        help="Target CLI/IDE: claude, cline, continue, or generic",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force", "-f",
+        help="Overwrite existing hook without backup",
+    ),
+) -> None:
+    """Install the Rekall reminder hook for a specific CLI/IDE.
+
+    This hook detects when you've solved a problem and reminds you
+    to save the solution to Rekall.
+
+    Supported CLIs:
+    - claude: Claude Code (~/.claude/hooks/)
+    - cline: Cline VS Code extension
+    - continue: Continue.dev
+    - generic: Generic installation (~/.config/rekall/hooks/)
+
+    Examples:
+        rekall hooks install --cli claude
+        rekall hooks install -c cline --force
+    """
+    import shutil
+    from datetime import datetime as dt
+    from importlib import resources
+
+    from rekall.hooks.models import HookConfig, SupportedCLI
+
+    # Validate CLI choice
+    valid_clis = ["claude", "cline", "continue", "generic"]
+    if cli not in valid_clis:
+        console.print(f"[red]Error: Invalid CLI '{cli}'. Choose from: {', '.join(valid_clis)}[/red]")
+        raise typer.Exit(1)
+
+    # Get hook config for CLI
+    config = HookConfig(cli=cli)  # type: ignore
+    install_path = config.get_install_path()
+    hook_filename = config.get_hook_filename()
+    target_path = install_path / hook_filename
+
+    # Source hook file (bundled with rekall)
+    try:
+        # Python 3.9+ importlib.resources
+        hook_data_path = Path(__file__).parent / "data" / "hooks"
+        source_script = hook_data_path / "rekall-reminder.sh"
+        source_patterns = hook_data_path / "resolution-patterns.txt"
+
+        if not source_script.exists():
+            console.print(f"[red]Error: Hook script not found at {source_script}[/red]")
+            raise typer.Exit(1)
+    except Exception as e:
+        console.print(f"[red]Error locating hook files: {e}[/red]")
+        raise typer.Exit(1)
+
+    # Create install directory
+    try:
+        install_path.mkdir(parents=True, exist_ok=True)
+    except PermissionError:
+        console.print(f"[red]Error: Permission denied creating {install_path}[/red]")
+        raise typer.Exit(1)
+
+    # Backup existing hook if present
+    if target_path.exists() and not force:
+        backup_name = f"{hook_filename}.backup-{dt.now().strftime('%Y%m%d-%H%M%S')}"
+        backup_path = install_path / backup_name
+        shutil.copy2(target_path, backup_path)
+        console.print(f"[yellow]Backed up existing hook to: {backup_path}[/yellow]")
+
+    # Copy hook script
+    try:
+        shutil.copy2(source_script, target_path)
+        target_path.chmod(0o755)  # Make executable
+    except Exception as e:
+        console.print(f"[red]Error copying hook script: {e}[/red]")
+        raise typer.Exit(1)
+
+    # Copy patterns file
+    patterns_target = install_path / "resolution-patterns.txt"
+    try:
+        shutil.copy2(source_patterns, patterns_target)
+    except Exception as e:
+        console.print(f"[yellow]Warning: Could not copy patterns file: {e}[/yellow]")
+
+    console.print(f"[green]✓ Hook installed successfully![/green]")
+    console.print(f"  Location: {target_path}")
+    console.print(f"  Patterns: {patterns_target}")
+
+    # Show configuration instructions based on CLI
+    if cli == "claude":
+        console.print("\n[bold]Configuration for Claude Code:[/bold]")
+        console.print("Add to your ~/.claude/settings.json:")
+        console.print('''
+{
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": ["~/.claude/hooks/rekall-reminder.sh"]
+      }
+    ]
+  }
+}
+''')
+    elif cli == "generic":
+        console.print("\n[bold]Generic hook installed.[/bold]")
+        console.print("Configure your AI assistant to run this hook on response completion.")
+
+
+@hooks_app.command("status")
+def hooks_status(
+    cli: str = typer.Option(
+        None,
+        "--cli", "-c",
+        help="Check specific CLI (default: all)",
+    ),
+) -> None:
+    """Check the installation status of Rekall hooks.
+
+    Shows which hooks are installed and their locations.
+
+    Examples:
+        rekall hooks status
+        rekall hooks status --cli claude
+    """
+    from rekall.hooks.models import HookConfig
+
+    clis_to_check = [cli] if cli else ["claude", "cline", "continue", "generic"]
+
+    table = Table(title="Rekall Hooks Status", box=box.ROUNDED)
+    table.add_column("CLI", style="cyan")
+    table.add_column("Path", style="blue")
+    table.add_column("Status", style="green")
+
+    for cli_name in clis_to_check:
+        try:
+            config = HookConfig(cli=cli_name)  # type: ignore
+            hook_path = config.get_full_hook_path()
+
+            if hook_path.exists():
+                status = "[green]✓ Installed[/green]"
+            else:
+                status = "[dim]Not installed[/dim]"
+
+            table.add_row(cli_name, str(hook_path), status)
+        except Exception as e:
+            table.add_row(cli_name, "?", f"[red]Error: {e}[/red]")
+
+    console.print(table)
+
+
+@hooks_app.command("uninstall")
+def hooks_uninstall(
+    cli: str = typer.Option(
+        "claude",
+        "--cli", "-c",
+        help="Target CLI/IDE to uninstall from",
+    ),
+) -> None:
+    """Remove the Rekall reminder hook from a specific CLI/IDE.
+
+    Examples:
+        rekall hooks uninstall --cli claude
+    """
+    from rekall.hooks.models import HookConfig
+
+    valid_clis = ["claude", "cline", "continue", "generic"]
+    if cli not in valid_clis:
+        console.print(f"[red]Error: Invalid CLI '{cli}'[/red]")
+        raise typer.Exit(1)
+
+    config = HookConfig(cli=cli)  # type: ignore
+    hook_path = config.get_full_hook_path()
+    patterns_path = hook_path.parent / "resolution-patterns.txt"
+
+    removed = False
+
+    if hook_path.exists():
+        hook_path.unlink()
+        console.print(f"[green]✓ Removed: {hook_path}[/green]")
+        removed = True
+
+    if patterns_path.exists():
+        patterns_path.unlink()
+        console.print(f"[green]✓ Removed: {patterns_path}[/green]")
+        removed = True
+
+    if not removed:
+        console.print(f"[yellow]No hooks found for {cli}[/yellow]")
+    else:
+        console.print(f"\n[bold]Hook uninstalled from {cli}[/bold]")
+        console.print("Remember to remove the hook configuration from your settings.")
+
+
 if __name__ == "__main__":
     app()

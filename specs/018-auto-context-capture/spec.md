@@ -6,6 +6,12 @@
 **Input**: Phase 2 de Feature 006 - Auto-capture contexte enrichi avec extraction automatique des 5 dernières conversations pertinentes, détection fichiers modifiés via git, marqueurs temporels, et hooks de rappel proactif multi-CLI
 **Parent Spec**: [006-enriched-context](../006-enriched-context/spec.md)
 
+## Clarifications
+
+### Session 2025-12-12
+- Q: Comment déterminer la "pertinence" des échanges à capturer ? → A: L'agent décide lui-même via un mode hybride : soit il fournit directement `conversation_excerpt`, soit il demande au système de proposer des candidats depuis le transcript et filtre ensuite.
+- Q: Comment gérer les différents emplacements de transcript selon les IDE/CLI ? → A: Support multi-format avec parsers dédiés (JSONL, JSON, SQLite) et paramètre `_transcript_format` explicite.
+
 ## Contexte et Motivation
 
 Cette feature complète la spec 006 (Contexte Enrichi) en automatisant ce qui était prévu mais non implémenté :
@@ -29,9 +35,41 @@ Cette feature complète la spec 006 (Contexte Enrichi) en automatisant ce qui é
 - **Continue.dev** : Supporte les git hooks mais pas d'accès programmatique au transcript
 - **Conclusion** : L'auto-capture de conversation sera Claude Code-only initialement, les autres CLIs devront utiliser la capture manuelle ou l'option `auto_detect_files` uniquement
 
+### Emplacements Transcript par IDE/CLI (Source: Recherche 2025-12-12)
+
+| IDE/CLI | Support MCP | Format | Emplacement par défaut |
+|---------|-------------|--------|------------------------|
+| **Claude Code** | ✅ Oui | JSONL | `~/.claude/projects/[hash]/[session].jsonl` |
+| **Cline** | ✅ Oui | JSON | `~/.config/Code/User/globalStorage/saoudrizwan.claude-dev/tasks/` |
+| **Roo Code** | ✅ Oui | JSON | `~/.config/Code/User/globalStorage/rooveterinaryinc.roo-cline/` |
+| **Continue.dev** | ✅ Oui | JSON | `.continue/dev_data/` (projet local) |
+| **Zed** | ✅ Oui | LMDB | `~/.local/share/zed/threads/` |
+| **Windsurf** | ✅ Oui | ? | Non documenté publiquement |
+| **Cursor** | ⚠️ Partiel | SQLite | `workspaceStorage/[hash]/state.vscdb` |
+| **GitHub Copilot** | ⚠️ Partiel | JSON | `workspaceStorage/[hash]/chatSessions/` |
+| **Amazon Q** | ⚠️ Partiel | SQLite | `~/Library/.../amazon-q/data.sqlite3` |
+
+### Stratégie Multi-Format Transcript
+
+**Formats supportés (v1) :**
+- `claude-jsonl` : Format JSONL Claude Code (type: human|assistant, content, timestamp)
+- `cline-json` : Format JSON Cline (api_conversation_history.json)
+- `continue-json` : Format JSON Continue.dev
+- `raw-json` : Format JSON générique (array de {role, content})
+
+**Formats prévus (v2) :**
+- `sqlite` : Pour Cursor, Amazon Q (requête SQL sur tables de messages)
+- `lmdb` : Pour Zed (lecture binaire LMDB)
+
+**Principe de portabilité MCP :**
+- Le paramètre `_transcript_path` est toujours explicite (jamais deviné)
+- Le paramètre `_transcript_format` indique le parser à utiliser
+- Auto-détection du format basée sur l'extension si format non spécifié (.jsonl → claude-jsonl, .json → raw-json)
+
 ### Red Flags Identifiés
-- Risque de dépendance Claude Code : Atténué par fallback gracieux (conversation manuelle si pas de transcript)
+- Risque de dépendance Claude Code : Atténué par support multi-format et fallback gracieux
 - Taille des conversations : Atténué par compression zlib (déjà en place)
+- Formats propriétaires non documentés (Windsurf) : Fallback sur Mode 1 (agent fournit directement)
 
 ## User Scenarios & Testing
 
@@ -41,13 +79,19 @@ L'agent IA sauvegarde automatiquement le contexte de conversation pertinent lors
 
 **Why this priority**: Core feature - réduit de 80% la friction de capture contextuelle. Sans cela, les souvenirs manquent du contexte crucial pour les retrouver.
 
-**Independent Test**: Créer un souvenir via MCP avec `auto_capture_conversation: true` et vérifier que `conversation_excerpt` contient les 5 derniers échanges pertinents.
+**Mode Hybride de Capture** (décision de clarification 2025-12-12) :
+- **Mode 1 - Agent Direct** : L'agent fournit directement `conversation_excerpt` avec les échanges qu'il juge pertinents (1 appel MCP, portable)
+- **Mode 2 - Système Assisté** : Si l'agent manque de contexte (conversation compactée), il active `auto_capture_conversation: true` avec `_transcript_path`. Le système lit le transcript, retourne les N derniers échanges candidats, et l'agent filtre ceux pertinents (2 appels MCP, utilise le transcript complet)
+
+**Independent Test**: Créer un souvenir via MCP en Mode 1 (agent fournit `conversation_excerpt`) et en Mode 2 (système propose depuis transcript).
 
 **Acceptance Scenarios**:
 
-1. **Given** l'agent a résolu un bug et veut sauvegarder, **When** il appelle `rekall_add` avec `auto_capture_conversation: true` et `_transcript_path`, **Then** le système extrait les 5 dernières paires question/réponse et les stocke dans `conversation_excerpt`
-2. **Given** le transcript n'est pas accessible (CLI non-Claude), **When** l'agent appelle `rekall_add` avec `auto_capture_conversation: true` sans `_transcript_path`, **Then** le système accepte l'entrée avec `conversation_excerpt` vide et log un warning
-3. **Given** le transcript existe mais contient moins de 5 conversations, **When** l'extraction est déclenchée, **Then** le système extrait toutes les conversations disponibles sans erreur
+1. **Given** l'agent a le contexte complet en mémoire, **When** il appelle `rekall_add` avec `conversation_excerpt` rempli directement, **Then** le système stocke les échanges fournis sans traitement supplémentaire (Mode 1)
+2. **Given** l'agent manque de contexte et veut assistance, **When** il appelle `rekall_add` avec `auto_capture_conversation: true`, `_transcript_path` et `_transcript_format`, **Then** le système retourne les 20 derniers échanges candidats pour filtrage
+3. **Given** l'agent reçoit les candidats, **When** il rappelle avec `conversation_excerpt_indices: [3, 7, 12, 15, 18]`, **Then** le système stocke uniquement ces 5 échanges
+4. **Given** le transcript n'est pas accessible (CLI non supporté ou format inconnu), **When** l'agent appelle en Mode 2, **Then** le système retourne une erreur explicite invitant à utiliser Mode 1
+5. **Given** le transcript existe mais contient moins de 20 échanges, **When** l'extraction est déclenchée, **Then** le système retourne tous les échanges disponibles
 
 ---
 
@@ -125,17 +169,33 @@ L'utilisateur peut installer les hooks et configurations spécifiques à son CLI
 
 ### Functional Requirements
 
-- **FR-001**: Le système DOIT accepter les paramètres `auto_capture_conversation` et `_transcript_path` dans le contexte de `rekall_add`
-- **FR-002**: Le système DOIT extraire les 5 dernières paires question/réponse pertinentes du transcript JSONL
-- **FR-003**: Le système DOIT accepter les paramètres `auto_detect_files` et `_cwd` dans le contexte de `rekall_add`
-- **FR-004**: Le système DOIT combiner les fichiers staged et unstaged de git en liste dédupliquée
-- **FR-005**: Le système DOIT auto-générer `time_of_day` et `day_of_week` si non fournis
-- **FR-006**: Le système DOIT fournir un script de hook Stop pour Claude Code détectant les patterns de résolution
-- **FR-007**: Le système DOIT fournir une commande CLI `rekall hooks install` pour installer les hooks
+**Mode 1 - Agent Direct :**
+- **FR-001**: Le système DOIT accepter `conversation_excerpt` directement fourni par l'agent sans traitement
+
+**Mode 2 - Système Assisté :**
+- **FR-002**: Le système DOIT accepter les paramètres `auto_capture_conversation`, `_transcript_path` et `_transcript_format` dans `rekall_add`
+- **FR-003**: Le système DOIT supporter les formats de transcript : `claude-jsonl`, `cline-json`, `continue-json`, `raw-json`
+- **FR-004**: Le système DOIT retourner les 20 derniers échanges candidats quand `auto_capture_conversation: true`
+- **FR-005**: Le système DOIT accepter `conversation_excerpt_indices` pour finaliser la sélection des échanges pertinents
+- **FR-006**: Le système DOIT auto-détecter le format basé sur l'extension si `_transcript_format` non fourni
+
+**Auto-détection fichiers :**
+- **FR-007**: Le système DOIT accepter les paramètres `auto_detect_files` et `_cwd` dans le contexte de `rekall_add`
+- **FR-008**: Le système DOIT combiner les fichiers staged et unstaged de git en liste dédupliquée
+
+**Marqueurs temporels :**
+- **FR-009**: Le système DOIT auto-générer `time_of_day` et `day_of_week` si non fournis
+
+**Hooks de rappel :**
+- **FR-010**: Le système DOIT fournir un script de hook Stop pour Claude Code détectant les patterns de résolution
+- **FR-011**: Le système DOIT fournir une commande CLI `rekall hooks install` pour installer les hooks
 
 ### Key Entities
 
 - **TranscriptMessage**: Un échange dans le transcript (type: human|assistant, content: string, timestamp)
+- **TranscriptFormat**: Enum des formats supportés (claude-jsonl, cline-json, continue-json, raw-json)
+- **TranscriptParser**: Interface pour parser les différents formats de transcript vers TranscriptMessage[]
+- **CandidateExchanges**: Réponse du Mode 2 contenant les échanges candidats avec leurs indices
 - **TemporalMarkers**: Contexte temporel (time_of_day: morning|afternoon|evening|night, day_of_week: monday..sunday)
 - **HookConfig**: Configuration du hook de rappel (patterns de résolution, cooldown, CLI cible)
 
@@ -152,7 +212,9 @@ L'utilisateur peut installer les hooks et configurations spécifiques à son CLI
 
 ## Assumptions
 
-- Le format JSONL du transcript Claude Code reste stable (type: "human"|"assistant", content: string)
+- Les formats de transcript des IDE majeurs (Claude Code JSONL, Cline JSON, Continue.dev JSON) restent stables
 - Git est disponible dans le PATH sur les systèmes où `auto_detect_files` est utilisé
 - Les hooks Claude Code supportent le format de sortie JSON documenté
 - La compression zlib existante gère efficacement les conversations longues sans troncature
+- L'agent est capable de déterminer s'il a assez de contexte pour fournir `conversation_excerpt` directement (Mode 1) ou s'il a besoin d'assistance (Mode 2)
+- Les IDE avec formats non documentés (Windsurf) ou propriétaires (Cursor SQLite) utiliseront Mode 1 exclusivement en v1
