@@ -1,0 +1,160 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MCP Tools Expansion - Input Schemas",
+  "description": "Schémas JSON pour les 8 nouveaux outils MCP rekall",
+  "tools": {
+    "rekall_unlink": {
+      "name": "rekall_unlink",
+      "description": "Supprimer un lien existant entre deux entrées",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "source_id": {
+            "type": "string",
+            "description": "ID de l'entrée source du lien"
+          },
+          "target_id": {
+            "type": "string",
+            "description": "ID de l'entrée cible du lien"
+          }
+        },
+        "required": ["source_id", "target_id"]
+      }
+    },
+    "rekall_related": {
+      "name": "rekall_related",
+      "description": "Explorer les entrées reliées à une entrée donnée (liens entrants et sortants)",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "entry_id": {
+            "type": "string",
+            "description": "ID de l'entrée à explorer"
+          },
+          "depth": {
+            "type": "integer",
+            "description": "Profondeur de traversée du graphe (défaut: 1)",
+            "default": 1,
+            "minimum": 1,
+            "maximum": 3
+          }
+        },
+        "required": ["entry_id"]
+      }
+    },
+    "rekall_similar": {
+      "name": "rekall_similar",
+      "description": "Trouver les entrées sémantiquement similaires (requiert embeddings activés)",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "entry_id": {
+            "type": "string",
+            "description": "ID de l'entrée de référence"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Nombre max de résultats (défaut: 5)",
+            "default": 5,
+            "minimum": 1,
+            "maximum": 20
+          }
+        },
+        "required": ["entry_id"]
+      }
+    },
+    "rekall_sources_suggest": {
+      "name": "rekall_sources_suggest",
+      "description": "Suggérer des sources web pertinentes pour enrichir une entrée",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "entry_id": {
+            "type": "string",
+            "description": "ID de l'entrée pour laquelle suggérer des sources"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Nombre max de suggestions (défaut: 5)",
+            "default": 5,
+            "minimum": 1,
+            "maximum": 20
+          }
+        },
+        "required": ["entry_id"]
+      }
+    },
+    "rekall_info": {
+      "name": "rekall_info",
+      "description": "Obtenir les statistiques de la base de connaissances",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    "rekall_stale": {
+      "name": "rekall_stale",
+      "description": "Trouver les entrées non consultées depuis N jours",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "days": {
+            "type": "integer",
+            "description": "Seuil en jours d'inactivité (défaut: 90)",
+            "default": 90,
+            "minimum": 1
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Nombre max de résultats (défaut: 20)",
+            "default": 20,
+            "minimum": 1,
+            "maximum": 100
+          }
+        }
+      }
+    },
+    "rekall_generalize": {
+      "name": "rekall_generalize",
+      "description": "Créer une entrée générique (pattern) à partir de plusieurs entrées similaires",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "entry_ids": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "IDs des entrées à généraliser (minimum 2)",
+            "minItems": 2
+          },
+          "title": {
+            "type": "string",
+            "description": "Titre de l'entrée généralisée (auto-généré si omis)"
+          },
+          "type": {
+            "type": "string",
+            "description": "Type de l'entrée généralisée (défaut: pattern)",
+            "enum": ["pattern", "reference", "decision"],
+            "default": "pattern"
+          }
+        },
+        "required": ["entry_ids"]
+      }
+    },
+    "rekall_sources_verify": {
+      "name": "rekall_sources_verify",
+      "description": "Vérifier l'accessibilité des URLs sources (détection link rot)",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "description": "Nombre max d'URLs à vérifier (défaut: 10)",
+            "default": 10,
+            "minimum": 1,
+            "maximum": 50
+          }
+        }
+      }
+    }
+  }
+}

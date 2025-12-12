@@ -65,5 +65,4 @@ Thumbs.db
 # Development workflow (personal, not part of Rekall)
 .claude/
 .specify/
-specs/
 .worktrees/
