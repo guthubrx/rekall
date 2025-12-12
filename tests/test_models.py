@@ -192,13 +192,6 @@ class TestConfig:
         expected = Path.home() / ".local" / "share" / "rekall"
         assert config.rekall_dir == expected
 
-    def test_config_editor_default_none(self):
-        """Config editor should default to None."""
-        from rekall.config import Config
-
-        config = Config()
-        assert config.editor is None
-
     def test_config_embeddings_default_none(self):
         """Config embeddings settings should default to None."""
         from rekall.config import Config

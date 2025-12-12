@@ -35,8 +35,10 @@ from rekall.models import (
 #   6 = Structured context (context_structured JSON column for disambiguation)
 #   7 = Unified context (context_blob compressed + keywords index table)
 #   8 = Sources integration (sources, entry_sources tables for bidirectional linking)
+#   9 = Sources autonomes (seed/promoted/role, source_themes, known_domains tables)
+#  10 = Saved filters (saved_filters table for persistent filter views)
 
-CURRENT_SCHEMA_VERSION = 8
+CURRENT_SCHEMA_VERSION = 11
 
 # Migrations dict: version -> list of SQL statements
 # Each migration upgrades from version N-1 to version N
@@ -183,6 +185,133 @@ MIGRATIONS: dict[int, list[str]] = {
         "CREATE INDEX IF NOT EXISTS idx_entry_sources_source ON entry_sources(source_id)",
         "CREATE INDEX IF NOT EXISTS idx_entry_sources_type ON entry_sources(source_type)",
     ],
+    9: [
+        # Feature 010 - Sources Autonomes: Add new columns to sources table
+        "ALTER TABLE sources ADD COLUMN is_seed INTEGER DEFAULT 0",
+        "ALTER TABLE sources ADD COLUMN is_promoted INTEGER DEFAULT 0",
+        "ALTER TABLE sources ADD COLUMN promoted_at TEXT",
+        "ALTER TABLE sources ADD COLUMN role TEXT DEFAULT 'unclassified'",
+        "ALTER TABLE sources ADD COLUMN seed_origin TEXT",
+        "ALTER TABLE sources ADD COLUMN citation_quality_factor REAL DEFAULT 0.0",
+        # Indexes for new source columns
+        "CREATE INDEX IF NOT EXISTS idx_sources_is_seed ON sources(is_seed)",
+        "CREATE INDEX IF NOT EXISTS idx_sources_is_promoted ON sources(is_promoted)",
+        "CREATE INDEX IF NOT EXISTS idx_sources_role ON sources(role)",
+        # Source themes junction table (many-to-many)
+        """CREATE TABLE IF NOT EXISTS source_themes (
+            source_id TEXT NOT NULL,
+            theme TEXT NOT NULL,
+            PRIMARY KEY (source_id, theme),
+            FOREIGN KEY (source_id) REFERENCES sources(id) ON DELETE CASCADE
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_source_themes_theme ON source_themes(theme)",
+        # Known domains for automatic hub/authority classification
+        """CREATE TABLE IF NOT EXISTS known_domains (
+            domain TEXT PRIMARY KEY,
+            role TEXT NOT NULL CHECK(role IN ('hub', 'authority')),
+            notes TEXT,
+            created_at TEXT NOT NULL
+        )""",
+        # Insert initial known domains (authorities - official documentation)
+        "INSERT OR IGNORE INTO known_domains VALUES ('developer.mozilla.org', 'authority', 'MDN Web Docs', datetime('now'))",
+        "INSERT OR IGNORE INTO known_domains VALUES ('docs.python.org', 'authority', 'Python docs', datetime('now'))",
+        "INSERT OR IGNORE INTO known_domains VALUES ('tc39.es', 'authority', 'ECMAScript specs', datetime('now'))",
+        "INSERT OR IGNORE INTO known_domains VALUES ('www.w3.org', 'authority', 'W3C specs', datetime('now'))",
+        "INSERT OR IGNORE INTO known_domains VALUES ('www.rfc-editor.org', 'authority', 'RFCs', datetime('now'))",
+        "INSERT OR IGNORE INTO known_domains VALUES ('rust-lang.org', 'authority', 'Rust docs', datetime('now'))",
+        "INSERT OR IGNORE INTO known_domains VALUES ('go.dev', 'authority', 'Go docs', datetime('now'))",
+        "INSERT OR IGNORE INTO known_domains VALUES ('react.dev', 'authority', 'React docs', datetime('now'))",
+        "INSERT OR IGNORE INTO known_domains VALUES ('vuejs.org', 'authority', 'Vue docs', datetime('now'))",
+        "INSERT OR IGNORE INTO known_domains VALUES ('angular.io', 'authority', 'Angular docs', datetime('now'))",
+        "INSERT OR IGNORE INTO known_domains VALUES ('nodejs.org', 'authority', 'Node.js docs', datetime('now'))",
+        "INSERT OR IGNORE INTO known_domains VALUES ('www.typescriptlang.org', 'authority', 'TypeScript docs', datetime('now'))",
+        "INSERT OR IGNORE INTO known_domains VALUES ('kubernetes.io', 'authority', 'K8s docs', datetime('now'))",
+        "INSERT OR IGNORE INTO known_domains VALUES ('docs.docker.com', 'authority', 'Docker docs', datetime('now'))",
+        "INSERT OR IGNORE INTO known_domains VALUES ('www.sqlite.org', 'authority', 'SQLite docs', datetime('now'))",
+        "INSERT OR IGNORE INTO known_domains VALUES ('www.postgresql.org', 'authority', 'PostgreSQL docs', datetime('now'))",
+        # Insert initial known domains (hubs - aggregators, forums, news)
+        "INSERT OR IGNORE INTO known_domains VALUES ('stackoverflow.com', 'hub', 'Q&A dev', datetime('now'))",
+        "INSERT OR IGNORE INTO known_domains VALUES ('news.ycombinator.com', 'hub', 'Hacker News', datetime('now'))",
+        "INSERT OR IGNORE INTO known_domains VALUES ('reddit.com', 'hub', 'Reddit', datetime('now'))",
+        "INSERT OR IGNORE INTO known_domains VALUES ('github.com', 'hub', 'GitHub repos/issues', datetime('now'))",
+        "INSERT OR IGNORE INTO known_domains VALUES ('dev.to', 'hub', 'Dev community', datetime('now'))",
+        "INSERT OR IGNORE INTO known_domains VALUES ('medium.com', 'hub', 'Blog platform', datetime('now'))",
+        "INSERT OR IGNORE INTO known_domains VALUES ('hashnode.dev', 'hub', 'Blog platform', datetime('now'))",
+        "INSERT OR IGNORE INTO known_domains VALUES ('lobste.rs', 'hub', 'Tech news', datetime('now'))",
+        "INSERT OR IGNORE INTO known_domains VALUES ('slashdot.org', 'hub', 'Tech news', datetime('now'))",
+    ],
+    10: [
+        # Feature 012 - Sources Organisation: Saved filters table
+        """CREATE TABLE IF NOT EXISTS saved_filters (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            filter_json TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_saved_filters_name ON saved_filters(name)",
+    ],
+    11: [
+        # Feature 013 - Sources Medallion: Bronze layer (inbox)
+        """CREATE TABLE IF NOT EXISTS sources_inbox (
+            id TEXT PRIMARY KEY,
+            url TEXT NOT NULL,
+            domain TEXT,
+            cli_source TEXT NOT NULL,
+            project TEXT,
+            conversation_id TEXT,
+            user_query TEXT,
+            assistant_snippet TEXT,
+            surrounding_text TEXT,
+            captured_at TEXT DEFAULT (datetime('now')),
+            import_source TEXT,
+            raw_json TEXT,
+            is_valid INTEGER DEFAULT 1,
+            validation_error TEXT,
+            enriched_at TEXT
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_inbox_url ON sources_inbox(url)",
+        "CREATE INDEX IF NOT EXISTS idx_inbox_domain ON sources_inbox(domain)",
+        "CREATE INDEX IF NOT EXISTS idx_inbox_cli ON sources_inbox(cli_source)",
+        "CREATE INDEX IF NOT EXISTS idx_inbox_captured ON sources_inbox(captured_at)",
+        "CREATE INDEX IF NOT EXISTS idx_inbox_valid ON sources_inbox(is_valid)",
+        "CREATE INDEX IF NOT EXISTS idx_inbox_enriched ON sources_inbox(enriched_at)",
+        # Feature 013 - Sources Medallion: Silver layer (staging)
+        """CREATE TABLE IF NOT EXISTS sources_staging (
+            id TEXT PRIMARY KEY,
+            url TEXT NOT NULL UNIQUE,
+            domain TEXT NOT NULL,
+            title TEXT,
+            description TEXT,
+            content_type TEXT,
+            language TEXT,
+            last_verified TEXT,
+            is_accessible INTEGER DEFAULT 1,
+            http_status INTEGER,
+            citation_count INTEGER DEFAULT 1,
+            project_count INTEGER DEFAULT 1,
+            projects_list TEXT,
+            first_seen TEXT,
+            last_seen TEXT,
+            promotion_score REAL DEFAULT 0.0,
+            inbox_ids TEXT,
+            enriched_at TEXT,
+            promoted_at TEXT,
+            promoted_to TEXT,
+            FOREIGN KEY (promoted_to) REFERENCES sources(id) ON DELETE SET NULL
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_staging_domain ON sources_staging(domain)",
+        "CREATE INDEX IF NOT EXISTS idx_staging_score ON sources_staging(promotion_score DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_staging_promoted ON sources_staging(promoted_at)",
+        "CREATE INDEX IF NOT EXISTS idx_staging_content_type ON sources_staging(content_type)",
+        # Feature 013 - Sources Medallion: CDC tracking
+        """CREATE TABLE IF NOT EXISTS connector_imports (
+            connector TEXT PRIMARY KEY,
+            last_import TEXT,
+            last_file_marker TEXT,
+            entries_imported INTEGER DEFAULT 0,
+            errors_count INTEGER DEFAULT 0
+        )""",
+    ],
 }
 
 # Expected columns for schema verification (Option C - hybrid)
@@ -195,7 +324,7 @@ EXPECTED_ENTRY_COLUMNS = {
     "context_blob",  # Feature 007: Compressed structured context
 }
 
-EXPECTED_TABLES = {"entries", "tags", "links", "entries_fts", "embeddings", "suggestions", "metadata", "context_keywords", "sources", "entry_sources"}
+EXPECTED_TABLES = {"entries", "tags", "links", "entries_fts", "embeddings", "suggestions", "metadata", "context_keywords", "sources", "entry_sources", "source_themes", "known_domains", "sources_inbox", "sources_staging", "connector_imports"}
 
 
 # SQL statements for schema creation
@@ -2130,6 +2259,8 @@ class Database:
     def add_source(self, source: Source) -> Source:
         """Add a new source to the database.
 
+        Auto-classifies the source based on known domains if role is unclassified.
+
         Args:
             source: Source to add (id will be generated if empty)
 
@@ -2142,13 +2273,20 @@ class Database:
         if not source.id:
             source.id = generate_ulid()
 
+        # Auto-classify if role is unclassified (Feature 010)
+        if source.role == "unclassified":
+            known = self.get_known_domain(source.domain)
+            if known:
+                source.role = known["role"]
+
         try:
             self.conn.execute(
                 """
                 INSERT INTO sources
                 (id, domain, url_pattern, usage_count, last_used, personal_score,
-                 reliability, decay_rate, last_verified, status, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 reliability, decay_rate, last_verified, status, created_at,
+                 is_seed, is_promoted, promoted_at, role, seed_origin, citation_quality_factor)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     source.id,
@@ -2162,6 +2300,12 @@ class Database:
                     source.last_verified.isoformat() if source.last_verified else None,
                     source.status,
                     source.created_at.isoformat(),
+                    1 if source.is_seed else 0,
+                    1 if source.is_promoted else 0,
+                    source.promoted_at.isoformat() if source.promoted_at else None,
+                    source.role,
+                    source.seed_origin,
+                    source.citation_quality_factor,
                 ),
             )
             self.conn.commit()
@@ -2217,6 +2361,25 @@ class Database:
 
         return self._row_to_source(row)
 
+    def get_source_by_url(self, url: str) -> Optional[Source]:
+        """Get a source by exact URL (stored as url_pattern).
+
+        Args:
+            url: Full URL to search for
+
+        Returns:
+            Source if found, None otherwise
+        """
+        row = self.conn.execute(
+            "SELECT * FROM sources WHERE url_pattern = ?",
+            (url,),
+        ).fetchone()
+
+        if row is None:
+            return None
+
+        return self._row_to_source(row)
+
     def _row_to_source(self, row: sqlite3.Row) -> Source:
         """Convert a database row to a Source object.
 
@@ -2226,6 +2389,16 @@ class Database:
         Returns:
             Source object
         """
+        # Handle v9 fields with defaults for backward compatibility
+        is_seed = bool(row["is_seed"]) if "is_seed" in row.keys() else False
+        is_promoted = bool(row["is_promoted"]) if "is_promoted" in row.keys() else False
+        promoted_at = None
+        if "promoted_at" in row.keys() and row["promoted_at"]:
+            promoted_at = datetime.fromisoformat(row["promoted_at"])
+        role = row["role"] if "role" in row.keys() else "unclassified"
+        seed_origin = row["seed_origin"] if "seed_origin" in row.keys() else None
+        citation_quality = row["citation_quality_factor"] if "citation_quality_factor" in row.keys() else 0.0
+
         return Source(
             id=row["id"],
             domain=row["domain"],
@@ -2246,6 +2419,12 @@ class Database:
             ),
             status=row["status"] or "active",
             created_at=datetime.fromisoformat(row["created_at"]),
+            is_seed=is_seed,
+            is_promoted=is_promoted,
+            promoted_at=promoted_at,
+            role=role or "unclassified",
+            seed_origin=seed_origin,
+            citation_quality_factor=citation_quality or 0.0,
         )
 
     def link_entry_to_source(
@@ -2617,10 +2796,162 @@ class Database:
         # Clamp to 0-100 range
         return min(100.0, max(0.0, score))
 
+    def calculate_citation_quality(self, source_id: str) -> float:
+        """Calculate citation quality factor based on co-citation patterns.
+
+        Citation quality measures how often this source is cited alongside
+        high-quality sources (seeds, authorities, promoted). Higher scores
+        indicate the source appears in contexts with trusted sources.
+
+        Formula: weighted_cocitations / total_cocitations
+        - Seed co-citation: 1.5
+        - Authority co-citation: 1.3
+        - Promoted co-citation: 1.2
+        - Normal co-citation: 1.0
+
+        Args:
+            source_id: Source ULID
+
+        Returns:
+            Citation quality factor (0.0 to 1.0)
+        """
+        # Get all entries citing this source
+        cited_entries = self.conn.execute(
+            "SELECT entry_id FROM entry_sources WHERE source_id = ?",
+            (source_id,)
+        ).fetchall()
+
+        if not cited_entries:
+            return 0.0
+
+        entry_ids = [row["entry_id"] for row in cited_entries]
+
+        # Get all co-cited sources for these entries
+        placeholders = ",".join("?" * len(entry_ids))
+        co_citations = self.conn.execute(
+            f"""
+            SELECT s.is_seed, s.is_promoted, s.role
+            FROM entry_sources es
+            JOIN sources s ON es.source_id = s.id
+            WHERE es.entry_id IN ({placeholders})
+              AND es.source_id != ?
+            """,
+            (*entry_ids, source_id)
+        ).fetchall()
+
+        if not co_citations:
+            return 0.0
+
+        # Calculate weighted sum
+        total_weight = 0.0
+        for cocite in co_citations:
+            weight = 1.0
+            if cocite["is_seed"]:
+                weight = max(weight, 1.5)
+            if cocite["role"] == "authority":
+                weight = max(weight, 1.3)
+            if cocite["is_promoted"]:
+                weight = max(weight, 1.2)
+            total_weight += weight
+
+        # Normalize to 0.0-1.0 range
+        # Max possible weight is 1.5 * len(co_citations)
+        max_weight = 1.5 * len(co_citations)
+        quality_factor = total_weight / max_weight if max_weight > 0 else 0.0
+
+        return round(quality_factor, 3)
+
+    def calculate_source_score_v2(self, source: Source) -> float:
+        """Calculate personal score v2 with role bonus, seed bonus, and citation quality.
+
+        Enhanced formula from Feature 010 - Sources Autonomes:
+        score_v2 = base_score * usage_factor * recency_factor * reliability_factor
+                   * role_bonus * seed_bonus * (1 + citation_quality_factor * 0.2)
+
+        New factors (v2):
+        - role_bonus: authority=1.2x, hub=1.0x, unclassified=1.0x
+        - seed_bonus: 1.2x for seed sources
+        - citation_quality_factor: 0-20% boost based on co-citation quality
+
+        Args:
+            source: Source to calculate score for
+
+        Returns:
+            Calculated score (0-100)
+        """
+        from math import log2
+
+        from rekall.models import DECAY_RATE_HALF_LIVES, ROLE_BONUS, SEED_BONUS
+
+        base_score = 50.0
+
+        # Usage factor: logarithmic growth, capped
+        usage_factor = min(2.0, log2(source.usage_count + 1) / 5 + 1)
+
+        # Recency factor: exponential decay based on days since last use
+        recency_factor = 1.0
+        if source.last_used:
+            days_since = (datetime.now() - source.last_used).days
+            half_life = DECAY_RATE_HALF_LIVES.get(source.decay_rate, 180)
+            recency_factor = 0.5 ** (days_since / half_life)
+            recency_factor = max(0.2, recency_factor)
+
+        # Reliability factor
+        reliability_factors = {"A": 1.2, "B": 1.0, "C": 0.8}
+        reliability_factor = reliability_factors.get(source.reliability, 1.0)
+
+        # V2 factors
+        role_bonus = ROLE_BONUS.get(source.role, 1.0)
+        seed_bonus = SEED_BONUS if source.is_seed else 1.0
+
+        # Citation quality adds up to 20% boost
+        cq_factor = source.citation_quality_factor or 0.0
+        citation_bonus = 1 + (cq_factor * 0.2)
+
+        # Calculate final score
+        score = (
+            base_score
+            * usage_factor
+            * recency_factor
+            * reliability_factor
+            * role_bonus
+            * seed_bonus
+            * citation_bonus
+        )
+
+        # Clamp to 0-100 range
+        return min(100.0, max(0.0, score))
+
+    def update_citation_quality(self, source_id: str) -> Optional[float]:
+        """Update citation quality factor for a source.
+
+        Args:
+            source_id: Source ULID
+
+        Returns:
+            New citation quality factor, or None if source not found
+        """
+        source = self.get_source(source_id)
+        if source is None:
+            return None
+
+        # Calculate new citation quality
+        cq_factor = self.calculate_citation_quality(source_id)
+
+        # Update in database
+        self.conn.execute(
+            "UPDATE sources SET citation_quality_factor = ? WHERE id = ?",
+            (cq_factor, source_id)
+        )
+        self.conn.commit()
+
+        return cq_factor
+
     def update_source_usage(self, source_id: str) -> Optional[Source]:
         """Increment usage count and recalculate score for a source.
 
         Should be called when a source is cited in a new entry.
+        Uses score v2 formula with role bonus, seed bonus, and citation quality.
 
         Args:
             source_id: Source ULID
@@ -2636,19 +2967,26 @@ class Database:
         source.usage_count += 1
         source.last_used = datetime.now()
 
-        # Recalculate score
-        source.personal_score = self.calculate_source_score(source)
+        # Recalculate score using v2 formula
+        source.personal_score = self.calculate_source_score_v2(source)
 
         # Save
         self.update_source(source)
 
         return source
 
-    def recalculate_source_score(self, source_id: str) -> Optional[float]:
+    def recalculate_source_score(
+        self,
+        source_id: str,
+        update_citation_quality: bool = True
+    ) -> Optional[float]:
         """Recalculate and update score for a source (e.g., for decay).
+
+        Uses score v2 formula with role bonus, seed bonus, and citation quality.
 
         Args:
             source_id: Source ULID
+            update_citation_quality: Also recalculate citation quality factor
 
         Returns:
             New score, or None if source not found
@@ -2657,8 +2995,17 @@ class Database:
         if source is None:
             return None
 
-        # Calculate new score
-        new_score = self.calculate_source_score(source)
+        # Update citation quality first if requested
+        if update_citation_quality:
+            cq_factor = self.calculate_citation_quality(source_id)
+            source.citation_quality_factor = cq_factor
+            self.conn.execute(
+                "UPDATE sources SET citation_quality_factor = ? WHERE id = ?",
+                (cq_factor, source_id)
+            )
+
+        # Calculate new score using v2 formula
+        new_score = self.calculate_source_score_v2(source)
         source.personal_score = new_score
 
         # Save
@@ -3024,3 +3371,1129 @@ class Database:
         ).fetchall()
 
         return [self._row_to_source(row) for row in rows]
+
+    # =========================================================================
+    # Feature 010: Sources Autonomes - Theme Management
+    # =========================================================================
+
+    def add_source_theme(self, source_id: str, theme: str) -> bool:
+        """Add a theme to a source.
+
+        Args:
+            source_id: Source ULID
+            theme: Theme name (kebab-case)
+
+        Returns:
+            True if added, False if already exists
+        """
+        try:
+            self.conn.execute(
+                "INSERT INTO source_themes (source_id, theme) VALUES (?, ?)",
+                (source_id, theme.lower().strip()),
+            )
+            self.conn.commit()
+            return True
+        except sqlite3.IntegrityError:
+            return False  # Already exists
+
+    def get_source_themes(self, source_id: str) -> list[str]:
+        """Get all themes for a source.
+
+        Args:
+            source_id: Source ULID
+
+        Returns:
+            List of theme names
+        """
+        rows = self.conn.execute(
+            "SELECT theme FROM source_themes WHERE source_id = ? ORDER BY theme",
+            (source_id,),
+        ).fetchall()
+        return [row["theme"] for row in rows]
+
+    def remove_source_theme(self, source_id: str, theme: str) -> bool:
+        """Remove a theme from a source.
+
+        Args:
+            source_id: Source ULID
+            theme: Theme name
+
+        Returns:
+            True if removed, False if not found
+        """
+        cursor = self.conn.execute(
+            "DELETE FROM source_themes WHERE source_id = ? AND theme = ?",
+            (source_id, theme.lower().strip()),
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def update_source_as_seed(
+        self,
+        source_id: str,
+        seed_origin: str,
+        role: Optional[str] = None,
+    ) -> bool:
+        """Mark a source as a seed (migrated from speckit).
+
+        Args:
+            source_id: Source ULID
+            seed_origin: Path to original speckit file
+            role: Optional role override (hub/authority/unclassified)
+
+        Returns:
+            True if updated, False if source not found
+        """
+        if role:
+            cursor = self.conn.execute(
+                """
+                UPDATE sources
+                SET is_seed = 1, seed_origin = ?, role = ?
+                WHERE id = ?
+                """,
+                (seed_origin, role, source_id),
+            )
+        else:
+            cursor = self.conn.execute(
+                """
+                UPDATE sources
+                SET is_seed = 1, seed_origin = ?
+                WHERE id = ?
+                """,
+                (seed_origin, source_id),
+            )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def get_seed_sources(self, limit: int = 100) -> list[Source]:
+        """Get all seed sources (migrated from speckit).
+
+        Args:
+            limit: Maximum sources to return
+
+        Returns:
+            List of seed Source objects
+        """
+        rows = self.conn.execute(
+            """
+            SELECT * FROM sources
+            WHERE is_seed = 1
+            ORDER BY personal_score DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [self._row_to_source(row) for row in rows]
+
+    # =========================================================================
+    # Feature 010: Sources Autonomes - Known Domains
+    # =========================================================================
+
+    def get_known_domain(self, domain: str) -> Optional[dict]:
+        """Get known domain classification.
+
+        Args:
+            domain: Domain to look up
+
+        Returns:
+            Dict with role and notes, or None if not found
+        """
+        row = self.conn.execute(
+            "SELECT domain, role, notes FROM known_domains WHERE domain = ?",
+            (domain.lower(),),
+        ).fetchone()
+        if row:
+            return {"domain": row["domain"], "role": row["role"], "notes": row["notes"]}
+        return None
+
+    def add_known_domain(self, domain: str, role: str, notes: Optional[str] = None) -> bool:
+        """Add a domain to known domains for auto-classification.
+
+        Args:
+            domain: Domain name
+            role: hub or authority
+            notes: Optional description
+
+        Returns:
+            True if added, False if already exists
+        """
+        try:
+            self.conn.execute(
+                """
+                INSERT INTO known_domains (domain, role, notes, created_at)
+                VALUES (?, ?, ?, datetime('now'))
+                """,
+                (domain.lower(), role, notes),
+            )
+            self.conn.commit()
+            return True
+        except sqlite3.IntegrityError:
+            return False
+
+    # =========================================================================
+    # Feature 010: Sources Autonomes - Promotion System (US2)
+    # =========================================================================
+
+    def check_promotion_criteria(self, source: Source) -> bool:
+        """Check if a source meets promotion criteria.
+
+        Criteria:
+        - usage_count >= 3
+        - personal_score >= 30
+        - last_used within 180 days
+
+        Args:
+            source: Source to check
+
+        Returns:
+            True if source meets all criteria
+        """
+        from rekall.models import PROMOTION_THRESHOLDS
+
+        # Check usage count
+        if source.usage_count < PROMOTION_THRESHOLDS["min_usage_count"]:
+            return False
+
+        # Check score
+        if source.personal_score < PROMOTION_THRESHOLDS["min_score"]:
+            return False
+
+        # Check recency
+        if source.last_used:
+            days_since_use = (datetime.now() - source.last_used).days
+            if days_since_use > PROMOTION_THRESHOLDS["max_days_inactive"]:
+                return False
+        else:
+            return False  # Never used = not promotable
+
+        return True
+
+    def promote_source(self, source_id: str) -> bool:
+        """Promote a source (mark as is_promoted=1).
+
+        Args:
+            source_id: Source ULID
+
+        Returns:
+            True if promoted, False if not found
+        """
+        cursor = self.conn.execute(
+            """
+            UPDATE sources
+            SET is_promoted = 1, promoted_at = datetime('now')
+            WHERE id = ?
+            """,
+            (source_id,),
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def demote_source(self, source_id: str) -> bool:
+        """Demote a source (mark as is_promoted=0).
+
+        Does NOT demote seed sources (is_seed=1).
+
+        Args:
+            source_id: Source ULID
+
+        Returns:
+            True if demoted, False if not found or is seed
+        """
+        cursor = self.conn.execute(
+            """
+            UPDATE sources
+            SET is_promoted = 0, promoted_at = NULL
+            WHERE id = ? AND is_seed = 0
+            """,
+            (source_id,),
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def get_promoted_sources(self, limit: int = 100) -> list[Source]:
+        """Get all promoted sources.
+
+        Args:
+            limit: Maximum sources to return
+
+        Returns:
+            List of promoted Source objects
+        """
+        rows = self.conn.execute(
+            """
+            SELECT * FROM sources
+            WHERE is_promoted = 1
+            ORDER BY personal_score DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [self._row_to_source(row) for row in rows]
+
+    def recalculate_all_promotions(self) -> dict:
+        """Recalculate promotion status for all sources.
+
+        Returns:
+            Dict with counts: promoted, demoted, unchanged
+        """
+        promoted_count = 0
+        demoted_count = 0
+        unchanged_count = 0
+
+        rows = self.conn.execute("SELECT * FROM sources").fetchall()
+
+        for row in rows:
+            source = self._row_to_source(row)
+
+            meets_criteria = self.check_promotion_criteria(source)
+
+            if meets_criteria and not source.is_promoted:
+                # Promote
+                self.promote_source(source.id)
+                promoted_count += 1
+            elif not meets_criteria and source.is_promoted and not source.is_seed:
+                # Demote (but not seeds)
+                self.demote_source(source.id)
+                demoted_count += 1
+            else:
+                unchanged_count += 1
+
+        return {
+            "promoted": promoted_count,
+            "demoted": demoted_count,
+            "unchanged": unchanged_count,
+        }
+
+    # =========================================================================
+    # Feature 010: Sources Autonomes - Classification (US3)
+    # =========================================================================
+
+    def classify_source_auto(self, source_id: str) -> Optional[str]:
+        """Automatically classify a source based on known domains.
+
+        Args:
+            source_id: Source ULID
+
+        Returns:
+            Role assigned (hub/authority/unclassified), or None if source not found
+        """
+        source = self.get_source(source_id)
+        if not source:
+            return None
+
+        known = self.get_known_domain(source.domain)
+        role = known["role"] if known else "unclassified"
+
+        self.conn.execute(
+            "UPDATE sources SET role = ? WHERE id = ?",
+            (role, source_id),
+        )
+        self.conn.commit()
+        return role
+
+    def classify_source_manual(self, source_id: str, role: str) -> bool:
+        """Manually classify a source.
+
+        Args:
+            source_id: Source ULID
+            role: hub/authority/unclassified
+
+        Returns:
+            True if updated, False if source not found
+        """
+        from rekall.models import VALID_SOURCE_ROLES
+
+        if role not in VALID_SOURCE_ROLES:
+            raise ValueError(f"Invalid role: {role}. Must be one of {VALID_SOURCE_ROLES}")
+
+        cursor = self.conn.execute(
+            "UPDATE sources SET role = ? WHERE id = ?",
+            (role, source_id),
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    # =========================================================================
+    # Feature 010: Sources Autonomes - Theme Queries (US5)
+    # =========================================================================
+
+    def get_sources_by_theme(
+        self,
+        theme: str,
+        limit: int = 20,
+        min_score: float = 0.0,
+        include_unclassified: bool = True,
+        seeds_only: bool = False,
+        promoted_only: bool = False,
+    ) -> list[Source]:
+        """Get sources for a specific theme, sorted by score.
+
+        Args:
+            theme: Theme to filter by
+            limit: Maximum sources to return
+            min_score: Minimum personal score
+            include_unclassified: Include sources with role='unclassified'
+            seeds_only: Only return seed sources
+            promoted_only: Only return promoted sources
+
+        Returns:
+            List of Source objects sorted by score (descending)
+        """
+        query = """
+            SELECT s.* FROM sources s
+            JOIN source_themes st ON s.id = st.source_id
+            WHERE st.theme = ?
+            AND s.personal_score >= ?
+        """
+        params: list = [theme.lower(), min_score]
+
+        if not include_unclassified:
+            query += " AND s.role != 'unclassified'"
+
+        if seeds_only:
+            query += " AND s.is_seed = 1"
+
+        if promoted_only:
+            query += " AND s.is_promoted = 1"
+
+        query += """
+            ORDER BY
+                CASE WHEN s.is_seed = 1 THEN 0
+                     WHEN s.is_promoted = 1 THEN 1
+                     ELSE 2 END,
+                s.personal_score DESC
+            LIMIT ?
+        """
+        params.append(limit)
+
+        rows = self.conn.execute(query, params).fetchall()
+        return [self._row_to_source(row) for row in rows]
+
+    def list_themes_with_counts(self, min_sources: int = 1) -> list[dict]:
+        """List all themes with source counts and average scores.
+
+        Args:
+            min_sources: Minimum sources per theme to include
+
+        Returns:
+            List of dicts with theme, count, avg_score
+        """
+        rows = self.conn.execute(
+            """
+            SELECT theme, COUNT(*) as count,
+                   AVG(s.personal_score) as avg_score
+            FROM source_themes st
+            JOIN sources s ON st.source_id = s.id
+            GROUP BY theme
+            HAVING count >= ?
+            ORDER BY count DESC
+            """,
+            (min_sources,),
+        ).fetchall()
+
+        return [
+            {
+                "theme": row["theme"],
+                "count": row["count"],
+                "avg_score": round(row["avg_score"] or 0, 1),
+            }
+            for row in rows
+        ]
+
+    # Alias for Feature 012 compatibility (tags = themes)
+    def get_all_tags_with_counts(self, min_sources: int = 1) -> list[dict]:
+        """Alias for list_themes_with_counts - tags and themes are the same."""
+        return self.list_themes_with_counts(min_sources)
+
+    def get_sources_by_tags(
+        self,
+        tags: list[str],
+        limit: int = 100,
+        min_score: float = 0.0,
+    ) -> list[Source]:
+        """Get sources matching ANY of the given tags (OR logic).
+
+        Args:
+            tags: List of tags to match (OR logic - source must have at least one)
+            limit: Maximum sources to return
+            min_score: Minimum personal score
+
+        Returns:
+            List of Source objects sorted by score (descending)
+        """
+        if not tags:
+            return []
+
+        # Normalize tags to lowercase
+        normalized_tags = [t.lower().strip() for t in tags if t.strip()]
+        if not normalized_tags:
+            return []
+
+        # Build query with placeholders for tags
+        placeholders = ",".join("?" * len(normalized_tags))
+        query = f"""
+            SELECT DISTINCT s.* FROM sources s
+            JOIN source_themes st ON s.id = st.source_id
+            WHERE st.theme IN ({placeholders})
+            AND s.personal_score >= ?
+            ORDER BY s.personal_score DESC
+            LIMIT ?
+        """
+        params = normalized_tags + [min_score, limit]
+
+        rows = self.conn.execute(query, params).fetchall()
+        return [self._row_to_source(row) for row in rows]
+
+    def get_tags_suggestions(self, prefix: str, limit: int = 10) -> list[str]:
+        """Get tag suggestions for auto-completion.
+
+        Args:
+            prefix: Prefix to match (case-insensitive)
+            limit: Maximum suggestions to return
+
+        Returns:
+            List of tag names matching the prefix, ordered by usage count
+        """
+        rows = self.conn.execute(
+            """
+            SELECT theme, COUNT(*) as cnt FROM source_themes
+            WHERE theme LIKE ? || '%'
+            GROUP BY theme
+            ORDER BY cnt DESC
+            LIMIT ?
+            """,
+            (prefix.lower(), limit),
+        ).fetchall()
+        return [row["theme"] for row in rows]
+
+    def search_sources_advanced(
+        self,
+        tags: list[str] | None = None,
+        score_min: float | None = None,
+        score_max: float | None = None,
+        statuses: list[str] | None = None,
+        roles: list[str] | None = None,
+        last_used_days: int | None = None,
+        text_search: str | None = None,
+        limit: int = 100,
+    ) -> list[Source]:
+        """Advanced search for sources with multiple filter criteria.
+
+        Filter logic:
+        - Tags: OR (source has at least one of the specified tags)
+        - Other criteria: AND (all specified criteria must match)
+
+        Args:
+            tags: Filter by tags (OR logic)
+            score_min: Minimum personal score
+            score_max: Maximum personal score
+            statuses: Filter by statuses (OR logic within)
+            roles: Filter by roles (OR logic within)
+            last_used_days: Only sources used within N days
+            text_search: Search in domain name
+            limit: Maximum results
+
+        Returns:
+            List of matching Source objects sorted by score descending
+        """
+        from datetime import datetime, timedelta
+
+        # Base query
+        if tags:
+            # If tags specified, need to join source_themes
+            query = """
+                SELECT DISTINCT s.* FROM sources s
+                JOIN source_themes st ON s.id = st.source_id
+                WHERE 1=1
+            """
+        else:
+            query = "SELECT * FROM sources s WHERE 1=1"
+
+        params: list = []
+
+        # Tags filter (OR logic)
+        if tags:
+            normalized_tags = [t.lower().strip() for t in tags if t.strip()]
+            if normalized_tags:
+                placeholders = ",".join("?" * len(normalized_tags))
+                query += f" AND st.theme IN ({placeholders})"
+                params.extend(normalized_tags)
+
+        # Score range
+        if score_min is not None:
+            query += " AND s.personal_score >= ?"
+            params.append(score_min)
+
+        if score_max is not None:
+            query += " AND s.personal_score <= ?"
+            params.append(score_max)
+
+        # Statuses (OR)
+        if statuses:
+            placeholders = ",".join("?" * len(statuses))
+            query += f" AND s.status IN ({placeholders})"
+            params.extend(statuses)
+
+        # Roles (OR)
+        if roles:
+            placeholders = ",".join("?" * len(roles))
+            query += f" AND s.role IN ({placeholders})"
+            params.extend(roles)
+
+        # Freshness (last used within N days)
+        if last_used_days is not None:
+            cutoff = datetime.now() - timedelta(days=last_used_days)
+            query += " AND s.last_used >= ?"
+            params.append(cutoff.isoformat())
+
+        # Text search in domain
+        if text_search:
+            query += " AND s.domain LIKE ?"
+            params.append(f"%{text_search}%")
+
+        query += " ORDER BY s.personal_score DESC LIMIT ?"
+        params.append(limit)
+
+        rows = self.conn.execute(query, params).fetchall()
+        return [self._row_to_source(row) for row in rows]
+
+    # =========================================================================
+    # Saved Filters (Feature 012 - Sources Organisation)
+    # =========================================================================
+
+    def save_filter(self, name: str, filter_dict: dict) -> int:
+        """Save a filter configuration.
+
+        Args:
+            name: Unique name for the filter
+            filter_dict: Dictionary of filter parameters
+
+        Returns:
+            ID of the saved filter
+        """
+        import json
+
+        filter_json = json.dumps(filter_dict)
+        cursor = self.conn.execute(
+            "INSERT INTO saved_filters (name, filter_json) VALUES (?, ?)",
+            (name, filter_json),
+        )
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def get_saved_filters(self) -> list[dict]:
+        """Get all saved filters.
+
+        Returns:
+            List of dicts with id, name, filter_json, created_at
+        """
+        rows = self.conn.execute(
+            "SELECT id, name, filter_json, created_at FROM saved_filters ORDER BY name"
+        ).fetchall()
+
+        return [
+            {
+                "id": row["id"],
+                "name": row["name"],
+                "filter_json": row["filter_json"],
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
+
+    def get_saved_filter_by_id(self, filter_id: int) -> dict | None:
+        """Get a saved filter by ID.
+
+        Args:
+            filter_id: ID of the filter
+
+        Returns:
+            Dict with filter data or None if not found
+        """
+        row = self.conn.execute(
+            "SELECT id, name, filter_json, created_at FROM saved_filters WHERE id = ?",
+            (filter_id,),
+        ).fetchone()
+
+        if not row:
+            return None
+
+        return {
+            "id": row["id"],
+            "name": row["name"],
+            "filter_json": row["filter_json"],
+            "created_at": row["created_at"],
+        }
+
+    def delete_saved_filter(self, filter_id: int) -> bool:
+        """Delete a saved filter.
+
+        Args:
+            filter_id: ID of the filter to delete
+
+        Returns:
+            True if deleted, False if not found
+        """
+        cursor = self.conn.execute(
+            "DELETE FROM saved_filters WHERE id = ?", (filter_id,)
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    # =========================================================================
+    # Sources Inbox (Bronze Layer) - Feature 013
+    # =========================================================================
+
+    def add_inbox_entry(self, entry: "InboxEntry") -> str:
+        """Add a new inbox entry (Bronze layer).
+
+        Args:
+            entry: InboxEntry to add
+
+        Returns:
+            The entry ID
+        """
+
+        self.conn.execute(
+            """INSERT INTO sources_inbox
+               (id, url, domain, cli_source, project, conversation_id, user_query,
+                assistant_snippet, surrounding_text, captured_at, import_source,
+                raw_json, is_valid, validation_error, enriched_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                entry.id,
+                entry.url,
+                entry.domain,
+                entry.cli_source,
+                entry.project,
+                entry.conversation_id,
+                entry.user_query,
+                entry.assistant_snippet,
+                entry.surrounding_text,
+                entry.captured_at.isoformat() if entry.captured_at else None,
+                entry.import_source,
+                entry.raw_json,
+                1 if entry.is_valid else 0,
+                entry.validation_error,
+                entry.enriched_at.isoformat() if entry.enriched_at else None,
+            ),
+        )
+        self.conn.commit()
+        return entry.id
+
+    def get_inbox_entries(
+        self,
+        cli_source: Optional[str] = None,
+        is_valid: Optional[bool] = None,
+        valid_only: bool = False,
+        quarantine_only: bool = False,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list["InboxEntry"]:
+        """Get inbox entries with optional filtering.
+
+        Args:
+            cli_source: Filter by CLI source
+            is_valid: Filter by validation status (deprecated, use valid_only/quarantine_only)
+            valid_only: If True, only return valid entries
+            quarantine_only: If True, only return invalid (quarantined) entries
+            limit: Maximum entries to return
+            offset: Offset for pagination
+
+        Returns:
+            List of InboxEntry objects
+        """
+
+        query = "SELECT * FROM sources_inbox WHERE 1=1"
+        params: list = []
+
+        if cli_source:
+            query += " AND cli_source = ?"
+            params.append(cli_source)
+        # Handle valid_only / quarantine_only convenience parameters
+        if valid_only:
+            query += " AND is_valid = 1"
+        elif quarantine_only:
+            query += " AND is_valid = 0"
+        elif is_valid is not None:
+            query += " AND is_valid = ?"
+            params.append(1 if is_valid else 0)
+
+        query += " ORDER BY captured_at DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+
+        cursor = self.conn.execute(query, params)
+        entries = []
+        for row in cursor.fetchall():
+            entries.append(self._row_to_inbox_entry(row))
+        return entries
+
+    def get_inbox_not_enriched(self, limit: int = 50) -> list["InboxEntry"]:
+        """Get inbox entries not yet enriched (for Bronze → Silver processing).
+
+        Args:
+            limit: Maximum entries to return
+
+        Returns:
+            List of InboxEntry objects awaiting enrichment
+        """
+
+        cursor = self.conn.execute(
+            """SELECT * FROM sources_inbox
+               WHERE enriched_at IS NULL AND is_valid = 1
+               ORDER BY captured_at ASC
+               LIMIT ?""",
+            (limit,),
+        )
+        entries = []
+        for row in cursor.fetchall():
+            entries.append(self._row_to_inbox_entry(row))
+        return entries
+
+    def mark_inbox_enriched(self, entry_id: str) -> bool:
+        """Mark an inbox entry as enriched.
+
+        Args:
+            entry_id: ID of the entry to mark
+
+        Returns:
+            True if updated, False if not found
+        """
+        cursor = self.conn.execute(
+            "UPDATE sources_inbox SET enriched_at = datetime('now') WHERE id = ?",
+            (entry_id,),
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def delete_inbox_entry(self, entry_id: str) -> bool:
+        """Delete an inbox entry.
+
+        Args:
+            entry_id: ID of the entry to delete
+
+        Returns:
+            True if deleted, False if not found
+        """
+        cursor = self.conn.execute(
+            "DELETE FROM sources_inbox WHERE id = ?",
+            (entry_id,),
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def clear_inbox(
+        self,
+        all_entries: bool = False,
+        quarantine_only: bool = False,
+        enriched_only: bool = False,
+    ) -> int:
+        """Clear inbox entries.
+
+        Args:
+            all_entries: Delete all entries
+            quarantine_only: Delete only quarantine entries (is_valid = 0)
+            enriched_only: Delete only enriched entries
+
+        Returns:
+            Number of entries deleted
+        """
+        if all_entries:
+            cursor = self.conn.execute("DELETE FROM sources_inbox")
+        elif quarantine_only:
+            cursor = self.conn.execute("DELETE FROM sources_inbox WHERE is_valid = 0")
+        elif enriched_only:
+            cursor = self.conn.execute("DELETE FROM sources_inbox WHERE enriched_at IS NOT NULL")
+        else:
+            return 0
+        self.conn.commit()
+        return cursor.rowcount
+
+    def get_inbox_stats(self) -> dict:
+        """Get inbox statistics.
+
+        Returns:
+            Dict with total, pending, quarantine, enriched counts
+        """
+        cursor = self.conn.execute(
+            """SELECT
+                COUNT(*) as total,
+                SUM(CASE WHEN enriched_at IS NULL AND is_valid = 1 THEN 1 ELSE 0 END) as pending,
+                SUM(CASE WHEN is_valid = 0 THEN 1 ELSE 0 END) as quarantine,
+                SUM(CASE WHEN enriched_at IS NOT NULL THEN 1 ELSE 0 END) as enriched
+               FROM sources_inbox"""
+        )
+        row = cursor.fetchone()
+        return {
+            "total": row["total"] or 0,
+            "pending": row["pending"] or 0,
+            "quarantine": row["quarantine"] or 0,
+            "enriched": row["enriched"] or 0,
+        }
+
+    def _row_to_inbox_entry(self, row) -> "InboxEntry":
+        """Convert database row to InboxEntry."""
+        from rekall.models import InboxEntry
+
+        return InboxEntry(
+            id=row["id"],
+            url=row["url"],
+            domain=row["domain"],
+            cli_source=row["cli_source"],
+            project=row["project"],
+            conversation_id=row["conversation_id"],
+            user_query=row["user_query"],
+            assistant_snippet=row["assistant_snippet"],
+            surrounding_text=row["surrounding_text"],
+            captured_at=datetime.fromisoformat(row["captured_at"]) if row["captured_at"] else datetime.now(),
+            import_source=row["import_source"] or "history_import",
+            raw_json=row["raw_json"],
+            is_valid=bool(row["is_valid"]),
+            validation_error=row["validation_error"],
+            enriched_at=datetime.fromisoformat(row["enriched_at"]) if row["enriched_at"] else None,
+        )
+
+    # =========================================================================
+    # Sources Staging (Silver Layer) - Feature 013
+    # =========================================================================
+
+    def add_staging_entry(self, entry: "StagingEntry") -> str:
+        """Add a new staging entry (Silver layer).
+
+        Args:
+            entry: StagingEntry to add
+
+        Returns:
+            The entry ID
+        """
+
+        self.conn.execute(
+            """INSERT INTO sources_staging
+               (id, url, domain, title, description, content_type, language,
+                last_verified, is_accessible, http_status, citation_count,
+                project_count, projects_list, first_seen, last_seen,
+                promotion_score, inbox_ids, enriched_at, promoted_at, promoted_to)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                entry.id,
+                entry.url,
+                entry.domain,
+                entry.title,
+                entry.description,
+                entry.content_type,
+                entry.language,
+                entry.last_verified.isoformat() if entry.last_verified else None,
+                1 if entry.is_accessible else 0,
+                entry.http_status,
+                entry.citation_count,
+                entry.project_count,
+                entry.projects_list,
+                entry.first_seen.isoformat() if entry.first_seen else None,
+                entry.last_seen.isoformat() if entry.last_seen else None,
+                entry.promotion_score,
+                entry.inbox_ids,
+                entry.enriched_at.isoformat() if entry.enriched_at else None,
+                entry.promoted_at.isoformat() if entry.promoted_at else None,
+                entry.promoted_to,
+            ),
+        )
+        self.conn.commit()
+        return entry.id
+
+    def get_staging_by_url(self, url: str) -> Optional["StagingEntry"]:
+        """Get a staging entry by URL.
+
+        Args:
+            url: URL to find
+
+        Returns:
+            StagingEntry or None if not found
+        """
+        cursor = self.conn.execute(
+            "SELECT * FROM sources_staging WHERE url = ?", (url,)
+        )
+        row = cursor.fetchone()
+        if row:
+            return self._row_to_staging_entry(row)
+        return None
+
+    def get_staging_entries(
+        self,
+        promoted: Optional[bool] = None,
+        content_type: Optional[str] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list["StagingEntry"]:
+        """Get staging entries with optional filtering.
+
+        Args:
+            promoted: Filter by promotion status (True=promoted, False=not, None=all)
+            content_type: Filter by content type
+            limit: Maximum entries to return
+            offset: Offset for pagination
+
+        Returns:
+            List of StagingEntry objects
+        """
+        query = "SELECT * FROM sources_staging WHERE 1=1"
+        params: list = []
+
+        if promoted is not None:
+            if promoted:
+                query += " AND promoted_at IS NOT NULL"
+            else:
+                query += " AND promoted_at IS NULL"
+        if content_type:
+            query += " AND content_type = ?"
+            params.append(content_type)
+
+        query += " ORDER BY promotion_score DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+
+        cursor = self.conn.execute(query, params)
+        entries = []
+        for row in cursor.fetchall():
+            entries.append(self._row_to_staging_entry(row))
+        return entries
+
+    def get_staging_eligible_for_promotion(self, threshold: float) -> list["StagingEntry"]:
+        """Get staging entries eligible for promotion.
+
+        Args:
+            threshold: Minimum score threshold
+
+        Returns:
+            List of StagingEntry objects with score >= threshold and not yet promoted
+        """
+        cursor = self.conn.execute(
+            """SELECT * FROM sources_staging
+               WHERE promotion_score >= ? AND promoted_at IS NULL AND is_accessible = 1
+               ORDER BY promotion_score DESC""",
+            (threshold,),
+        )
+        entries = []
+        for row in cursor.fetchall():
+            entries.append(self._row_to_staging_entry(row))
+        return entries
+
+    def update_staging(self, entry: "StagingEntry") -> bool:
+        """Update a staging entry.
+
+        Args:
+            entry: StagingEntry with updated values
+
+        Returns:
+            True if updated, False if not found
+        """
+        cursor = self.conn.execute(
+            """UPDATE sources_staging SET
+               title = ?, description = ?, content_type = ?, language = ?,
+               last_verified = ?, is_accessible = ?, http_status = ?,
+               citation_count = ?, project_count = ?, projects_list = ?,
+               first_seen = ?, last_seen = ?, promotion_score = ?,
+               inbox_ids = ?, enriched_at = ?, promoted_at = ?, promoted_to = ?
+               WHERE id = ?""",
+            (
+                entry.title,
+                entry.description,
+                entry.content_type,
+                entry.language,
+                entry.last_verified.isoformat() if entry.last_verified else None,
+                1 if entry.is_accessible else 0,
+                entry.http_status,
+                entry.citation_count,
+                entry.project_count,
+                entry.projects_list,
+                entry.first_seen.isoformat() if entry.first_seen else None,
+                entry.last_seen.isoformat() if entry.last_seen else None,
+                entry.promotion_score,
+                entry.inbox_ids,
+                entry.enriched_at.isoformat() if entry.enriched_at else None,
+                entry.promoted_at.isoformat() if entry.promoted_at else None,
+                entry.promoted_to,
+                entry.id,
+            ),
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def _row_to_staging_entry(self, row) -> "StagingEntry":
+        """Convert database row to StagingEntry."""
+        from rekall.models import StagingEntry
+
+        return StagingEntry(
+            id=row["id"],
+            url=row["url"],
+            domain=row["domain"],
+            title=row["title"],
+            description=row["description"],
+            content_type=row["content_type"],
+            language=row["language"],
+            last_verified=datetime.fromisoformat(row["last_verified"]) if row["last_verified"] else None,
+            is_accessible=bool(row["is_accessible"]),
+            http_status=row["http_status"],
+            citation_count=row["citation_count"] or 1,
+            project_count=row["project_count"] or 1,
+            projects_list=row["projects_list"],
+            first_seen=datetime.fromisoformat(row["first_seen"]) if row["first_seen"] else None,
+            last_seen=datetime.fromisoformat(row["last_seen"]) if row["last_seen"] else None,
+            promotion_score=row["promotion_score"] or 0.0,
+            inbox_ids=row["inbox_ids"],
+            enriched_at=datetime.fromisoformat(row["enriched_at"]) if row["enriched_at"] else None,
+            promoted_at=datetime.fromisoformat(row["promoted_at"]) if row["promoted_at"] else None,
+            promoted_to=row["promoted_to"],
+        )
+
+    # =========================================================================
+    # Connector Imports (CDC Tracking) - Feature 013
+    # =========================================================================
+
+    def get_connector_import(self, connector: str) -> Optional["ConnectorImport"]:
+        """Get import tracking info for a connector.
+
+        Args:
+            connector: Connector name (e.g., 'claude_cli', 'cursor')
+
+        Returns:
+            ConnectorImport or None if not found
+        """
+        from rekall.models import ConnectorImport
+
+        cursor = self.conn.execute(
+            "SELECT * FROM connector_imports WHERE connector = ?", (connector,)
+        )
+        row = cursor.fetchone()
+        if row:
+            return ConnectorImport(
+                connector=row["connector"],
+                last_import=datetime.fromisoformat(row["last_import"]) if row["last_import"] else None,
+                last_file_marker=row["last_file_marker"],
+                entries_imported=row["entries_imported"] or 0,
+                errors_count=row["errors_count"] or 0,
+            )
+        return None
+
+    def upsert_connector_import(self, info: "ConnectorImport") -> None:
+        """Insert or update connector import tracking.
+
+        Args:
+            info: ConnectorImport to upsert
+        """
+        self.conn.execute(
+            """INSERT INTO connector_imports
+               (connector, last_import, last_file_marker, entries_imported, errors_count)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(connector) DO UPDATE SET
+               last_import = excluded.last_import,
+               last_file_marker = excluded.last_file_marker,
+               entries_imported = excluded.entries_imported,
+               errors_count = excluded.errors_count""",
+            (
+                info.connector,
+                info.last_import.isoformat() if info.last_import else None,
+                info.last_file_marker,
+                info.entries_imported,
+                info.errors_count,
+            ),
+        )
+        self.conn.commit()

@@ -329,6 +329,30 @@ DECAY_RATE_HALF_LIVES = {
     "slow": 365,   # 12 months
 }
 
+# Source role types for v9 (Feature 010 - Sources Autonomes)
+SourceRole = Literal["hub", "authority", "unclassified"]
+PromotionStatus = Literal["seed", "promoted", "normal"]
+
+VALID_SOURCE_ROLES = ("hub", "authority", "unclassified")
+VALID_PROMOTION_STATUSES = ("seed", "promoted", "normal")
+
+# Promotion thresholds for automatic source promotion (Feature 010)
+PROMOTION_THRESHOLDS = {
+    "min_usage_count": 3,      # Minimum citations to qualify
+    "min_score": 30.0,         # Minimum personal score
+    "max_days_inactive": 180,  # Maximum days since last use
+}
+
+# Role bonus multipliers for scoring (Feature 010)
+ROLE_BONUS = {
+    "authority": 1.2,   # Official docs get 20% bonus
+    "hub": 1.0,         # Aggregators get no bonus
+    "unclassified": 1.0,  # Default no bonus
+}
+
+# Seed bonus for migrated sources (Feature 010)
+SEED_BONUS = 1.2  # 20% bonus for seed sources
+
 
 @dataclass
 class Source:
@@ -336,6 +360,12 @@ class Source:
 
     Sources track usage patterns and calculate a personal score
     based on frequency, recency, and reliability.
+
+    Feature 010 adds:
+    - is_seed: True if migrated from speckit research files
+    - is_promoted: True if automatically promoted based on usage
+    - role: hub/authority/unclassified (HITS-inspired classification)
+    - citation_quality_factor: PR-Index inspired quality score
     """
 
     id: str = ""
@@ -349,6 +379,13 @@ class Source:
     last_verified: Optional[datetime] = None  # Link rot check
     status: SourceStatus = "active"  # active/inaccessible/archived
     created_at: datetime = field(default_factory=datetime.now)
+    # Feature 010 - Sources Autonomes fields
+    is_seed: bool = False  # Migrated from speckit research files
+    is_promoted: bool = False  # Automatically promoted based on usage
+    promoted_at: Optional[datetime] = None  # Timestamp of promotion
+    role: SourceRole = "unclassified"  # hub/authority/unclassified
+    seed_origin: Optional[str] = None  # Path to speckit file (if seed)
+    citation_quality_factor: float = 0.0  # PR-Index inspired quality (0.0-1.0)
 
     def __post_init__(self):
         """Validate source fields after initialization."""
@@ -371,6 +408,16 @@ class Source:
             )
         if not 0 <= self.personal_score <= 100:
             raise ValueError(f"personal_score must be 0-100, got: {self.personal_score}")
+        # Feature 010 validations
+        if self.role not in VALID_SOURCE_ROLES:
+            raise ValueError(
+                f"invalid role: {self.role}. "
+                f"Valid: {', '.join(VALID_SOURCE_ROLES)}"
+            )
+        if not 0.0 <= self.citation_quality_factor <= 1.0:
+            raise ValueError(
+                f"citation_quality_factor must be 0.0-1.0, got: {self.citation_quality_factor}"
+            )
 
 
 @dataclass
@@ -488,6 +535,50 @@ class StructuredContext:
 
 
 # =============================================================================
+# Saved Filters (Feature 012 - Sources Organisation)
+# =============================================================================
+
+
+@dataclass
+class SavedFilter:
+    """Filtre sauvegardé pour réutiliser des combinaisons de critères.
+
+    Permet de sauvegarder et réappliquer des filtres multi-critères
+    sur les sources documentaires.
+    """
+
+    id: Optional[int] = None
+    name: str = ""
+    filter_json: str = "{}"
+    created_at: datetime = field(default_factory=datetime.now)
+
+    def __post_init__(self):
+        """Valider les champs."""
+        if self.name and not self.name.strip():
+            raise ValueError("name cannot be empty if provided")
+
+    def get_filters(self) -> dict:
+        """Désérialiser les filtres depuis JSON."""
+        import json
+
+        return json.loads(self.filter_json)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "SavedFilter":
+        """Créer depuis un dictionnaire."""
+        return cls(
+            id=data.get("id"),
+            name=data["name"],
+            filter_json=data["filter_json"],
+            created_at=(
+                datetime.fromisoformat(data["created_at"])
+                if data.get("created_at")
+                else datetime.now()
+            ),
+        )
+
+
+# =============================================================================
 # Validation Functions for Sources (Feature 009)
 # =============================================================================
 
@@ -568,3 +659,106 @@ def validate_entry_source(entry_source: EntrySource) -> list[str]:
     # file type: no specific validation (local paths vary)
 
     return errors
+
+
+# =============================================================================
+# Sources Medallion (Feature 013)
+# =============================================================================
+
+# Content types for URL classification
+ContentType = Literal["documentation", "repository", "forum", "blog", "api", "paper", "other"]
+VALID_CONTENT_TYPES = ("documentation", "repository", "forum", "blog", "api", "paper", "other")
+
+# Import source types
+ImportSource = Literal["realtime", "history_import"]
+VALID_IMPORT_SOURCES = ("realtime", "history_import")
+
+
+@dataclass
+class InboxEntry:
+    """URL capturée depuis un CLI IA (Bronze layer).
+
+    Représente une URL brute avec tout le contexte de capture.
+    """
+
+    id: str
+    url: str
+    domain: Optional[str] = None
+    cli_source: str = ""
+    project: Optional[str] = None
+    conversation_id: Optional[str] = None
+    user_query: Optional[str] = None
+    assistant_snippet: Optional[str] = None
+    surrounding_text: Optional[str] = None
+    captured_at: datetime = field(default_factory=datetime.now)
+    import_source: str = "history_import"
+    raw_json: Optional[str] = None
+    is_valid: bool = True
+    validation_error: Optional[str] = None
+    enriched_at: Optional[datetime] = None
+
+    def __post_init__(self):
+        """Valider les champs requis."""
+        if not self.url:
+            raise ValueError("url is required")
+        if not self.cli_source:
+            raise ValueError("cli_source is required")
+
+
+@dataclass
+class StagingEntry:
+    """URL enrichie avec métadonnées (Silver layer).
+
+    Représente une URL dédupliquée et enrichie, prête pour promotion.
+    """
+
+    id: str
+    url: str
+    domain: str
+    title: Optional[str] = None
+    description: Optional[str] = None
+    content_type: Optional[str] = None
+    language: Optional[str] = None
+    last_verified: Optional[datetime] = None
+    is_accessible: bool = True
+    http_status: Optional[int] = None
+    citation_count: int = 1
+    project_count: int = 1
+    projects_list: Optional[str] = None  # JSON array
+    first_seen: Optional[datetime] = None
+    last_seen: Optional[datetime] = None
+    promotion_score: float = 0.0
+    inbox_ids: Optional[str] = None  # JSON array
+    enriched_at: Optional[datetime] = None
+    promoted_at: Optional[datetime] = None
+    promoted_to: Optional[str] = None
+
+    def __post_init__(self):
+        """Valider les champs requis."""
+        if not self.url:
+            raise ValueError("url is required")
+        if not self.domain:
+            raise ValueError("domain is required")
+        if self.content_type and self.content_type not in VALID_CONTENT_TYPES:
+            raise ValueError(
+                f"content_type must be one of {VALID_CONTENT_TYPES}, got {self.content_type}"
+            )
+
+
+@dataclass
+class ConnectorImport:
+    """Tracking des imports par connecteur pour CDC.
+
+    Permet l'import incrémental (Change Data Capture).
+    """
+
+    connector: str
+    last_import: Optional[datetime] = None
+    last_file_marker: Optional[str] = None
+    entries_imported: int = 0
+    errors_count: int = 0
+
+    def __post_init__(self):
+        """Valider les champs requis."""
+        if not self.connector:
+            raise ValueError("connector is required")

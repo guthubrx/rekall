@@ -2678,6 +2678,545 @@ def changelog(
 
 
 # ============================================================================
+# Sources Commands (Feature 010 - Sources Autonomes)
+# ============================================================================
+
+sources_app = typer.Typer(
+    name="sources",
+    help="Manage documentary sources (Feature 010).",
+    rich_markup_mode="rich",
+)
+app.add_typer(sources_app, name="sources")
+
+
+@sources_app.command("migrate")
+def sources_migrate(
+    path: Optional[Path] = typer.Option(
+        None,
+        "--path",
+        "-p",
+        help="Path to research files (default: ~/.speckit/research/)",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        "-n",
+        help="Show what would be imported without making changes",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Re-import sources even if already migrated",
+    ),
+):
+    """Import speckit research files as seed sources.
+
+    Scans markdown files in ~/.speckit/research/ (or custom path) and imports
+    all URLs/domains as seed sources with theme tags.
+
+    Examples:
+        rekall sources migrate --dry-run    # Preview what will be imported
+        rekall sources migrate              # Import sources
+        rekall sources migrate --force      # Re-import even if exists
+    """
+    import json
+
+    from rekall.migration import scan_research_directory
+    from rekall.models import Source
+
+    db = get_db()
+
+    # Determine path
+    search_path = path or (Path.home() / ".speckit" / "research")
+
+    if not search_path.exists():
+        result = {
+            "status": "error",
+            "code": "PATH_NOT_FOUND",
+            "message": f"Path not found: {search_path}",
+        }
+        console.print(json.dumps(result, indent=2))
+        raise typer.Exit(2)
+
+    # Scan and parse files
+    results = scan_research_directory(search_path)
+
+    if not results:
+        result = {
+            "status": "success",
+            "imported": 0,
+            "updated": 0,
+            "skipped": 0,
+            "errors": [],
+            "themes": [],
+            "message": f"No markdown files found in {search_path}",
+        }
+        console.print(json.dumps(result, indent=2))
+        return
+
+    imported = 0
+    updated = 0
+    skipped = 0
+    errors = []
+    themes_found = set()
+
+    for parse_result in results:
+        if parse_result.errors:
+            errors.extend(parse_result.errors)
+            continue
+
+        themes_found.add(parse_result.theme)
+
+        for parsed_source in parse_result.sources:
+            try:
+                # Check if source already exists
+                existing = db.get_source_by_domain(
+                    parsed_source.domain, parsed_source.url_pattern
+                )
+
+                if existing and not force:
+                    # Just add theme if not already
+                    db.add_source_theme(existing.id, parsed_source.theme)
+                    skipped += 1
+                    continue
+
+                if dry_run:
+                    imported += 1
+                    continue
+
+                if existing and force:
+                    # Update existing source as seed
+                    db.update_source_as_seed(existing.id, parsed_source.origin_file)
+                    db.add_source_theme(existing.id, parsed_source.theme)
+                    updated += 1
+                else:
+                    # Create new seed source
+                    # Check known domains for auto-classification
+                    known = db.get_known_domain(parsed_source.domain)
+                    role = known["role"] if known else "unclassified"
+
+                    source = Source(
+                        domain=parsed_source.domain,
+                        url_pattern=parsed_source.url_pattern,
+                        is_seed=True,
+                        seed_origin=parsed_source.origin_file,
+                        role=role,
+                    )
+                    added = db.add_source(source)
+                    db.add_source_theme(added.id, parsed_source.theme)
+                    imported += 1
+
+            except Exception as e:
+                errors.append(f"{parsed_source.domain}: {e}")
+
+    result = {
+        "status": "success" if not errors else "partial",
+        "imported": imported,
+        "updated": updated,
+        "skipped": skipped,
+        "errors": errors,
+        "themes": sorted(themes_found),
+    }
+
+    if dry_run:
+        result["dry_run"] = True
+        result["message"] = "Dry run - no changes made"
+
+    console.print(json.dumps(result, indent=2))
+
+
+@sources_app.command("list-themes")
+def sources_list_themes(
+    min_sources: int = typer.Option(
+        1,
+        "--min-sources",
+        "-m",
+        help="Minimum sources per theme to include",
+    ),
+):
+    """List all themes with source counts.
+
+    Examples:
+        rekall sources list-themes
+        rekall sources list-themes --min-sources 5
+    """
+    import json
+
+    db = get_db()
+
+    rows = db.conn.execute(
+        """
+        SELECT theme, COUNT(*) as count,
+               AVG(s.personal_score) as avg_score
+        FROM source_themes st
+        JOIN sources s ON st.source_id = s.id
+        GROUP BY theme
+        HAVING count >= ?
+        ORDER BY count DESC
+        """,
+        (min_sources,),
+    ).fetchall()
+
+    themes = [
+        {
+            "theme": row["theme"],
+            "count": row["count"],
+            "avg_score": round(row["avg_score"] or 0, 1),
+        }
+        for row in rows
+    ]
+
+    result = {"themes": themes}
+    console.print(json.dumps(result, indent=2))
+
+
+@sources_app.command("stats")
+def sources_stats():
+    """Show global source statistics.
+
+    Examples:
+        rekall sources stats
+    """
+    import json
+
+    db = get_db()
+
+    # Total counts
+    total = db.conn.execute("SELECT COUNT(*) FROM sources").fetchone()[0]
+    seeds = db.conn.execute("SELECT COUNT(*) FROM sources WHERE is_seed = 1").fetchone()[0]
+    promoted = db.conn.execute("SELECT COUNT(*) FROM sources WHERE is_promoted = 1").fetchone()[0]
+
+    # By role
+    role_rows = db.conn.execute(
+        "SELECT role, COUNT(*) as count FROM sources GROUP BY role"
+    ).fetchall()
+    by_role = {row["role"]: row["count"] for row in role_rows}
+
+    # By reliability
+    rel_rows = db.conn.execute(
+        "SELECT reliability, COUNT(*) as count FROM sources GROUP BY reliability"
+    ).fetchall()
+    by_reliability = {row["reliability"]: row["count"] for row in rel_rows}
+
+    # Avg score
+    avg_score = db.conn.execute("SELECT AVG(personal_score) FROM sources").fetchone()[0] or 0
+
+    # Themes count
+    themes_count = db.conn.execute("SELECT COUNT(DISTINCT theme) FROM source_themes").fetchone()[0]
+
+    # Inaccessible
+    inaccessible = db.conn.execute(
+        "SELECT COUNT(*) FROM sources WHERE status = 'inaccessible'"
+    ).fetchone()[0]
+
+    result = {
+        "total_sources": total,
+        "seeds": seeds,
+        "promoted": promoted,
+        "by_role": by_role,
+        "by_reliability": by_reliability,
+        "avg_score": round(avg_score, 1),
+        "themes_count": themes_count,
+        "inaccessible": inaccessible,
+    }
+    console.print(json.dumps(result, indent=2))
+
+
+@sources_app.command("recalculate")
+def sources_recalculate(
+    source_id: Optional[str] = typer.Argument(
+        None,
+        help="Specific source ID to recalculate (default: all sources)",
+    ),
+    update_promotions: bool = typer.Option(
+        True,
+        "--promotions/--no-promotions",
+        help="Update promotion status based on criteria",
+    ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help="Show detailed changes",
+    ),
+):
+    """Recalculate source scores and promotion status.
+
+    Evaluates all sources against promotion criteria:
+    - usage_count >= 3
+    - score >= 30
+    - last_used within 180 days
+
+    Seeds are exempt from demotion.
+
+    Examples:
+        rekall sources recalculate              # All sources
+        rekall sources recalculate --verbose    # Show details
+        rekall sources recalculate src_01HXYZ   # Specific source
+    """
+    import json
+
+    db = get_db()
+
+    if source_id:
+        # Single source recalculation
+        source = db.get_source(source_id)
+        if not source:
+            result = {
+                "status": "error",
+                "code": "SOURCE_NOT_FOUND",
+                "message": f"Source not found: {source_id}",
+            }
+            console.print(json.dumps(result, indent=2))
+            raise typer.Exit(2)
+
+        # Recalculate score
+        db.recalculate_source_score(source_id)
+        source = db.get_source(source_id)  # Refresh
+
+        changes = []
+        if update_promotions:
+            meets_criteria = db.check_promotion_criteria(source)
+            if meets_criteria and not source.is_promoted and not source.is_seed:
+                db.promote_source(source_id)
+                changes.append("promoted")
+            elif not meets_criteria and source.is_promoted and not source.is_seed:
+                db.demote_source(source_id)
+                changes.append("demoted")
+
+        result = {
+            "status": "success",
+            "source_id": source_id,
+            "new_score": source.personal_score,
+            "is_promoted": source.is_promoted,
+            "changes": changes,
+        }
+        console.print(json.dumps(result, indent=2))
+    else:
+        # Batch recalculation
+        stats = db.recalculate_all_promotions()
+
+        result = {
+            "status": "success",
+            "total_evaluated": stats["total"],
+            "promoted": stats["promoted"],
+            "demoted": stats["demoted"],
+            "unchanged": stats["unchanged"],
+            "seeds_protected": stats["seeds_protected"],
+        }
+
+        if verbose and stats.get("changes"):
+            result["changes"] = stats["changes"]
+
+        console.print(json.dumps(result, indent=2))
+
+
+@sources_app.command("classify")
+def sources_classify(
+    source_id: str = typer.Argument(
+        ...,
+        help="Source ID to classify",
+    ),
+    role: str = typer.Argument(
+        ...,
+        help="Role to assign: hub, authority, or unclassified",
+    ),
+):
+    """Manually classify a source as hub or authority.
+
+    Roles affect scoring:
+    - authority: 1.2x score bonus (primary/canonical sources)
+    - hub: 1.0x (aggregators, indexes)
+    - unclassified: 1.0x (default)
+
+    Examples:
+        rekall sources classify src_01HXYZ authority
+        rekall sources classify src_01HXYZ hub
+    """
+    import json
+
+    from rekall.models import VALID_SOURCE_ROLES
+
+    db = get_db()
+
+    # Validate role
+    if role not in VALID_SOURCE_ROLES:
+        result = {
+            "status": "error",
+            "code": "INVALID_ROLE",
+            "message": f"Invalid role: {role}. Must be one of: {', '.join(VALID_SOURCE_ROLES)}",
+        }
+        console.print(json.dumps(result, indent=2))
+        raise typer.Exit(2)
+
+    # Get source
+    source = db.get_source(source_id)
+    if not source:
+        result = {
+            "status": "error",
+            "code": "SOURCE_NOT_FOUND",
+            "message": f"Source not found: {source_id}",
+        }
+        console.print(json.dumps(result, indent=2))
+        raise typer.Exit(2)
+
+    old_role = source.role
+    success = db.classify_source_manual(source_id, role)
+
+    if success:
+        result = {
+            "status": "success",
+            "source_id": source_id,
+            "domain": source.domain,
+            "old_role": old_role,
+            "new_role": role,
+        }
+    else:
+        result = {
+            "status": "error",
+            "code": "CLASSIFICATION_FAILED",
+            "message": "Failed to classify source",
+        }
+
+    console.print(json.dumps(result, indent=2))
+
+
+@sources_app.command("suggest")
+def sources_suggest(
+    theme: str = typer.Option(
+        ...,
+        "--theme",
+        "-t",
+        help="Theme to filter by",
+    ),
+    limit: int = typer.Option(
+        20,
+        "--limit",
+        "-l",
+        help="Maximum number of sources to return",
+    ),
+    include_seeds: bool = typer.Option(
+        True,
+        "--seeds/--no-seeds",
+        help="Include seed sources",
+    ),
+    include_promoted: bool = typer.Option(
+        True,
+        "--promoted/--no-promoted",
+        help="Include promoted sources",
+    ),
+):
+    """Get source suggestions for a theme (JSON API).
+
+    Returns sources sorted by score, with seeds and promoted sources
+    prioritized at equal scores.
+
+    Designed for programmatic use (e.g., Speckit integration).
+
+    Examples:
+        rekall sources suggest --theme security
+        rekall sources suggest --theme ai-agents --limit 10
+        rekall sources suggest --theme web --no-seeds
+    """
+    import json
+
+    db = get_db()
+
+    sources = db.get_sources_by_theme(
+        theme=theme,
+        limit=limit,
+        include_seeds=include_seeds,
+        include_promoted=include_promoted,
+    )
+
+    # Get themes for each source
+    sources_data = []
+    for source in sources:
+        themes = db.get_source_themes(source.id)
+        sources_data.append({
+            "id": source.id,
+            "domain": source.domain,
+            "url_pattern": source.url_pattern,
+            "score": source.personal_score,
+            "reliability": source.reliability,
+            "role": source.role,
+            "is_seed": source.is_seed,
+            "is_promoted": source.is_promoted,
+            "usage_count": source.usage_count,
+            "last_used": source.last_used,
+            "themes": themes,
+            "citation_quality_factor": source.citation_quality_factor,
+        })
+
+    result = {
+        "theme": theme,
+        "count": len(sources_data),
+        "sources": sources_data,
+    }
+    console.print(json.dumps(result, indent=2, default=str))
+
+
+@sources_app.command("add-theme")
+def sources_add_theme(
+    source_id: str = typer.Argument(
+        ...,
+        help="Source ID",
+    ),
+    theme: str = typer.Argument(
+        ...,
+        help="Theme to add (kebab-case)",
+    ),
+):
+    """Add a theme tag to a source.
+
+    Themes help categorize sources for filtering and suggestions.
+
+    Examples:
+        rekall sources add-theme src_01HXYZ security
+        rekall sources add-theme src_01HXYZ ai-agents
+    """
+    import json
+
+    db = get_db()
+
+    # Get source
+    source = db.get_source(source_id)
+    if not source:
+        result = {
+            "status": "error",
+            "code": "SOURCE_NOT_FOUND",
+            "message": f"Source not found: {source_id}",
+        }
+        console.print(json.dumps(result, indent=2))
+        raise typer.Exit(2)
+
+    # Normalize theme
+    theme_normalized = theme.lower().replace("_", "-")
+
+    # Add theme
+    success = db.add_source_theme(source_id, theme_normalized)
+
+    if success:
+        themes = db.get_source_themes(source_id)
+        result = {
+            "status": "success",
+            "source_id": source_id,
+            "domain": source.domain,
+            "theme_added": theme_normalized,
+            "all_themes": themes,
+        }
+    else:
+        result = {
+            "status": "info",
+            "message": f"Theme '{theme_normalized}' already exists for source",
+            "source_id": source_id,
+        }
+
+    console.print(json.dumps(result, indent=2))
+
+
+# ============================================================================
 # MCP Server Command (Smart Embeddings - Phase 6)
 # ============================================================================
 
@@ -2719,6 +3258,1285 @@ def mcp_server():
         raise typer.Exit(1)
     except KeyboardInterrupt:
         console.print("\n[yellow]MCP server stopped.[/yellow]")
+
+
+# ============================================================================
+# Sources Medallion - Inbox Commands (Feature 013)
+# ============================================================================
+
+inbox_app = typer.Typer(
+    help="Manage URL inbox (Bronze layer) for Sources Medallion",
+)
+sources_app.add_typer(inbox_app, name="inbox")
+
+
+@inbox_app.command("import")
+def inbox_import(
+    cli: str = typer.Option(
+        "claude",
+        "--cli",
+        "-c",
+        help="CLI source to import from (claude, cursor)",
+    ),
+    since: str = typer.Option(
+        None,
+        "--since",
+        "-s",
+        help="Only import entries after this file marker (for incremental import)",
+    ),
+    project: str = typer.Option(
+        None,
+        "--project",
+        "-p",
+        help="Filter by project name",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        "-n",
+        help="Show what would be imported without actually importing",
+    ),
+):
+    """Import URLs from AI CLI history into the inbox.
+
+    Extracts URLs from Claude Code, Cursor IDE, or other AI CLI tools
+    and adds them to the Bronze layer inbox for enrichment.
+
+    Examples:
+        rekall sources inbox import
+        rekall sources inbox import --cli claude
+        rekall sources inbox import --cli claude --project my-project
+        rekall sources inbox import --since /path/to/last/file.jsonl
+        rekall sources inbox import --dry-run
+    """
+    import json
+
+    from rekall.connectors import get_connector, list_connectors
+    from rekall.models import InboxEntry, generate_ulid
+
+    db = get_db()
+
+    # Get connector
+    connector = get_connector(cli)
+    if not connector:
+        available = list_connectors()
+        result = {
+            "status": "error",
+            "code": "CONNECTOR_NOT_FOUND",
+            "message": f"Connector '{cli}' not found",
+            "available": available,
+        }
+        console.print(json.dumps(result, indent=2))
+        raise typer.Exit(2)
+
+    if not connector.is_available():
+        result = {
+            "status": "error",
+            "code": "CONNECTOR_NOT_AVAILABLE",
+            "message": f"Connector '{cli}' is not available (no history found)",
+        }
+        console.print(json.dumps(result, indent=2))
+        raise typer.Exit(2)
+
+    # Get last import marker for CDC
+    import_record = db.get_connector_import(cli)
+    effective_since = since or (import_record.last_file_marker if import_record else None)
+
+    # Extract URLs
+    extraction = connector.extract_urls(
+        since_marker=effective_since,
+        project_filter=project,
+    )
+
+    if dry_run:
+        result = {
+            "status": "dry_run",
+            "connector": cli,
+            "urls_found": len(extraction.urls),
+            "files_processed": extraction.files_processed,
+            "errors": extraction.errors[:10] if extraction.errors else [],
+            "sample_urls": [
+                {"url": u.url, "domain": u.domain, "project": u.project}
+                for u in extraction.urls[:10]
+            ],
+        }
+        console.print(json.dumps(result, indent=2, default=str))
+        return
+
+    # Import to inbox
+    imported = 0
+    quarantined = 0
+    for extracted in extraction.urls:
+        is_valid, error = connector.validate_url(extracted.url)
+
+        entry = InboxEntry(
+            id=generate_ulid(),
+            url=extracted.url,
+            domain=extracted.domain,
+            cli_source=cli,
+            project=extracted.project,
+            conversation_id=extracted.conversation_id,
+            user_query=extracted.user_query,
+            assistant_snippet=extracted.assistant_snippet,
+            surrounding_text=extracted.surrounding_text,
+            captured_at=extracted.captured_at,
+            import_source="history_import",
+            raw_json=extracted.raw_json,
+            is_valid=is_valid,
+            validation_error=error,
+        )
+        db.add_inbox_entry(entry)
+
+        if is_valid:
+            imported += 1
+        else:
+            quarantined += 1
+
+    # Update CDC marker
+    if extraction.last_file_marker:
+        from datetime import datetime
+
+        from rekall.models import ConnectorImport
+
+        new_record = ConnectorImport(
+            connector=cli,
+            last_import=datetime.now(),
+            last_file_marker=extraction.last_file_marker,
+            entries_imported=(import_record.entries_imported if import_record else 0) + imported,
+            errors_count=(import_record.errors_count if import_record else 0) + len(extraction.errors),
+        )
+        db.upsert_connector_import(new_record)
+
+    result = {
+        "status": "success",
+        "connector": cli,
+        "imported": imported,
+        "quarantined": quarantined,
+        "files_processed": extraction.files_processed,
+        "errors": extraction.errors[:5] if extraction.errors else [],
+        "last_marker": extraction.last_file_marker,
+    }
+    console.print(json.dumps(result, indent=2, default=str))
+
+
+@inbox_app.command("add")
+def inbox_add(
+    url: str = typer.Argument(..., help="URL to add to the inbox"),
+    cli: str = typer.Option(
+        "claude",
+        "--cli",
+        "-c",
+        help="CLI source identifier",
+    ),
+    project: str = typer.Option(
+        None,
+        "--project",
+        "-p",
+        help="Project name",
+    ),
+    conversation: str = typer.Option(
+        None,
+        "--conversation",
+        help="Conversation ID",
+    ),
+    quiet: bool = typer.Option(
+        False,
+        "--quiet",
+        "-q",
+        help="Suppress output (for use in hooks)",
+    ),
+):
+    """Add a single URL to the inbox.
+
+    Used by hooks for real-time capture or manual addition.
+
+    Examples:
+        rekall sources inbox add https://example.com
+        rekall sources inbox add https://docs.python.org --cli claude --project myapp
+        rekall sources inbox add https://example.com --quiet
+    """
+    import json
+    from datetime import datetime
+    from urllib.parse import urlparse
+
+    from rekall.models import InboxEntry, generate_ulid
+
+    db = get_db()
+
+    # Simple URL validation (quarantine patterns handled by enrichment)
+    def validate_url_simple(u: str) -> tuple[bool, str | None]:
+        if not u or not u.strip():
+            return False, "Empty URL"
+        parsed = urlparse(u)
+        if parsed.scheme.lower() not in ("http", "https"):
+            return False, f"Invalid scheme: {parsed.scheme}"
+        if not parsed.netloc:
+            return False, "Missing host"
+        # Quarantine localhost/private IPs
+        host = parsed.netloc.lower()
+        if any(p in host for p in ("localhost", "127.0.0.1", "0.0.0.0", "192.168.", "10.", "172.16.")):
+            return False, f"Quarantined host: {host}"
+        return True, None
+
+    is_valid, error = validate_url_simple(url)
+    domain = urlparse(url).netloc.lower() if url else ""
+
+    # Create inbox entry
+    entry = InboxEntry(
+        id=generate_ulid(),
+        url=url,
+        domain=domain,
+        cli_source=cli,
+        project=project,
+        conversation_id=conversation,
+        captured_at=datetime.now(),
+        import_source="hook_capture" if cli == "claude" else "manual",
+        is_valid=is_valid,
+        validation_error=error,
+    )
+    db.add_inbox_entry(entry)
+
+    if not quiet:
+        result = {
+            "status": "success",
+            "id": entry.id,
+            "url": url,
+            "domain": domain,
+            "is_valid": is_valid,
+            "validation_error": error,
+        }
+        console.print(json.dumps(result, indent=2))
+
+
+@inbox_app.command("stats")
+def inbox_stats():
+    """Show inbox statistics.
+
+    Displays counts of URLs in the inbox by status and CLI source.
+
+    Examples:
+        rekall sources inbox stats
+    """
+    import json
+
+    db = get_db()
+
+    # Get counts
+    cursor = db.conn.execute(
+        """SELECT
+            COUNT(*) as total,
+            SUM(CASE WHEN is_valid = 1 AND enriched_at IS NULL THEN 1 ELSE 0 END) as pending,
+            SUM(CASE WHEN is_valid = 1 AND enriched_at IS NOT NULL THEN 1 ELSE 0 END) as enriched,
+            SUM(CASE WHEN is_valid = 0 THEN 1 ELSE 0 END) as quarantined
+        FROM sources_inbox"""
+    )
+    row = cursor.fetchone()
+
+    # By CLI source
+    cursor = db.conn.execute(
+        """SELECT cli_source, COUNT(*) as count
+        FROM sources_inbox
+        GROUP BY cli_source
+        ORDER BY count DESC"""
+    )
+    by_cli = [{"cli": r[0], "count": r[1]} for r in cursor.fetchall()]
+
+    # By domain (top 10)
+    cursor = db.conn.execute(
+        """SELECT domain, COUNT(*) as count
+        FROM sources_inbox
+        WHERE is_valid = 1
+        GROUP BY domain
+        ORDER BY count DESC
+        LIMIT 10"""
+    )
+    top_domains = [{"domain": r[0], "count": r[1]} for r in cursor.fetchall()]
+
+    result = {
+        "total": row[0] or 0,
+        "pending_enrichment": row[1] or 0,
+        "enriched": row[2] or 0,
+        "quarantined": row[3] or 0,
+        "by_cli_source": by_cli,
+        "top_domains": top_domains,
+    }
+    console.print(json.dumps(result, indent=2))
+
+
+@inbox_app.command("list")
+def inbox_list(
+    limit: int = typer.Option(20, "--limit", "-l", help="Maximum entries to show"),
+    quarantine: bool = typer.Option(False, "--quarantine", "-q", help="Show quarantined entries"),
+):
+    """List inbox entries.
+
+    Shows URLs captured from AI CLI tools awaiting enrichment.
+
+    Examples:
+        rekall sources inbox list
+        rekall sources inbox list --limit 50
+        rekall sources inbox list --quarantine
+    """
+    import json
+
+    db = get_db()
+
+    if quarantine:
+        entries = db.get_inbox_entries(quarantine_only=True, limit=limit)
+    else:
+        entries = db.get_inbox_entries(valid_only=True, limit=limit)
+
+    result = {
+        "count": len(entries),
+        "showing": "quarantine" if quarantine else "valid",
+        "entries": [
+            {
+                "id": e.id,
+                "url": e.url,
+                "domain": e.domain,
+                "cli_source": e.cli_source,
+                "project": e.project,
+                "captured_at": e.captured_at.isoformat() if e.captured_at else None,
+                "enriched": e.enriched_at is not None,
+                "validation_error": e.validation_error if quarantine else None,
+            }
+            for e in entries
+        ],
+    }
+    console.print(json.dumps(result, indent=2, default=str))
+
+
+@inbox_app.command("clear")
+def inbox_clear(
+    all_entries: bool = typer.Option(False, "--all", "-a", help="Clear all entries"),
+    quarantine_only: bool = typer.Option(False, "--quarantine", "-q", help="Clear only quarantined"),
+    enriched_only: bool = typer.Option(False, "--enriched", "-e", help="Clear only enriched"),
+    force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation"),
+):
+    """Clear inbox entries.
+
+    Removes entries from the inbox. Use with caution.
+
+    Examples:
+        rekall sources inbox clear --quarantine
+        rekall sources inbox clear --enriched
+        rekall sources inbox clear --all --force
+    """
+    import json
+
+    db = get_db()
+
+    # Build delete query
+    if all_entries:
+        where = "1=1"
+        target = "all"
+    elif quarantine_only:
+        where = "is_valid = 0"
+        target = "quarantined"
+    elif enriched_only:
+        where = "enriched_at IS NOT NULL"
+        target = "enriched"
+    else:
+        result = {
+            "status": "error",
+            "code": "NO_TARGET",
+            "message": "Specify --all, --quarantine, or --enriched",
+        }
+        console.print(json.dumps(result, indent=2))
+        raise typer.Exit(2)
+
+    # Count affected
+    cursor = db.conn.execute(f"SELECT COUNT(*) FROM sources_inbox WHERE {where}")
+    count = cursor.fetchone()[0]
+
+    if count == 0:
+        result = {"status": "info", "message": f"No {target} entries to clear"}
+        console.print(json.dumps(result, indent=2))
+        return
+
+    if not force:
+        result = {
+            "status": "confirmation_required",
+            "target": target,
+            "count": count,
+            "message": f"Run with --force to delete {count} {target} entries",
+        }
+        console.print(json.dumps(result, indent=2))
+        return
+
+    # Delete
+    db.conn.execute(f"DELETE FROM sources_inbox WHERE {where}")
+    db.conn.commit()
+
+    result = {
+        "status": "success",
+        "deleted": count,
+        "target": target,
+    }
+    console.print(json.dumps(result, indent=2))
+
+
+@inbox_app.command("browse")
+def inbox_browse(
+    quarantine: bool = typer.Option(False, "--quarantine", "-q", help="Start in quarantine view"),
+):
+    """Browse inbox entries with interactive TUI.
+
+    Opens an interactive table view to browse, manage, and process inbox entries.
+
+    Keyboard shortcuts:
+        i - Import new URLs from CLI history
+        e - Enrich pending URLs (move to staging)
+        v - Toggle quarantine view
+        d - Delete selected entry
+        r - Refresh
+        q/Esc - Exit
+
+    Examples:
+        rekall sources inbox browse
+        rekall sources inbox browse --quarantine
+    """
+    from rekall.autoscan import autoscan_if_needed
+    from rekall.tui import run_inbox_browser
+
+    db = get_db()
+
+    # Auto-scan if interval has passed
+    scan_result = autoscan_if_needed(db)
+    if scan_result and scan_result.scans_performed > 0:
+        console.print(f"[dim]Auto-scan: {scan_result.total_imported} URLs imported[/dim]")
+
+    result = run_inbox_browser(db, show_quarantine=quarantine)
+
+    # Handle actions triggered from TUI
+    if result == "import":
+        # Re-run import
+        inbox_import()
+    elif result == "enrich":
+        # Re-run enrich
+        staging_enrich()
+
+
+# ============================================================================
+# Sources Medallion - Staging Commands (Feature 013)
+# ============================================================================
+
+staging_app = typer.Typer(
+    help="Manage staging area (Silver layer) for Sources Medallion",
+)
+sources_app.add_typer(staging_app, name="staging")
+
+
+@staging_app.command("enrich")
+def staging_enrich(
+    batch: int = typer.Option(
+        50,
+        "--batch",
+        "-b",
+        help="Number of URLs to enrich in this batch",
+    ),
+    timeout: float = typer.Option(
+        10.0,
+        "--timeout",
+        "-t",
+        help="Timeout in seconds for each URL fetch",
+    ),
+):
+    """Enrich inbox URLs with metadata and move to staging.
+
+    Fetches metadata (title, description) from URLs in the inbox
+    and creates/updates staging entries.
+
+    Examples:
+        rekall sources staging enrich
+        rekall sources staging enrich --batch 100
+        rekall sources staging enrich --timeout 5
+    """
+    import asyncio
+    import json
+
+    from rekall.enrichment import enrich_inbox_entries
+
+    db = get_db()
+
+    # Run async enrichment
+    batch_result = asyncio.run(enrich_inbox_entries(db, limit=batch, timeout=timeout))
+
+    result = {
+        "status": "success",
+        "total_processed": batch_result.total_processed,
+        "enriched": batch_result.enriched,
+        "merged": batch_result.merged,
+        "failed": batch_result.failed,
+        "errors": batch_result.errors[:5] if batch_result.errors else [],
+    }
+    console.print(json.dumps(result, indent=2))
+
+
+@staging_app.command("list")
+def staging_list(
+    limit: int = typer.Option(20, "--limit", "-l", help="Maximum entries to show"),
+    promoted: bool = typer.Option(None, "--promoted/--not-promoted", help="Filter by promotion status"),
+    content_type: str = typer.Option(None, "--type", "-t", help="Filter by content type"),
+):
+    """List staging entries.
+
+    Shows enriched URLs with metadata and promotion scores.
+
+    Examples:
+        rekall sources staging list
+        rekall sources staging list --limit 50
+        rekall sources staging list --promoted
+        rekall sources staging list --type documentation
+    """
+    import json
+
+    db = get_db()
+
+    entries = db.get_staging_entries(
+        promoted=promoted,
+        content_type=content_type,
+        limit=limit,
+    )
+
+    result = {
+        "count": len(entries),
+        "entries": [
+            {
+                "id": e.id,
+                "url": e.url,
+                "domain": e.domain,
+                "title": e.title,
+                "content_type": e.content_type,
+                "citation_count": e.citation_count,
+                "project_count": e.project_count,
+                "promotion_score": e.promotion_score,
+                "is_accessible": e.is_accessible,
+                "promoted": e.promoted_at is not None,
+            }
+            for e in entries
+        ],
+    }
+    console.print(json.dumps(result, indent=2, default=str))
+
+
+@staging_app.command("stats")
+def staging_stats():
+    """Show staging statistics.
+
+    Displays counts by content type, promotion status, and accessibility.
+
+    Examples:
+        rekall sources staging stats
+    """
+    import json
+
+    db = get_db()
+
+    # Get counts
+    cursor = db.conn.execute(
+        """SELECT
+            COUNT(*) as total,
+            SUM(CASE WHEN promoted_at IS NOT NULL THEN 1 ELSE 0 END) as promoted,
+            SUM(CASE WHEN is_accessible = 1 THEN 1 ELSE 0 END) as accessible,
+            SUM(CASE WHEN is_accessible = 0 THEN 1 ELSE 0 END) as inaccessible,
+            AVG(promotion_score) as avg_score
+        FROM sources_staging"""
+    )
+    row = cursor.fetchone()
+
+    # By content type
+    cursor = db.conn.execute(
+        """SELECT content_type, COUNT(*) as count
+        FROM sources_staging
+        GROUP BY content_type
+        ORDER BY count DESC"""
+    )
+    by_type = [{"type": r[0] or "unknown", "count": r[1]} for r in cursor.fetchall()]
+
+    # By domain (top 10)
+    cursor = db.conn.execute(
+        """SELECT domain, COUNT(*) as count, SUM(citation_count) as citations
+        FROM sources_staging
+        GROUP BY domain
+        ORDER BY citations DESC
+        LIMIT 10"""
+    )
+    top_domains = [
+        {"domain": r[0], "count": r[1], "citations": r[2]} for r in cursor.fetchall()
+    ]
+
+    # Eligible for promotion (score >= 75)
+    cursor = db.conn.execute(
+        """SELECT COUNT(*) FROM sources_staging
+        WHERE promotion_score >= 75 AND promoted_at IS NULL"""
+    )
+    eligible = cursor.fetchone()[0]
+
+    result = {
+        "total": row[0] or 0,
+        "promoted": row[1] or 0,
+        "accessible": row[2] or 0,
+        "inaccessible": row[3] or 0,
+        "avg_score": round(row[4] or 0, 2),
+        "eligible_for_promotion": eligible,
+        "by_content_type": by_type,
+        "top_domains": top_domains,
+    }
+    console.print(json.dumps(result, indent=2))
+
+
+@staging_app.command("browse")
+def staging_browse(
+    promoted: bool = typer.Option(False, "--promoted", "-p", help="Include promoted entries"),
+):
+    """Browse staging entries with interactive TUI.
+
+    Opens an interactive table view to browse staging entries,
+    view scores, and promote sources.
+
+    Keyboard shortcuts:
+        p - Promote selected entry
+        a - Auto-promote all eligible
+        r - Refresh scores
+        Enter - View details
+        q/Esc - Exit
+
+    Examples:
+        rekall sources staging browse
+        rekall sources staging browse --promoted
+    """
+    from rekall.autoscan import autoscan_if_needed
+    from rekall.tui import run_staging_browser
+
+    db = get_db()
+
+    # Auto-scan if interval has passed
+    scan_result = autoscan_if_needed(db)
+    if scan_result and scan_result.scans_performed > 0:
+        console.print(f"[dim]Auto-scan: {scan_result.total_imported} URLs imported[/dim]")
+
+    run_staging_browser(db, show_promoted=promoted)
+
+
+@staging_app.command("promote")
+def staging_promote(
+    url_or_id: str = typer.Argument(None, help="URL or staging ID to promote"),
+    auto: bool = typer.Option(False, "--auto", "-a", help="Auto-promote all eligible"),
+    dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Preview without promoting"),
+):
+    """Promote staging entries to Gold sources.
+
+    Promotes staging entries that meet the promotion threshold to the
+    sources table (Gold layer).
+
+    Examples:
+        rekall sources staging promote --auto
+        rekall sources staging promote --auto --dry-run
+        rekall sources staging promote https://example.com/page
+    """
+    import json
+
+    from rekall.promotion import auto_promote_eligible, promote_source
+
+    db = get_db()
+
+    if auto:
+        result = auto_promote_eligible(db, dry_run=dry_run)
+        output = {
+            "status": "success",
+            "mode": "auto",
+            "dry_run": dry_run,
+            "total_eligible": result.total_eligible,
+            "promoted": result.promoted,
+            "failed": result.failed,
+            "already_promoted": result.already_promoted,
+        }
+        if result.errors:
+            output["errors"] = result.errors
+        console.print(json.dumps(output, indent=2))
+    elif url_or_id:
+        # Find staging entry
+        staging = db.get_staging_by_url(url_or_id)
+        if not staging:
+            # Try as ID
+            entries = db.get_staging_entries(limit=1000)
+            for e in entries:
+                if e.id == url_or_id:
+                    staging = e
+                    break
+
+        if not staging:
+            console.print(json.dumps({
+                "status": "error",
+                "code": "NOT_FOUND",
+                "message": f"Staging entry not found: {url_or_id}",
+            }, indent=2))
+            raise typer.Exit(1)
+
+        if dry_run:
+            from rekall.promotion import calculate_promotion_score, is_eligible_for_promotion
+            score = calculate_promotion_score(staging)
+            console.print(json.dumps({
+                "status": "preview",
+                "url": staging.url,
+                "score": score,
+                "eligible": is_eligible_for_promotion(staging, score=score),
+            }, indent=2))
+        else:
+            result = promote_source(db, staging)
+            console.print(json.dumps({
+                "status": "success" if result.success else "error",
+                "url": staging.url,
+                "source_id": result.source_id,
+                "error": result.error,
+            }, indent=2))
+    else:
+        console.print(json.dumps({
+            "status": "error",
+            "code": "MISSING_ARG",
+            "message": "Specify --auto or provide URL/ID",
+        }, indent=2))
+        raise typer.Exit(2)
+
+
+@staging_app.command("drop")
+def staging_drop(
+    url_or_id: str = typer.Argument(..., help="URL or staging ID to drop"),
+    force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation"),
+):
+    """Drop a staging entry without promoting.
+
+    Removes a staging entry from the staging table. This is useful for
+    removing unwanted or invalid URLs that shouldn't be promoted.
+
+    Examples:
+        rekall sources staging drop https://example.com/unwanted
+        rekall sources staging drop 01ABCD123456 --force
+    """
+    import json
+
+    db = get_db()
+
+    # Find staging entry
+    staging = db.get_staging_by_url(url_or_id)
+    if not staging:
+        # Try as ID
+        cursor = db.conn.execute(
+            "SELECT * FROM sources_staging WHERE id = ?",
+            (url_or_id,),
+        )
+        row = cursor.fetchone()
+        if row:
+            staging = db._row_to_staging_entry(row)
+
+    if not staging:
+        console.print(json.dumps({
+            "status": "error",
+            "code": "NOT_FOUND",
+            "message": f"Staging entry not found: {url_or_id}",
+        }, indent=2))
+        raise typer.Exit(1)
+
+    # Confirm unless --force
+    if not force:
+        console.print("[yellow]About to drop staging entry:[/yellow]")
+        console.print(f"  URL: {staging.url}")
+        console.print(f"  Title: {staging.title or '(no title)'}")
+        console.print(f"  Citations: {staging.citation_count}")
+        if not typer.confirm("Continue?"):
+            console.print("[dim]Cancelled.[/dim]")
+            raise typer.Exit(0)
+
+    # Delete staging entry
+    try:
+        db.conn.execute("DELETE FROM sources_staging WHERE id = ?", (staging.id,))
+        db.conn.commit()
+        console.print(json.dumps({
+            "status": "success",
+            "dropped_id": staging.id,
+            "dropped_url": staging.url,
+        }, indent=2))
+    except Exception as e:
+        console.print(json.dumps({
+            "status": "error",
+            "code": "DELETE_FAILED",
+            "message": str(e),
+        }, indent=2))
+        raise typer.Exit(1)
+
+
+@sources_app.command("demote")
+def sources_demote(
+    source_id: str = typer.Argument(..., help="Source ID to demote"),
+    force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation"),
+):
+    """Demote a promoted source back to staging only.
+
+    Removes the source from the Gold layer and resets the staging entry's
+    promotion status. Only sources that were promoted (is_promoted=True)
+    can be demoted.
+
+    Examples:
+        rekall sources demote 01ABCD123456
+        rekall sources demote 01ABCD123456 --force
+    """
+    import json
+
+    from rekall.promotion import demote_source
+
+    db = get_db()
+
+    # Find source first to show info
+    source = db.get_source(source_id)
+    if not source:
+        console.print(json.dumps({
+            "status": "error",
+            "code": "NOT_FOUND",
+            "message": f"Source not found: {source_id}",
+        }, indent=2))
+        raise typer.Exit(1)
+
+    # Confirm unless --force
+    if not force:
+        console.print("[yellow]About to demote source:[/yellow]")
+        console.print(f"  ID: {source.id}")
+        console.print(f"  Domain: {source.domain}")
+        console.print(f"  URL: {source.url_pattern}")
+        console.print(f"  Promoted: {source.is_promoted}")
+        if not typer.confirm("Continue?"):
+            console.print("[dim]Cancelled.[/dim]")
+            raise typer.Exit(0)
+
+    result = demote_source(db, source_id)
+
+    if result.success:
+        console.print(json.dumps({
+            "status": "success",
+            "demoted_id": result.source_id,
+            "staging_id": result.staging_id,
+        }, indent=2))
+    else:
+        console.print(json.dumps({
+            "status": "error",
+            "code": "DEMOTE_FAILED",
+            "message": result.error,
+        }, indent=2))
+        raise typer.Exit(1)
+
+
+@sources_app.command("promotion-config")
+def sources_promotion_config(
+    show: bool = typer.Option(True, "--show/--no-show", help="Show current configuration"),
+    threshold: Optional[float] = typer.Option(None, "--threshold", "-t", help="Set promotion threshold (0-100)"),
+    citation_weight: Optional[float] = typer.Option(None, "--citation-weight", "-c", help="Set citation weight (0-1)"),
+    project_weight: Optional[float] = typer.Option(None, "--project-weight", "-p", help="Set project weight (0-1)"),
+    recency_weight: Optional[float] = typer.Option(None, "--recency-weight", "-r", help="Set recency weight (0-1)"),
+    half_life: Optional[float] = typer.Option(None, "--half-life", "-h", help="Set recency half-life in days"),
+    reset: bool = typer.Option(False, "--reset", help="Reset to default values"),
+):
+    """View or modify promotion scoring configuration.
+
+    The promotion score determines when staging entries are auto-promoted
+    to Gold sources. Score is calculated as:
+
+        score = citation_weight * citations + project_weight * projects + recency_weight * recency
+
+    Where each component is normalized to 0-100 and weights should sum to ~1.0.
+
+    Examples:
+        rekall sources promotion-config                    # Show current config
+        rekall sources promotion-config --threshold 60     # Lower threshold
+        rekall sources promotion-config --citation-weight 0.5 --project-weight 0.3 --recency-weight 0.2
+        rekall sources promotion-config --reset            # Reset to defaults
+    """
+    import json
+
+    from rekall.config import get_promotion_config, reset_config, set_promotion_config
+
+    if reset:
+        # Reset by removing promotion section and reloading
+        reset_config()
+        config = get_promotion_config()
+        console.print(json.dumps({
+            "status": "success",
+            "message": "Reset to default values",
+            "config": {
+                "threshold": config.promotion_threshold,
+                "near_threshold_pct": config.near_threshold_pct,
+                "citation_weight": config.citation_weight,
+                "project_weight": config.project_weight,
+                "recency_weight": config.recency_weight,
+                "recency_half_life_days": config.recency_half_life_days,
+                "max_citations": config.max_citations,
+                "max_projects": config.max_projects,
+            }
+        }, indent=2))
+        return
+
+    # Apply any updates
+    updates_made = False
+    if any([threshold, citation_weight, project_weight, recency_weight, half_life]):
+        # Validate weights sum
+        current = get_promotion_config()
+        new_cw = citation_weight if citation_weight is not None else current.citation_weight
+        new_pw = project_weight if project_weight is not None else current.project_weight
+        new_rw = recency_weight if recency_weight is not None else current.recency_weight
+        weight_sum = new_cw + new_pw + new_rw
+
+        if abs(weight_sum - 1.0) > 0.1:
+            console.print(f"[yellow]Warning: weights sum to {weight_sum:.2f} (should be ~1.0)[/yellow]")
+
+        success = set_promotion_config(
+            threshold=threshold,
+            citation_weight=citation_weight,
+            project_weight=project_weight,
+            recency_weight=recency_weight,
+            recency_half_life_days=half_life,
+        )
+        updates_made = success
+
+    # Show current config
+    if show:
+        config = get_promotion_config()
+        output = {
+            "threshold": config.promotion_threshold,
+            "near_threshold_pct": config.near_threshold_pct,
+            "weights": {
+                "citation": config.citation_weight,
+                "project": config.project_weight,
+                "recency": config.recency_weight,
+            },
+            "recency_half_life_days": config.recency_half_life_days,
+            "caps": {
+                "max_citations": config.max_citations,
+                "max_projects": config.max_projects,
+            },
+        }
+        if updates_made:
+            output["status"] = "updated"
+        console.print(json.dumps(output, indent=2))
+
+
+@sources_app.command("scan")
+def sources_scan(
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Force scan even if interval hasn't passed",
+    ),
+    connector: str = typer.Option(
+        None,
+        "--connector",
+        "-c",
+        help="Scan specific connector only (default: all configured)",
+    ),
+):
+    """Scan connectors for new URLs.
+
+    Performs incremental import from configured connectors (Cursor, etc.).
+    Claude URLs are captured in real-time via hook, but other CLIs require
+    periodic scanning.
+
+    By default, only scans if the configured interval has passed since last scan.
+    Use --force to scan immediately regardless of interval.
+
+    Examples:
+        rekall sources scan              # Scan if interval passed
+        rekall sources scan --force      # Force scan now
+        rekall sources scan -c cursor    # Scan only Cursor
+    """
+    import json
+
+    from rekall.autoscan import autoscan
+
+    db = get_db()
+
+    connectors = [connector] if connector else None
+    result = autoscan(db, connectors=connectors, force=force)
+
+    output = {
+        "status": "success",
+        "scans_performed": result.scans_performed,
+        "scans_skipped": result.scans_skipped,
+        "total_imported": result.total_imported,
+        "total_quarantined": result.total_quarantined,
+        "results": [
+            {
+                "connector": r.connector,
+                "success": r.success,
+                "imported": r.imported,
+                "quarantined": r.quarantined,
+                "skipped": r.skipped,
+                "error": r.error,
+            }
+            for r in result.results
+        ],
+        "errors": result.errors,
+    }
+    console.print(json.dumps(output, indent=2))
+
+
+@sources_app.command("autoscan-config")
+def sources_autoscan_config(
+    show: bool = typer.Option(True, "--show/--no-show", help="Show current configuration"),
+    enabled: Optional[bool] = typer.Option(None, "--enabled/--disabled", help="Enable/disable auto-scan"),
+    interval: Optional[float] = typer.Option(None, "--interval", "-i", help="Set scan interval in hours"),
+    connectors: Optional[str] = typer.Option(None, "--connectors", "-c", help="Set connectors (comma-separated)"),
+):
+    """View or modify auto-scan configuration.
+
+    Auto-scan periodically imports URLs from non-Claude connectors (Cursor, etc.).
+    Claude URLs are captured in real-time via PostToolUse hook.
+
+    Examples:
+        rekall sources autoscan-config                    # Show current config
+        rekall sources autoscan-config --enabled          # Enable auto-scan
+        rekall sources autoscan-config --disabled         # Disable auto-scan
+        rekall sources autoscan-config --interval 2       # Set to 2 hours
+        rekall sources autoscan-config -c cursor,windsurf # Set connectors
+    """
+    import json
+
+    from rekall.config import get_autoscan_config, set_autoscan_config
+
+    # Apply any updates
+    updates_made = False
+    if enabled is not None or interval is not None or connectors is not None:
+        connector_list = None
+        if connectors is not None:
+            connector_list = [c.strip() for c in connectors.split(",") if c.strip()]
+
+        success = set_autoscan_config(
+            enabled=enabled,
+            interval_hours=interval,
+            connectors=connector_list,
+        )
+        updates_made = success
+
+    # Show current config
+    if show:
+        config = get_autoscan_config()
+        output = {
+            "enabled": config.enabled,
+            "interval_hours": config.interval_hours,
+            "connectors": config.connectors,
+        }
+        if updates_made:
+            output["status"] = "updated"
+        console.print(json.dumps(output, indent=2))
+
+
+@sources_app.command("setup-hook")
+def sources_setup_hook(
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Overwrite existing hook script",
+    ),
+):
+    """Install Claude Code hook for real-time URL capture.
+
+    Copies the hook script to ~/.claude/hooks/ and configures
+    ~/.claude/settings.json to activate it.
+
+    The hook captures WebFetch URLs automatically when Claude Code
+    browses the web, adding them directly to the Sources inbox.
+
+    Examples:
+        rekall sources setup-hook          # Install hook
+        rekall sources setup-hook --force  # Reinstall/update hook
+    """
+    import json
+    import shutil
+    from importlib.resources import files
+    from pathlib import Path
+
+    # Paths
+    hook_dest = Path.home() / ".claude" / "hooks" / "rekall-webfetch.sh"
+    settings_path = Path.home() / ".claude" / "settings.json"
+
+    # Get source hook from package
+    try:
+        hook_source = files("rekall.data.hooks").joinpath("rekall-webfetch.sh")
+    except Exception:
+        # Fallback for development
+        hook_source = Path(__file__).parent / "data" / "hooks" / "rekall-webfetch.sh"
+
+    # Step 1: Copy hook script
+    hook_dest.parent.mkdir(parents=True, exist_ok=True)
+
+    if hook_dest.exists() and not force:
+        console.print(f"[yellow]Hook script already exists: {hook_dest}[/yellow]")
+        console.print("[dim]Use --force to overwrite[/dim]")
+    else:
+        try:
+            # Read from package resource
+            if hasattr(hook_source, "read_text"):
+                content = hook_source.read_text()
+            else:
+                content = Path(hook_source).read_text()
+            hook_dest.write_text(content)
+            hook_dest.chmod(0o755)  # Make executable
+            console.print(f"[green]✓ Hook script installed: {hook_dest}[/green]")
+        except Exception as e:
+            console.print(f"[red]Error copying hook script: {e}[/red]")
+            raise typer.Exit(1)
+
+    # Step 2: Configure settings.json
+    settings = {}
+    if settings_path.exists():
+        try:
+            settings = json.loads(settings_path.read_text())
+        except json.JSONDecodeError:
+            settings = {}
+
+    # Check if hook already configured
+    hooks = settings.get("hooks", {})
+    post_tool_use = hooks.get("PostToolUse", [])
+
+    hook_already_exists = any(
+        h.get("matcher") == "WebFetch" and
+        any("rekall-webfetch" in hh.get("command", "") for hh in h.get("hooks", []))
+        for h in post_tool_use
+    )
+
+    if hook_already_exists and not force:
+        console.print("[yellow]Hook already configured in settings.json[/yellow]")
+    else:
+        # Remove old rekall hook entries if forcing
+        if force:
+            post_tool_use = [
+                h for h in post_tool_use
+                if not (h.get("matcher") == "WebFetch" and
+                        any("rekall-webfetch" in hh.get("command", "") for hh in h.get("hooks", [])))
+            ]
+
+        # Add new hook configuration
+        new_hook = {
+            "matcher": "WebFetch",
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": str(hook_dest)
+                }
+            ]
+        }
+        post_tool_use.append(new_hook)
+        hooks["PostToolUse"] = post_tool_use
+        settings["hooks"] = hooks
+
+        # Write settings
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        settings_path.write_text(json.dumps(settings, indent=2))
+        console.print(f"[green]✓ Hook configured in: {settings_path}[/green]")
+
+    console.print("\n[bold]Claude Code hook installed![/bold]")
+    console.print("[dim]WebFetch URLs will now be captured automatically.[/dim]")
+
+
+@sources_app.command("verify")
+def sources_verify(
+    limit: int = typer.Option(100, "--limit", "-l", help="Max sources to verify"),
+    force: bool = typer.Option(False, "--force", "-f", help="Re-check all sources (ignore last check date)"),
+    domain: str = typer.Option(None, "--domain", "-d", help="Only verify sources from this domain"),
+):
+    """Verify source URLs for link rot.
+
+    Checks if source URLs are still accessible and updates their status.
+    By default, only checks sources not verified in the last 24 hours.
+
+    Examples:
+        rekall sources verify              # Verify up to 100 sources
+        rekall sources verify --limit 500  # Verify more sources
+        rekall sources verify --force      # Re-check all sources
+        rekall sources verify -d github.com  # Only verify github.com
+    """
+    import json
+
+    from rekall.link_rot import verify_sources
+
+    db = get_db()
+
+    # Progress display
+    def show_progress(current: int, total: int, domain_name: str) -> None:
+        console.print(f"[dim]Checking {current}/{total}: {domain_name}[/dim]", end="\r")
+
+    days_since = 0 if force else 1
+    results = verify_sources(db, limit=limit, on_progress=show_progress, days_since_check=days_since)
+
+    console.print()  # Clear progress line
+    output = {
+        "status": "success",
+        "verified": results["verified"],
+        "accessible": results["accessible"],
+        "inaccessible": results["inaccessible"],
+        "errors": results["errors"][:10] if results["errors"] else [],
+    }
+    console.print(json.dumps(output, indent=2))
+
+
+@app.command("consolidation")
+def consolidation_cmd(
+    analyze: bool = typer.Option(False, "--analyze", "-a", help="Find consolidation opportunities"),
+    min_similarity: float = typer.Option(0.75, "--min-similarity", "-s", help="Minimum similarity threshold"),
+    entry_type: str = typer.Option(None, "--type", "-t", help="Filter by entry type"),
+    limit: int = typer.Option(50, "--limit", "-l", help="Max clusters to analyze"),
+):
+    """Find and manage consolidation opportunities.
+
+    Identifies similar entries that could be merged into generalized knowledge.
+    Uses semantic similarity to find clusters of related entries.
+
+    Examples:
+        rekall consolidation --analyze              # Find similar entries
+        rekall consolidation -a --type bug          # Only analyze bugs
+        rekall consolidation -a -s 0.8              # Higher similarity threshold
+    """
+    import json
+
+    from rekall.consolidation import find_consolidation_opportunities
+
+    if not analyze:
+        console.print("[yellow]Use --analyze to find consolidation opportunities[/yellow]")
+        console.print("\nExamples:")
+        console.print("  rekall consolidation --analyze")
+        console.print("  rekall consolidation -a --type bug")
+        return
+
+    db = get_db()
+
+    # Find opportunities
+    opportunities = find_consolidation_opportunities(
+        db,
+        min_similarity=min_similarity,
+        entry_type=entry_type,
+        limit=limit,
+    )
+
+    if not opportunities:
+        console.print("[green]No consolidation opportunities found[/green]")
+        return
+
+    # Format output
+    output = {
+        "status": "success",
+        "clusters_found": len(opportunities),
+        "clusters": [
+            {
+                "size": len(cluster["entries"]),
+                "avg_similarity": round(cluster.get("avg_similarity", 0), 3),
+                "entries": [
+                    {"id": e.id[:12], "title": e.title[:50], "type": e.entry_type}
+                    for e in cluster["entries"][:5]
+                ],
+            }
+            for cluster in opportunities[:10]
+        ],
+    }
+    console.print(json.dumps(output, indent=2, default=str))
 
 
 if __name__ == "__main__":

@@ -127,12 +127,19 @@ class LinkRotChecker:
         return self.check_url_accessibility(url)
 
 
-def verify_sources(db: "Database", limit: int = 100) -> dict:
+def verify_sources(
+    db: "Database",
+    limit: int = 100,
+    on_progress: callable | None = None,
+    days_since_check: int = 1,
+) -> dict:
     """Verify accessibility of sources and update their status.
 
     Args:
         db: Database instance
         limit: Maximum sources to verify in one run
+        on_progress: Optional callback(current, total, domain) for progress updates
+        days_since_check: Minimum days since last check (0 = force re-check all)
 
     Returns:
         Dictionary with verification results
@@ -140,7 +147,8 @@ def verify_sources(db: "Database", limit: int = 100) -> dict:
     checker = LinkRotChecker()
 
     # Get sources to verify
-    sources = db.get_sources_to_verify(limit=limit)
+    sources = db.get_sources_to_verify(days_since_check=days_since_check, limit=limit)
+    total = len(sources)
 
     results = {
         "verified": 0,
@@ -149,10 +157,16 @@ def verify_sources(db: "Database", limit: int = 100) -> dict:
         "errors": [],
     }
 
-    for source in sources:
+    for i, source in enumerate(sources):
         # Only check URL-based sources
         if not source.domain:
+            if on_progress:
+                on_progress(i + 1, total, "(skipped)")
             continue
+
+        # Progress callback before check
+        if on_progress:
+            on_progress(i + 1, total, source.domain)
 
         is_accessible, message = checker.check_source(
             source.url_pattern or "",

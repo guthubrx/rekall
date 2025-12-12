@@ -1562,6 +1562,357 @@ class BrowseApp(App):
         return pattern.sub(replacer, text)
 
 
+class SourcesBrowseApp(App):
+    """Textual app for browsing sources with DataTable and detail panel."""
+
+    CSS = """
+    Screen {
+        background: $surface;
+    }
+
+    #left-notify {
+        dock: bottom;
+        width: auto;
+        max-width: 60;
+        height: auto;
+        padding: 1 2;
+        margin: 1 2;
+        background: #1e2a4a;
+        border: thick #4367CD;
+        color: #93B5F7;
+        text-style: bold;
+        display: none;
+        layer: notification;
+    }
+
+    #left-notify.visible {
+        display: block;
+    }
+
+    #browse-container {
+        height: 100%;
+    }
+
+    #section-title {
+        padding: 0 2;
+        margin-bottom: 1;
+    }
+
+    #sources-table {
+        height: 1fr;
+        min-height: 8;
+        border: solid $primary;
+        margin: 0 1;
+    }
+
+    DataTable {
+        height: 100%;
+    }
+
+    DataTable > .datatable--cursor {
+        background: $primary 40%;
+    }
+
+    DataTable:focus > .datatable--cursor {
+        background: $primary 60%;
+    }
+
+    #detail-panel {
+        height: 1fr;
+        min-height: 10;
+        border: solid $secondary;
+        margin: 0 1 1 1;
+        padding: 1 2;
+        background: $surface-darken-1;
+    }
+
+    #detail-title {
+        text-style: bold;
+        color: $text;
+    }
+
+    #detail-meta {
+        color: $text-muted;
+        margin-top: 1;
+    }
+
+    #detail-content {
+        color: $text;
+        margin-top: 1;
+        height: auto;
+        overflow-y: auto;
+    }
+
+    Footer {
+        background: $surface-darken-1;
+    }
+    """ + BANNER_CSS
+
+    BINDINGS = [
+        Binding("escape", "quit", "Back", show=True),
+        Binding("q", "quit", "Quit", show=True),
+        Binding("enter", "select_source", "View", show=True),
+        Binding("e", "edit_source", "Edit", show=True),
+        Binding("d", "delete_source", "Delete", show=True),
+        Binding("t", "edit_tags", "Tags", show=True),
+        Binding("b", "bulk_mode", "Bulk", show=True),
+        Binding("x", "demote_source", "Demote", show=True),
+    ]
+
+    def __init__(self, sources: list, db, title: str = None):
+        super().__init__()
+        self.sources = sources
+        self.db = db
+        self.title = title or t("sources.manage")
+        self.selected_source = sources[0] if sources else None
+        self.result_action = None  # ("view"|"edit"|"delete"|"tags"|"bulk"|"demote", source)
+        self.source_tags: dict[str, list[str]] = {}  # Cache tags per source
+
+    def compose(self) -> ComposeResult:
+        yield create_banner_container()
+        yield Static(f"[dim]{self.title} ({len(self.sources)} sources)[/dim]", id="section-title")
+        yield Container(
+            Container(
+                DataTable(id="sources-table"),
+            ),
+            VerticalScroll(
+                Static("", id="detail-title"),
+                Static("", id="detail-meta"),
+                Static("", id="detail-content"),
+                id="detail-panel",
+            ),
+            Footer(),
+            id="browse-container",
+        )
+        yield Static("", id="left-notify")
+
+    def show_left_notify(self, message: str, timeout: float = 3.0) -> None:
+        """Show a notification on the left side."""
+        notify_widget = self.query_one("#left-notify", Static)
+        notify_widget.update(message)
+        notify_widget.add_class("visible")
+        self.set_timer(timeout, lambda: notify_widget.remove_class("visible"))
+
+    def on_mount(self) -> None:
+        """Populate the DataTable with sources."""
+        table = self.query_one("#sources-table", DataTable)
+        table.cursor_type = "row"
+        table.zebra_stripes = True
+
+        # Add columns
+        table.add_column(t("source.domain"), width=30, key="domain")
+        table.add_column(t("source.score"), width=8, key="score")
+        table.add_column(t("source.status"), width=12, key="status")
+        table.add_column(t("source.role"), width=14, key="role")
+        table.add_column(t("source.reliability"), width=5, key="reliability")
+        table.add_column(t("source.usage_count"), width=6, key="usages")
+        table.add_column(t("source.last_used"), width=12, key="last_used")
+        table.add_column(t("tags.label"), width=25, key="tags")
+
+        # Load tags for all sources
+        for source in self.sources:
+            self.source_tags[source.id] = self.db.get_source_themes(source.id)
+
+        # Add rows
+        self._populate_table()
+
+        # Update detail panel for first source
+        if self.sources:
+            self._update_detail_panel(self.sources[0])
+
+    def _populate_table(self) -> None:
+        """Populate table rows with current sources."""
+        table = self.query_one("#sources-table", DataTable)
+
+        for i, source in enumerate(self.sources):
+            # Format score with color indicator
+            score = source.personal_score
+            if score >= 70:
+                score_str = f"[green]{score:.0f}[/green]"
+            elif score >= 40:
+                score_str = f"[yellow]{score:.0f}[/yellow]"
+            else:
+                score_str = f"[red]{score:.0f}[/red]"
+
+            # Format status with icon
+            status_icons = {
+                "active": "✓",
+                "inaccessible": "⚠️",
+                "archived": "📦",
+            }
+            status_icon = status_icons.get(source.status, "?")
+            status_str = f"{status_icon} {source.status}"
+
+            # Format role with icon
+            role_icons = {
+                "hub": "🔗",
+                "authority": "⭐",
+                "unclassified": "·",
+            }
+            role_icon = role_icons.get(source.role, "·")
+            role_str = f"{role_icon} {source.role}"
+
+            # Format last used
+            if source.last_used:
+                last_used_str = source.last_used.strftime("%Y-%m-%d")
+            else:
+                last_used_str = "—"
+
+            # Format tags (max 3 displayed)
+            tags = self.source_tags.get(source.id, [])
+            if tags:
+                if len(tags) > 3:
+                    tags_str = ", ".join(tags[:3]) + f" +{len(tags) - 3}"
+                else:
+                    tags_str = ", ".join(tags)
+            else:
+                tags_str = "[dim]—[/dim]"
+
+            table.add_row(
+                source.domain,
+                Text.from_markup(score_str),
+                Text.from_markup(status_str),
+                Text.from_markup(role_str),
+                source.reliability,
+                str(source.usage_count),
+                last_used_str,
+                Text.from_markup(tags_str),
+                key=str(i),
+            )
+
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        """Update detail panel when row selection changes."""
+        if event.row_key is not None:
+            try:
+                idx = int(event.row_key.value)
+                if 0 <= idx < len(self.sources):
+                    self.selected_source = self.sources[idx]
+                    self._update_detail_panel(self.selected_source)
+            except (ValueError, TypeError):
+                pass
+
+    def _update_detail_panel(self, source) -> None:
+        """Update the detail panel with source information."""
+        title_widget = self.query_one("#detail-title", Static)
+        meta_widget = self.query_one("#detail-meta", Static)
+        content_widget = self.query_one("#detail-content", Static)
+
+        title_widget.update(f"[bold cyan]{source.domain}[/bold cyan]")
+
+        # Get backlinks count
+        backlink_count = self.db.count_source_backlinks(source.id)
+
+        # Get tags
+        tags = self.source_tags.get(source.id, [])
+        tags_str = ", ".join(tags) if tags else f"[dim]{t('tags.no_tags')}[/dim]"
+
+        # Format dates
+        created_str = source.created_at.strftime("%Y-%m-%d %H:%M")
+        last_used_str = source.last_used.strftime("%Y-%m-%d %H:%M") if source.last_used else "—"
+        last_verified_str = source.last_verified.strftime("%Y-%m-%d") if source.last_verified else "—"
+
+        meta_lines = [
+            f"[dim]ID:[/dim] {source.id}",
+            f"[dim]{t('source.status')}:[/dim] {source.status}  "
+            f"[dim]{t('source.role')}:[/dim] {source.role}  "
+            f"[dim]{t('source.reliability')}:[/dim] {source.reliability}",
+            f"[dim]{t('source.score')}:[/dim] {source.personal_score:.1f}/100  "
+            f"[dim]{t('source.usage_count')}:[/dim] {source.usage_count}  "
+            f"[dim]Backlinks:[/dim] {backlink_count}",
+            f"[dim]{t('browse.created')}:[/dim] {created_str}  "
+            f"[dim]{t('source.last_used')}:[/dim] {last_used_str}",
+            f"[dim]Vérif.:[/dim] {last_verified_str}  "
+            f"[dim]Decay:[/dim] {source.decay_rate}",
+            f"[dim]{t('tags.label')}:[/dim] {tags_str}",
+        ]
+
+        # Add URL pattern if exists
+        if source.url_pattern:
+            meta_lines.append(f"[dim]URL:[/dim] {source.url_pattern}")
+
+        # Add seed/promoted info
+        if source.is_seed:
+            meta_lines.append(f"[dim]Seed:[/dim] ✓ {source.seed_origin or ''}")
+        if source.is_promoted:
+            promoted_str = source.promoted_at.strftime("%Y-%m-%d") if source.promoted_at else "?"
+            meta_lines.append(f"[dim]Promoted:[/dim] ✓ ({promoted_str})")
+
+        meta_widget.update("\n".join(meta_lines))
+
+        # Content area - show citation quality
+        content_lines = []
+        if source.citation_quality_factor > 0:
+            cqf = source.citation_quality_factor
+            if cqf >= 0.7:
+                cqf_color = "green"
+            elif cqf >= 0.4:
+                cqf_color = "yellow"
+            else:
+                cqf_color = "red"
+            content_lines.append(f"[dim]Citation Quality:[/dim] [{cqf_color}]{cqf:.2f}[/{cqf_color}]")
+
+        content_widget.update("\n".join(content_lines) if content_lines else "")
+
+    def action_quit(self) -> None:
+        """Quit the app."""
+        self.exit()
+
+    def action_select_source(self) -> None:
+        """Select source for viewing."""
+        if self.selected_source:
+            self.result_action = ("view", self.selected_source)
+            self.exit()
+
+    def action_edit_source(self) -> None:
+        """Select source for editing."""
+        if self.selected_source:
+            self.result_action = ("edit", self.selected_source)
+            self.exit()
+
+    def action_delete_source(self) -> None:
+        """Select source for deletion."""
+        if self.selected_source:
+            self.result_action = ("delete", self.selected_source)
+            self.exit()
+
+    def action_edit_tags(self) -> None:
+        """Edit tags for selected source."""
+        if self.selected_source:
+            self.result_action = ("tags", self.selected_source)
+            self.exit()
+
+    def action_bulk_mode(self) -> None:
+        """Enter bulk selection mode."""
+        self.result_action = ("bulk", None)
+        self.exit()
+
+    def action_demote_source(self) -> None:
+        """Demote selected source back to staging only."""
+        if not self.selected_source:
+            return
+
+        # Check if source is promoted
+        if not self.selected_source.is_promoted:
+            self.show_left_notify("[yellow]Source is not promoted[/yellow]")
+            return
+
+        from rekall.promotion import demote_source
+
+        result = demote_source(self.db, self.selected_source.id)
+        if result.success:
+            self.show_left_notify(t("promotion.demote.success"))
+            # Remove from list and refresh table
+            self.sources = [s for s in self.sources if s.id != self.selected_source.id]
+            table = self.query_one("#sources-table", DataTable)
+            table.clear()
+            self._populate_table()
+            if self.sources:
+                self.selected_source = self.sources[0]
+                self._update_detail_panel(self.selected_source)
+        else:
+            self.show_left_notify(f"[red]{result.error}[/red]")
+
+
 class ResearchApp(App):
     """Textual app for browsing research files with DataTable and detail panel."""
 
@@ -3540,6 +3891,34 @@ def action_sources():
         menu_options.append(f"  {t('dashboard.avg_score')}: {stats.get('avg_score', 0):.1f}")
         actions.append(None)
 
+        # ─── SEEDS SOURCES (Feature 010) ───
+        seeds = db.get_seed_sources(limit=3)
+        if seeds:
+            menu_options.append("")
+            actions.append(None)
+            menu_options.append(f"─── {t('dashboard.seeds').upper()} ───")
+            actions.append(None)
+
+            for source in seeds:
+                role_icon = _role_icon(source.role)
+                origin = source.seed_origin.split("/")[-1][:20] if source.seed_origin else ""
+                menu_options.append(f"  🌱 {role_icon} {source.domain} [dim]({origin})[/dim]")
+                actions.append(("view_source", source))
+
+        # ─── PROMOTED SOURCES (Feature 010) ───
+        promoted = db.get_promoted_sources(limit=3)
+        if promoted:
+            menu_options.append("")
+            actions.append(None)
+            menu_options.append(f"─── {t('dashboard.promoted').upper()} ───")
+            actions.append(None)
+
+            for source in promoted:
+                role_icon = _role_icon(source.role)
+                promoted_at = source.promoted_at.strftime("%Y-%m-%d") if source.promoted_at else ""
+                menu_options.append(f"  ⭐ {role_icon} {source.domain} [dim]({promoted_at})[/dim]")
+                actions.append(("view_source", source))
+
         # ─── TOP SOURCES ───
         menu_options.append("")
         actions.append(None)
@@ -3550,8 +3929,9 @@ def action_sources():
         top_sources = db.get_top_sources(limit=5)
         if top_sources:
             for source in top_sources:
+                role_icon = _role_icon(source.role)
                 score_bar = _score_bar(source.personal_score)
-                menu_options.append(f"  {score_bar} {source.domain}")
+                menu_options.append(f"  {score_bar} {role_icon} {source.domain}")
                 actions.append(("view_source", source))
         else:
             menu_options.append(f"  [dim]{t('source.no_sources')}[/dim]")
@@ -3588,6 +3968,15 @@ def action_sources():
         menu_options.append("─── ACTIONS ───")
         actions.append(None)
 
+        menu_options.append(f"  🏷️ {t('tags.browse_by_tag')}")
+        actions.append("browse_by_tag")
+
+        menu_options.append(f"  🔎 {t('filter.title')}")
+        actions.append("advanced_search")
+
+        menu_options.append(f"  📁 {t('filter.saved_views')}")
+        actions.append("saved_views")
+
         menu_options.append(f"  🔍 {t('dashboard.verify_links')}")
         actions.append("verify_links")
 
@@ -3612,7 +4001,13 @@ def action_sources():
 
         action = actions[idx]
 
-        if action == "verify_links":
+        if action == "browse_by_tag":
+            _browse_by_tag(db)
+        elif action == "advanced_search":
+            _advanced_search_sources(db)
+        elif action == "saved_views":
+            _manage_saved_views(db)
+        elif action == "verify_links":
             _verify_source_links(db)
         elif action == "add_source":
             _add_standalone_source(db)
@@ -3629,14 +4024,106 @@ def _score_bar(score: float, width: int = 5) -> str:
     return f"[green]{'█' * filled}[/green][dim]{'░' * empty}[/dim]"
 
 
+def _role_icon(role: str) -> str:
+    """Get icon for source role (Feature 010).
+
+    Args:
+        role: Source role (hub, authority, unclassified)
+
+    Returns:
+        Unicode icon representing the role
+    """
+    icons = {
+        "authority": "📚",  # Official/canonical sources
+        "hub": "🔗",        # Aggregators, indexes
+        "unclassified": "📄",  # Default/unknown
+    }
+    return icons.get(role, "📄")
+
+
 def _verify_source_links(db):
-    """Verify accessibility of source links."""
+    """Verify accessibility of source links with progress display."""
+    from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
+
     from rekall.link_rot import verify_sources
 
-    show_toast("🔍 Vérification des liens en cours...")
+    console = Console()
+
+    # Count sources pending verification (not checked in last 24h)
+    pending_normal = len(db.get_sources_to_verify(days_since_check=1, limit=1000))
+    # Count all sources with domain
+    total_sources = db.conn.execute(
+        "SELECT COUNT(*) FROM sources WHERE domain IS NOT NULL AND domain != ''"
+    ).fetchone()[0]
+
+    # Build menu options
+    menu_options = []
+
+    if pending_normal == 0:
+        menu_options.append("✓ Toutes les sources vérifiées (24h)")
+        menu_options.append("")
+        menu_options.append(f"🔄 {t('sources.verify_force')} ({total_sources} sources)")
+        menu_options.append(f"← {t('common.cancel')}")
+        force_indices = {2: True}  # Index 2 = force all
+    else:
+        menu_options.append(f"📊 À vérifier: {pending_normal}/{total_sources}")
+        menu_options.append("")
+        menu_options.append("ℹ️  Par défaut: sources non vérifiées depuis 24h")
+        menu_options.append("    (max 50 par session)")
+        menu_options.append("")
+        menu_options.append(f"▶ Vérifier {min(pending_normal, 50)} sources")
+        menu_options.append(f"🔄 {t('sources.verify_force')} ({total_sources} sources)")
+        menu_options.append(f"← {t('common.cancel')}")
+        force_indices = {5: False, 6: True}  # 5 = normal, 6 = force
+
+    # Show menu
+    app = SimpleMenuApp(t("sources.verify_title"), menu_options)
+    idx = app.run()
+
+    if idx is None:
+        return
+
+    # Determine action from selection
+    if pending_normal == 0:
+        if idx != 2:
+            return
+        force_all = True
+    else:
+        if idx not in force_indices:
+            return
+        force_all = force_indices[idx]
+
+    # Determine parameters
+    if force_all:
+        days_since_check = 0
+        limit = 1000  # All sources
+    else:
+        days_since_check = 1
+        limit = 50
 
     try:
-        results = verify_sources(db, limit=50)
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TextColumn("({task.completed}/{task.total})"),
+            console=console,
+            transient=False,
+        ) as progress:
+            task = progress.add_task("Vérification...", total=limit)
+
+            def on_progress(current, total, domain):
+                progress.update(task, total=total, completed=current)
+                progress.update(task, description=f"🔍 {domain[:30]}")
+
+            results = verify_sources(
+                db,
+                limit=limit,
+                on_progress=on_progress,
+                days_since_check=days_since_check,
+            )
+
         msg = (
             f"✓ Vérification terminée:\n"
             f"  • Vérifiés: {results['verified']}\n"
@@ -3646,6 +4133,494 @@ def _verify_source_links(db):
         show_info(msg)
     except Exception as e:
         show_toast(f"⚠ Erreur: {e}")
+
+
+def _browse_by_tag(db):
+    """Browse sources by tag - shows tag list with counts, then sources for selected tag."""
+    while True:
+        # Get all tags with counts
+        tags = db.get_all_tags_with_counts()
+
+        if not tags:
+            show_toast(t("tags.no_tags"))
+            return
+
+        # Build menu options
+        menu_options = []
+        for tag_info in tags:
+            menu_options.append(t("tags.count", tag=tag_info["theme"], count=tag_info["count"]))
+
+        menu_options.append("")
+        menu_options.append(f"← {t('common.back')}")
+
+        app = SimpleMenuApp(t("tags.browse_by_tag"), menu_options)
+        idx = app.run()
+
+        if idx is None or idx >= len(tags):
+            return
+
+        # Show sources for selected tag
+        selected_tag = tags[idx]["theme"]
+        _show_sources_for_tag(db, selected_tag)
+
+
+def _show_sources_for_tag(db, tag: str):
+    """Show sources associated with a specific tag using DataTable view."""
+    while True:
+        sources = db.get_sources_by_tags([tag])
+
+        if not sources:
+            show_toast(t("filter.no_results"))
+            return
+
+        app = SourcesBrowseApp(sources, db, title=f"🏷️ {tag}")
+        app.run()
+
+        if app.result_action is None:
+            return
+
+        action, source = app.result_action
+
+        if action == "view":
+            _show_source_detail(db, source)
+        elif action == "edit":
+            _edit_source(db, source)
+        elif action == "delete":
+            _delete_source(db, source)
+        elif action == "tags":
+            _edit_source_tags(db, source)
+        elif action == "bulk":
+            _bulk_select_sources(db, sources)
+
+
+def _advanced_search_sources(db):
+    """Advanced search with multiple filter criteria."""
+    # Current filter state
+    filters = {
+        "tags": [],
+        "score_min": None,
+        "score_max": None,
+        "statuses": [],
+        "roles": [],
+        "last_used_days": None,
+        "text_search": None,
+    }
+
+    while True:
+        # Build filter summary
+        filter_summary = []
+        if filters["tags"]:
+            filter_summary.append(f"Tags: {', '.join(filters['tags'])}")
+        if filters["score_min"] is not None or filters["score_max"] is not None:
+            smin = filters["score_min"] or 0
+            smax = filters["score_max"] or 100
+            filter_summary.append(f"Score: {smin}-{smax}")
+        if filters["statuses"]:
+            filter_summary.append(f"Statuts: {', '.join(filters['statuses'])}")
+        if filters["roles"]:
+            filter_summary.append(f"Rôles: {', '.join(filters['roles'])}")
+        if filters["last_used_days"]:
+            filter_summary.append(t("filter.freshness_days", days=filters["last_used_days"]))
+        if filters["text_search"]:
+            filter_summary.append(f"Texte: {filters['text_search']}")
+
+        # Build menu
+        menu_options = [
+            f"🏷️ Tags: {', '.join(filters['tags']) or '-'}",
+            f"📊 Score: {filters['score_min'] or 0}-{filters['score_max'] or 100}",
+            f"📋 Statuts: {', '.join(filters['statuses']) or '-'}",
+            f"👤 Rôles: {', '.join(filters['roles']) or '-'}",
+            f"📅 Fraîcheur: {filters['last_used_days'] or '-'} jours",
+            f"🔤 Texte: {filters['text_search'] or '-'}",
+            "",
+            f"▶️ {t('filter.apply')}",
+            f"🗑️ {t('filter.clear')}",
+            "",
+            f"← {t('common.back')}",
+        ]
+
+        title = t("filter.title")
+        if filter_summary:
+            title += f" ({len(filter_summary)} filtre(s))"
+
+        app = SimpleMenuApp(title, menu_options)
+        idx = app.run()
+
+        if idx is None or idx == 10:  # Back
+            return
+
+        if idx == 0:  # Tags
+            _select_filter_tags(db, filters)
+        elif idx == 1:  # Score
+            _select_filter_score(filters)
+        elif idx == 2:  # Statuts
+            _select_filter_statuses(filters)
+        elif idx == 3:  # Rôles
+            _select_filter_roles(filters)
+        elif idx == 4:  # Fraîcheur
+            _select_filter_freshness(filters)
+        elif idx == 5:  # Texte
+            _select_filter_text(filters)
+        elif idx == 7:  # Apply
+            _apply_advanced_filter(db, filters)
+        elif idx == 8:  # Clear
+            filters = {
+                "tags": [],
+                "score_min": None,
+                "score_max": None,
+                "statuses": [],
+                "roles": [],
+                "last_used_days": None,
+                "text_search": None,
+            }
+            show_toast("✓ Filtres effacés")
+
+
+def _select_filter_tags(db, filters: dict):
+    """Select tags for filtering."""
+    all_tags = db.get_all_tags_with_counts()
+    if not all_tags:
+        show_toast(t("tags.no_tags"))
+        return
+
+    selected = set(filters["tags"])
+
+    while True:
+        menu_options = []
+        for tag_info in all_tags:
+            tag = tag_info["theme"]
+            checkbox = "☑" if tag in selected else "☐"
+            menu_options.append(f"{checkbox} {tag} ({tag_info['count']})")
+
+        menu_options.append("")
+        menu_options.append(f"✓ Confirmer ({len(selected)} sélectionné(s))")
+        menu_options.append(f"← {t('common.back')}")
+
+        app = SimpleMenuApp(f"{t('filter.by_score')} - Tags", menu_options)
+        idx = app.run()
+
+        if idx is None or idx >= len(all_tags) + 2:
+            return
+        elif idx == len(all_tags) + 1:
+            filters["tags"] = list(selected)
+            return
+        elif idx < len(all_tags):
+            tag = all_tags[idx]["theme"]
+            if tag in selected:
+                selected.remove(tag)
+            else:
+                selected.add(tag)
+
+
+def _select_filter_score(filters: dict):
+    """Select score range for filtering."""
+    menu_options = [
+        "0-25 (Bas)",
+        "25-50 (Moyen-bas)",
+        "50-75 (Moyen-haut)",
+        "75-100 (Haut)",
+        "30-100 (Utilisé)",
+        "Personnalisé...",
+        "",
+        f"← {t('common.back')}",
+    ]
+
+    app = SimpleMenuApp(t("filter.by_score"), menu_options)
+    idx = app.run()
+
+    if idx == 0:
+        filters["score_min"], filters["score_max"] = 0, 25
+    elif idx == 1:
+        filters["score_min"], filters["score_max"] = 25, 50
+    elif idx == 2:
+        filters["score_min"], filters["score_max"] = 50, 75
+    elif idx == 3:
+        filters["score_min"], filters["score_max"] = 75, 100
+    elif idx == 4:
+        filters["score_min"], filters["score_max"] = 30, 100
+    elif idx == 5:
+        min_input = prompt_input("Score minimum (0-100)")
+        max_input = prompt_input("Score maximum (0-100)")
+        try:
+            filters["score_min"] = int(min_input) if min_input else None
+            filters["score_max"] = int(max_input) if max_input else None
+        except ValueError:
+            show_toast("⚠ Valeurs invalides")
+
+
+def _select_filter_statuses(filters: dict):
+    """Select statuses for filtering."""
+    all_statuses = ["active", "dormant", "inaccessible", "archived"]
+    selected = set(filters["statuses"])
+
+    while True:
+        menu_options = []
+        for status in all_statuses:
+            checkbox = "☑" if status in selected else "☐"
+            menu_options.append(f"{checkbox} {status}")
+
+        menu_options.append("")
+        menu_options.append(f"✓ Confirmer ({len(selected)} sélectionné(s))")
+        menu_options.append(f"← {t('common.back')}")
+
+        app = SimpleMenuApp(t("filter.by_status"), menu_options)
+        idx = app.run()
+
+        if idx is None or idx >= len(all_statuses) + 2:
+            return
+        elif idx == len(all_statuses) + 1:
+            filters["statuses"] = list(selected)
+            return
+        elif idx < len(all_statuses):
+            status = all_statuses[idx]
+            if status in selected:
+                selected.remove(status)
+            else:
+                selected.add(status)
+
+
+def _select_filter_roles(filters: dict):
+    """Select roles for filtering."""
+    all_roles = ["hub", "authority", "unclassified"]
+    selected = set(filters["roles"])
+
+    while True:
+        menu_options = []
+        for role in all_roles:
+            checkbox = "☑" if role in selected else "☐"
+            menu_options.append(f"{checkbox} {role}")
+
+        menu_options.append("")
+        menu_options.append(f"✓ Confirmer ({len(selected)} sélectionné(s))")
+        menu_options.append(f"← {t('common.back')}")
+
+        app = SimpleMenuApp(t("filter.by_role"), menu_options)
+        idx = app.run()
+
+        if idx is None or idx >= len(all_roles) + 2:
+            return
+        elif idx == len(all_roles) + 1:
+            filters["roles"] = list(selected)
+            return
+        elif idx < len(all_roles):
+            role = all_roles[idx]
+            if role in selected:
+                selected.remove(role)
+            else:
+                selected.add(role)
+
+
+def _select_filter_freshness(filters: dict):
+    """Select freshness filter (last used within N days)."""
+    menu_options = [
+        "7 jours",
+        "30 jours",
+        "90 jours",
+        "180 jours",
+        "365 jours",
+        "Personnalisé...",
+        "Aucun filtre",
+        "",
+        f"← {t('common.back')}",
+    ]
+
+    app = SimpleMenuApp(t("filter.by_freshness"), menu_options)
+    idx = app.run()
+
+    if idx == 0:
+        filters["last_used_days"] = 7
+    elif idx == 1:
+        filters["last_used_days"] = 30
+    elif idx == 2:
+        filters["last_used_days"] = 90
+    elif idx == 3:
+        filters["last_used_days"] = 180
+    elif idx == 4:
+        filters["last_used_days"] = 365
+    elif idx == 5:
+        days_input = prompt_input("Nombre de jours")
+        try:
+            filters["last_used_days"] = int(days_input) if days_input else None
+        except ValueError:
+            show_toast("⚠ Valeur invalide")
+    elif idx == 6:
+        filters["last_used_days"] = None
+
+
+def _select_filter_text(filters: dict):
+    """Select text search filter."""
+    text_input = prompt_input(t("filter.by_text"))
+    filters["text_search"] = text_input if text_input else None
+
+
+def _apply_advanced_filter(db, filters: dict):
+    """Apply filters and show results using DataTable view."""
+    results = db.search_sources_advanced(
+        tags=filters["tags"] or None,
+        score_min=filters["score_min"],
+        score_max=filters["score_max"],
+        statuses=filters["statuses"] or None,
+        roles=filters["roles"] or None,
+        last_used_days=filters["last_used_days"],
+        text_search=filters["text_search"],
+    )
+
+    if not results:
+        show_toast(t("filter.no_results"))
+        return
+
+    while True:
+        app = SourcesBrowseApp(results, db, title=t("filter.title"))
+        app.run()
+
+        if app.result_action is None:
+            # Offer to save filter when exiting
+            save_options = [
+                f"← {t('common.back')}",
+                f"💾 {t('filter.save')}",
+            ]
+            save_app = SimpleMenuApp(t("filter.title"), save_options)
+            save_idx = save_app.run()
+            if save_idx == 1:
+                _save_current_filter(db, filters)
+            return
+
+        action, source = app.result_action
+
+        if action == "view":
+            _show_source_detail(db, source)
+        elif action == "edit":
+            _edit_source(db, source)
+        elif action == "delete":
+            if _delete_source(db, source):
+                # Refresh results after deletion
+                results = db.search_sources_advanced(
+                    tags=filters["tags"] or None,
+                    score_min=filters["score_min"],
+                    score_max=filters["score_max"],
+                    statuses=filters["statuses"] or None,
+                    roles=filters["roles"] or None,
+                    last_used_days=filters["last_used_days"],
+                    text_search=filters["text_search"],
+                )
+                if not results:
+                    show_toast(t("filter.no_results"))
+                    return
+        elif action == "tags":
+            _edit_source_tags(db, source)
+        elif action == "bulk":
+            _bulk_select_sources(db, results)
+
+
+def _save_current_filter(db, filters: dict):
+    """Save current filter as a named view."""
+    import json
+
+    name = prompt_input(t("view.name"))
+    if not name:
+        return
+
+    # Serialize filters to JSON
+    filter_json = json.dumps(filters)
+
+    try:
+        db.conn.execute(
+            "INSERT INTO saved_filters (name, filter_json) VALUES (?, ?)",
+            (name, filter_json),
+        )
+        db.conn.commit()
+        show_toast(t("view.saved", name=name))
+    except Exception:
+        show_toast("⚠ Une vue avec ce nom existe déjà")
+
+
+def _manage_saved_views(db):
+    """Manage saved filter views - list, apply, delete."""
+    import json
+
+    while True:
+        saved_views = db.get_saved_filters()
+
+        if not saved_views:
+            show_toast(t("view.no_views"))
+            return
+
+        # Build menu
+        menu_options = []
+        for view in saved_views:
+            # Parse filter to show summary
+            filters = json.loads(view["filter_json"])
+            summary_parts = []
+            if filters.get("tags"):
+                summary_parts.append(f"tags:{len(filters['tags'])}")
+            if filters.get("score_min") or filters.get("score_max"):
+                summary_parts.append("score")
+            if filters.get("statuses"):
+                summary_parts.append("status")
+            if filters.get("roles"):
+                summary_parts.append("role")
+
+            summary = f" ({', '.join(summary_parts)})" if summary_parts else ""
+            menu_options.append(f"📁 {view['name']}{summary}")
+
+        menu_options.append("")
+        menu_options.append(f"← {t('common.back')}")
+
+        app = SimpleMenuApp(t("filter.saved_views"), menu_options)
+        idx = app.run()
+
+        if idx is None or idx >= len(saved_views):
+            return
+
+        # Show view actions
+        selected_view = saved_views[idx]
+        _show_view_actions(db, selected_view)
+
+
+def _show_view_actions(db, view: dict):
+    """Show actions for a saved view."""
+    import json
+
+    menu_options = [
+        "▶️ Appliquer",
+        "🗑️ Supprimer",
+        "",
+        f"← {t('common.back')}",
+    ]
+
+    app = SimpleMenuApp(f"📁 {view['name']}", menu_options)
+    idx = app.run()
+
+    if idx == 0:  # Apply
+        filters = json.loads(view["filter_json"])
+        show_toast(t("view.applied", name=view["name"]))
+        _apply_advanced_filter(db, filters)
+    elif idx == 1:  # Delete
+        # Confirm delete
+        confirm_options = [
+            "✓ Oui, supprimer",
+            "✗ Non, annuler",
+        ]
+        confirm_app = SimpleMenuApp(t("view.delete_confirm"), confirm_options)
+        confirm_idx = confirm_app.run()
+
+        if confirm_idx == 0:
+            db.delete_saved_filter(view["id"])
+            show_toast(t("view.deleted", name=view["name"]))
+
+
+def _parse_tags_input(text: str) -> list[str]:
+    """Parse comma-separated tags input into a clean list.
+
+    Args:
+        text: Raw input string with comma-separated tags
+
+    Returns:
+        List of normalized (lowercase, trimmed) non-empty tags
+    """
+    if not text:
+        return []
+    return [tag.strip().lower() for tag in text.split(",") if tag.strip()]
 
 
 def _add_standalone_source(db):
@@ -3676,43 +4651,194 @@ def _add_standalone_source(db):
     rel_idx = rel_app.run()
     reliability = ["A", "B", "C"][rel_idx] if rel_idx is not None else "B"
 
+    # Get tags (optional, with suggestions)
+    existing_tags = db.get_all_tags_with_counts()
+    if existing_tags:
+        suggestions = ", ".join([tag_info["theme"] for tag_info in existing_tags[:5]])
+        tags_prompt = f"{t('tags.enter_tags')} (ex: {suggestions})"
+    else:
+        tags_prompt = t("tags.enter_tags")
+
+    tags_input = prompt_input(tags_prompt)
+    tags = _parse_tags_input(tags_input)
+
     # Create source
     source = Source(domain=domain, reliability=reliability)
-    db.add_source(source)
-    show_toast(f"✓ Source ajoutée: {domain}")
+    added_source = db.add_source(source)
+
+    # Add tags if any
+    for tag in tags:
+        db.add_source_theme(added_source.id, tag)
+
+    if tags:
+        show_toast(f"✓ Source ajoutée: {domain} (tags: {', '.join(tags)})")
+    else:
+        show_toast(f"✓ Source ajoutée: {domain}")
+
+
+def _bulk_select_sources(db, sources):
+    """Bulk selection mode for sources - select multiple and apply tag actions."""
+    selected_ids = set()
+
+    while True:
+        # Build menu with checkboxes
+        menu_options = []
+        for source in sources:
+            checkbox = "☑" if source.id in selected_ids else "☐"
+            score_bar = _score_bar(source.personal_score)
+            menu_options.append(f"{checkbox} {score_bar} {source.domain}")
+
+        menu_options.append("")
+        menu_options.append(f"[{len(selected_ids)}] {t('bulk.actions')}")
+        menu_options.append(f"← {t('common.back')}")
+
+        app = SimpleMenuApp(f"{t('bulk.select_mode')} - {t('bulk.selected', count=len(selected_ids))}", menu_options)
+        idx = app.run()
+
+        if idx is None:
+            return
+
+        # Check actions
+        if idx == len(sources) + 1:
+            if selected_ids:
+                _bulk_tag_actions(db, list(selected_ids))
+            else:
+                show_toast("⚠ Sélectionnez au moins une source")
+        elif idx >= len(sources) + 2:
+            return
+        elif idx < len(sources):
+            # Toggle selection
+            source_id = sources[idx].id
+            if source_id in selected_ids:
+                selected_ids.remove(source_id)
+            else:
+                selected_ids.add(source_id)
+
+
+def _bulk_tag_actions(db, source_ids: list[str]):
+    """Show bulk actions menu for selected sources."""
+    menu_options = [
+        f"➕ {t('tags.bulk_add')}",
+        f"➖ {t('tags.bulk_remove')}",
+        "",
+        f"← {t('common.back')}",
+    ]
+
+    app = SimpleMenuApp(f"{t('bulk.actions')} ({len(source_ids)} sources)", menu_options)
+    idx = app.run()
+
+    if idx == 0:
+        _bulk_add_tag(db, source_ids)
+    elif idx == 1:
+        _bulk_remove_tag(db, source_ids)
+
+
+def _bulk_add_tag(db, source_ids: list[str]):
+    """Add a tag to multiple sources."""
+    # Get suggestions
+    existing_tags = db.get_all_tags_with_counts()
+    if existing_tags:
+        suggestions = ", ".join([tag_info["theme"] for tag_info in existing_tags[:5]])
+        tag_input = prompt_input(f"{t('tags.enter_tags')} (ex: {suggestions})")
+    else:
+        tag_input = prompt_input(t("tags.enter_tags"))
+
+    tags = _parse_tags_input(tag_input)
+    if not tags:
+        return
+
+    count = 0
+    for source_id in source_ids:
+        for tag in tags:
+            db.add_source_theme(source_id, tag)
+            count += 1
+
+    show_toast(f"✓ {len(tags)} tag(s) ajouté(s) à {len(source_ids)} sources")
+
+
+def _bulk_remove_tag(db, source_ids: list[str]):
+    """Remove a tag from multiple sources."""
+    # Get common tags across selected sources
+    common_tags = set()
+    for i, source_id in enumerate(source_ids):
+        source_tags = set(db.get_source_themes(source_id))
+        if i == 0:
+            common_tags = source_tags
+        else:
+            common_tags &= source_tags
+
+    if not common_tags:
+        # Show all unique tags instead
+        all_tags = set()
+        for source_id in source_ids:
+            all_tags.update(db.get_source_themes(source_id))
+        if not all_tags:
+            show_toast(t("tags.no_tags"))
+            return
+        tags_to_show = list(all_tags)
+    else:
+        tags_to_show = list(common_tags)
+
+    # Build menu
+    menu_options = tags_to_show + ["", f"← {t('common.back')}"]
+
+    app = SimpleMenuApp(t("tags.remove"), menu_options)
+    idx = app.run()
+
+    if idx is None or idx >= len(tags_to_show):
+        return
+
+    tag_to_remove = tags_to_show[idx]
+    removed_count = 0
+    for source_id in source_ids:
+        if tag_to_remove in db.get_source_themes(source_id):
+            db.remove_source_theme(source_id, tag_to_remove)
+            removed_count += 1
+
+    show_toast(f"✓ Tag '{tag_to_remove}' retiré de {removed_count} sources")
 
 
 def _list_all_sources(db):
-    """List all sources with pagination."""
-    sources = db.list_sources(limit=20)
+    """List all sources with DataTable view."""
+    sources = db.list_sources(limit=100)
 
     if not sources:
         show_toast(t("source.no_sources"))
         return
 
     while True:
-        menu_options = []
-        for source in sources:
-            score_bar = _score_bar(source.personal_score)
-            status_icon = "✓" if source.status == "active" else "⚠️"
-            menu_options.append(f"{status_icon} {score_bar} {source.domain}")
+        app = SourcesBrowseApp(sources, db)
+        app.run()
 
-        menu_options.append("")
-        menu_options.append(f"← {t('common.back')}")
-
-        app = SimpleMenuApp(t("sources.manage"), menu_options)
-        idx = app.run()
-
-        if idx is None or idx >= len(sources):
+        if app.result_action is None:
             return
 
-        _show_source_detail(db, sources[idx])
+        action, source = app.result_action
+
+        if action == "view":
+            _show_source_detail(db, source)
+        elif action == "edit":
+            _edit_source(db, source)
+        elif action == "delete":
+            _delete_source(db, source)
+            # Refresh list after deletion
+            sources = db.list_sources(limit=100)
+            if not sources:
+                show_toast(t("source.no_sources"))
+                return
+        elif action == "tags":
+            _edit_source_tags(db, source)
+        elif action == "bulk":
+            _bulk_select_sources(db, sources)
 
 
 def _show_source_detail(db, source):
     """Show source details with backlinks."""
     # Get backlinks count
     backlink_count = db.count_source_backlinks(source.id)
+
+    # Get tags
+    source_tags = db.get_source_themes(source.id)
 
     # Build detail
     lines = [
@@ -3724,6 +4850,13 @@ def _show_source_detail(db, source):
         f"[cyan]Score:[/cyan]       {source.personal_score:.1f}/100",
         f"[cyan]Utilisations:[/cyan] {source.usage_count}",
     ]
+
+    # Show tags
+    if source_tags:
+        tags_str = ", ".join(source_tags)
+        lines.append(f"[cyan]Tags:[/cyan]        {tags_str}")
+    else:
+        lines.append(f"[cyan]Tags:[/cyan]        [dim]{t('tags.no_tags')}[/dim]")
 
     if source.url_pattern:
         lines.append(f"[cyan]Pattern:[/cyan]     {source.url_pattern}")
@@ -3748,18 +4881,116 @@ def _show_source_detail(db, source):
     show_info("\n".join(lines))
 
     # Action menu
-    action_options = [
-        f"← {t('common.back')}",
-    ]
+    action_options = []
 
     if backlink_count > 0:
-        action_options.insert(0, f"📋 {t('backlinks.title')}")
+        action_options.append(f"📋 {t('backlinks.title')}")
+
+    action_options.append(f"🏷️ {t('tags.edit')}")
+    action_options.append("")
+    action_options.append(f"← {t('common.back')}")
 
     app = SimpleMenuApp(t("source_detail.title"), action_options)
     action_idx = app.run()
 
-    if action_idx == 0 and backlink_count > 0:
-        _show_source_backlinks(db, source)
+    if action_idx is None:
+        return
+
+    # Handle actions
+    if backlink_count > 0:
+        if action_idx == 0:
+            _show_source_backlinks(db, source)
+        elif action_idx == 1:
+            _edit_source_tags(db, source)
+    else:
+        if action_idx == 0:
+            _edit_source_tags(db, source)
+
+
+def _delete_source(db, source) -> bool:
+    """Delete a source after confirmation."""
+    # Check backlinks
+    backlink_count = db.count_source_backlinks(source.id)
+
+    # Build confirmation message
+    msg = f"{t('browse.confirm_delete')}\n\n[bold]{source.domain}[/bold]"
+    if backlink_count > 0:
+        msg += f"\n\n[yellow]⚠️ Cette source est citée par {backlink_count} entrée(s)[/yellow]"
+
+    confirm_options = [
+        f"❌ {t('common.cancel')}",
+        f"✓ {t('common.confirm')}",
+    ]
+
+    app = SimpleMenuApp(t("browse.delete"), confirm_options, subtitle=msg)
+    idx = app.run()
+
+    if idx == 1:  # Confirm
+        if db.delete_source(source.id):
+            show_toast(f"✓ Source '{source.domain}' supprimée")
+            return True
+        else:
+            show_toast("❌ Erreur lors de la suppression")
+    return False
+
+
+def _edit_source(db, source):
+    """Edit source properties - redirects to detail view."""
+    _show_source_detail(db, source)
+
+
+def _edit_source_tags(db, source):
+    """Edit tags for a source - add or remove tags."""
+    while True:
+        current_tags = db.get_source_themes(source.id)
+
+        # Build menu options
+        menu_options = []
+
+        # Show current tags with option to remove
+        if current_tags:
+            menu_options.append(f"[dim]── {t('tags.current')} ──[/dim]")
+            for tag in current_tags:
+                menu_options.append(f"  ❌ {tag}")
+            menu_options.append("")
+
+        # Add tag option
+        menu_options.append(f"➕ {t('tags.add')}")
+        menu_options.append("")
+        menu_options.append(f"← {t('common.back')}")
+
+        app = SimpleMenuApp(f"{t('tags.edit')} - {source.domain}", menu_options)
+        idx = app.run()
+
+        if idx is None:
+            return
+
+        # Find which action was selected
+        option_text = menu_options[idx] if idx < len(menu_options) else ""
+
+        if t("common.back") in option_text:
+            return
+
+        if t("tags.add") in option_text:
+            # Show suggestions and prompt for new tags
+            existing_tags = db.get_all_tags_with_counts()
+            if existing_tags:
+                suggestions = ", ".join([tag_info["theme"] for tag_info in existing_tags[:5]])
+                new_tags_input = prompt_input(f"{t('tags.enter_tags')} (ex: {suggestions})")
+            else:
+                new_tags_input = prompt_input(t("tags.enter_tags"))
+
+            new_tags = _parse_tags_input(new_tags_input)
+            for tag in new_tags:
+                if tag not in current_tags:
+                    db.add_source_theme(source.id, tag)
+                    show_toast(t("tags.added", tag=tag))
+
+        elif "❌" in option_text:
+            # Remove tag
+            tag_to_remove = option_text.replace("❌", "").strip()
+            db.remove_source_theme(source.id, tag_to_remove)
+            show_toast(t("tags.removed", tag=tag_to_remove))
 
 
 def _show_source_backlinks(db, source):
@@ -5728,6 +6959,826 @@ def apply_migration_from_tui() -> bool:
 
 
 # =============================================================================
+# Sources Inbox Browser (Feature 013 - US3)
+# =============================================================================
+
+
+def format_relative_time(dt: datetime) -> str:
+    """Format datetime as relative time string (e.g., '2h ago').
+
+    Args:
+        dt: Datetime to format
+
+    Returns:
+        Relative time string
+    """
+    now = datetime.now()
+    delta = now - dt
+
+    minutes = int(delta.total_seconds() / 60)
+    hours = int(delta.total_seconds() / 3600)
+    days = int(delta.total_seconds() / 86400)
+
+    if minutes < 60:
+        time_str = t("inbox.time.minutes", n=max(1, minutes))
+    elif hours < 24:
+        time_str = t("inbox.time.hours", n=hours)
+    else:
+        time_str = t("inbox.time.days", n=days)
+
+    return t("inbox.time_ago", time=time_str)
+
+
+class InboxBrowseApp(App):
+    """Textual app for browsing inbox entries with DataTable and detail panel."""
+
+    CSS = """
+    Screen {
+        background: $surface;
+    }
+
+    #left-notify {
+        dock: bottom;
+        width: auto;
+        max-width: 60;
+        height: auto;
+        padding: 1 2;
+        margin: 1 2;
+        background: #1e2a4a;
+        border: thick #4367CD;
+        color: #93B5F7;
+        text-style: bold;
+        display: none;
+        layer: notification;
+    }
+
+    #left-notify.visible {
+        display: block;
+    }
+
+    #browse-container {
+        height: 100%;
+    }
+
+    #section-title {
+        padding: 0 2;
+        margin-bottom: 1;
+    }
+
+    #inbox-table {
+        height: 1fr;
+        min-height: 8;
+        border: solid $primary;
+        margin: 0 1;
+    }
+
+    DataTable {
+        height: 100%;
+    }
+
+    DataTable > .datatable--cursor {
+        background: $primary 40%;
+    }
+
+    DataTable:focus > .datatable--cursor {
+        background: $primary 60%;
+    }
+
+    #detail-panel {
+        height: 1fr;
+        min-height: 10;
+        border: solid $secondary;
+        margin: 0 1 1 1;
+        padding: 1 2;
+        background: $surface-darken-1;
+    }
+
+    #detail-title {
+        text-style: bold;
+        color: $text;
+    }
+
+    #detail-meta {
+        color: $text-muted;
+        margin-top: 1;
+    }
+
+    #detail-content {
+        color: $text;
+        margin-top: 1;
+        height: auto;
+        overflow-y: auto;
+    }
+
+    Footer {
+        background: $surface-darken-1;
+    }
+    """ + BANNER_CSS
+
+    BINDINGS = [
+        Binding("escape", "quit", "Back", show=True),
+        Binding("q", "quit", "Quit", show=True),
+        Binding("i", "trigger_import", "Import", show=True),
+        Binding("e", "trigger_enrich", "Enrich", show=True),
+        Binding("v", "toggle_quarantine", "Quarantine", show=True),
+        Binding("d", "delete_entry", "Delete", show=True),
+        Binding("r", "refresh", "Refresh", show=True),
+        Binding("h", "setup_claude_hook", "Hook", show=True),
+    ]
+
+    def __init__(self, db, show_quarantine: bool = False):
+        super().__init__()
+        self.db = db
+        self.show_quarantine = show_quarantine
+        self.entries: list = []
+        self.selected_entry = None
+        self.result_action = None  # ("import"|"enrich"|"delete", entry)
+
+    def compose(self) -> ComposeResult:
+        yield create_banner_container()
+        title = t("inbox.quarantine") if self.show_quarantine else t("inbox.title")
+        yield Static(f"[dim]{title}[/dim]", id="section-title")
+        yield Container(
+            Container(
+                DataTable(id="inbox-table"),
+            ),
+            VerticalScroll(
+                Static("", id="detail-title"),
+                Static("", id="detail-meta"),
+                Static("", id="detail-content"),
+                id="detail-panel",
+            ),
+            Footer(),
+            id="browse-container",
+        )
+        yield Static("", id="left-notify")
+
+    def show_left_notify(self, message: str, timeout: float = 3.0) -> None:
+        """Show a notification on the left side."""
+        notify_widget = self.query_one("#left-notify", Static)
+        notify_widget.update(message)
+        notify_widget.add_class("visible")
+        self.set_timer(timeout, lambda: notify_widget.remove_class("visible"))
+
+    def on_mount(self) -> None:
+        """Populate the DataTable with inbox entries."""
+        self._load_entries()
+        self._setup_table()
+
+    def _load_entries(self) -> None:
+        """Load entries from database."""
+        if self.show_quarantine:
+            self.entries = self.db.get_inbox_entries(quarantine_only=True, limit=500)
+        else:
+            self.entries = self.db.get_inbox_entries(valid_only=True, limit=500)
+
+    def _setup_table(self) -> None:
+        """Setup and populate the DataTable."""
+        table = self.query_one("#inbox-table", DataTable)
+        table.cursor_type = "row"
+        table.zebra_stripes = True
+
+        # Clear existing
+        table.clear(columns=True)
+
+        # Add columns
+        table.add_column(t("inbox.url"), width=50, key="url")
+        table.add_column(t("inbox.domain"), width=20, key="domain")
+        table.add_column(t("inbox.cli_source"), width=10, key="cli")
+        table.add_column(t("inbox.project"), width=20, key="project")
+        table.add_column(t("inbox.status"), width=12, key="status")
+        table.add_column(t("inbox.captured_at"), width=12, key="captured")
+
+        # Populate rows
+        self._populate_table()
+
+        # Update detail panel for first entry
+        if self.entries:
+            self.selected_entry = self.entries[0]
+            self._update_detail_panel(self.entries[0])
+
+    def _populate_table(self) -> None:
+        """Populate table rows with current entries."""
+        table = self.query_one("#inbox-table", DataTable)
+
+        for entry in self.entries:
+            # Format URL (truncate if too long)
+            url = entry.url
+            if len(url) > 48:
+                url = url[:45] + "..."
+
+            # Format domain
+            domain = entry.domain or "—"
+            if len(domain) > 18:
+                domain = domain[:15] + "..."
+
+            # Format CLI source
+            cli = entry.cli_source or "—"
+
+            # Format project
+            project = entry.project or "—"
+            if len(project) > 18:
+                project = project[:15] + "..."
+
+            # Format status with icon and color
+            if not entry.is_valid:
+                status = f"[red]⚠ {t('inbox.status.quarantine')}[/red]"
+            elif entry.enriched_at:
+                status = f"[green]✓ {t('inbox.status.enriched')}[/green]"
+            else:
+                status = f"[yellow]○ {t('inbox.status.pending')}[/yellow]"
+
+            # Format captured time
+            captured = format_relative_time(entry.captured_at)
+
+            table.add_row(url, domain, cli, project, status, captured, key=entry.id)
+
+    def _update_detail_panel(self, entry) -> None:
+        """Update detail panel with entry information."""
+        title_widget = self.query_one("#detail-title", Static)
+        meta_widget = self.query_one("#detail-meta", Static)
+        content_widget = self.query_one("#detail-content", Static)
+
+        # Title: Full URL
+        title_widget.update(f"[bold]{entry.url}[/bold]")
+
+        # Meta: CLI, Project, Date
+        meta_parts = []
+        meta_parts.append(f"[dim]CLI:[/dim] {entry.cli_source}")
+        if entry.project:
+            meta_parts.append(f"[dim]Project:[/dim] {entry.project}")
+        meta_parts.append(f"[dim]Captured:[/dim] {entry.captured_at.strftime('%Y-%m-%d %H:%M')}")
+        if entry.enriched_at:
+            meta_parts.append(f"[dim]Enriched:[/dim] {entry.enriched_at.strftime('%Y-%m-%d %H:%M')}")
+        if not entry.is_valid:
+            meta_parts.append(f"[red]Error: {entry.validation_error}[/red]")
+        meta_widget.update(" | ".join(meta_parts))
+
+        # Content: Context from capture
+        content_parts = []
+        if entry.user_query:
+            content_parts.append(f"[bold]User Query:[/bold]\n{entry.user_query}")
+        if entry.assistant_snippet:
+            snippet = entry.assistant_snippet[:500] + "..." if len(entry.assistant_snippet or "") > 500 else entry.assistant_snippet
+            content_parts.append(f"\n[bold]Assistant Context:[/bold]\n{snippet}")
+        if entry.surrounding_text:
+            surrounding = entry.surrounding_text[:300] + "..." if len(entry.surrounding_text or "") > 300 else entry.surrounding_text
+            content_parts.append(f"\n[bold]Surrounding Text:[/bold]\n{surrounding}")
+
+        if content_parts:
+            content_widget.update("\n".join(content_parts))
+        else:
+            content_widget.update("[dim]No context available[/dim]")
+
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        """Update detail panel when row is highlighted."""
+        if event.row_key is None:
+            return
+
+        # Find entry by ID
+        entry_id = str(event.row_key.value)
+        for entry in self.entries:
+            if entry.id == entry_id:
+                self.selected_entry = entry
+                self._update_detail_panel(entry)
+                break
+
+    def action_quit(self) -> None:
+        """Exit the app."""
+        self.exit(result=None)
+
+    def action_trigger_import(self) -> None:
+        """Trigger import action."""
+        self.result_action = ("import", None)
+        self.exit(result="import")
+
+    def action_trigger_enrich(self) -> None:
+        """Trigger enrich action."""
+        self.result_action = ("enrich", None)
+        self.exit(result="enrich")
+
+    def action_toggle_quarantine(self) -> None:
+        """Toggle between quarantine and normal view."""
+        self.show_quarantine = not self.show_quarantine
+        self._load_entries()
+        self._setup_table()
+        # Update title
+        title = t("inbox.quarantine") if self.show_quarantine else t("inbox.title")
+        count = len(self.entries)
+        self.query_one("#section-title", Static).update(f"[dim]{title} ({count})[/dim]")
+        view_msg = t("inbox.view_quarantine") if not self.show_quarantine else t("inbox.view_all")
+        self.show_left_notify(view_msg)
+
+    def action_delete_entry(self) -> None:
+        """Delete selected entry."""
+        if not self.selected_entry:
+            return
+
+        entry = self.selected_entry
+
+        # Delete from database
+        if self.db.delete_inbox_entry(entry.id):
+            # Remove from local list
+            self.entries = [e for e in self.entries if e.id != entry.id]
+
+            # Refresh table
+            table = self.query_one("#inbox-table", DataTable)
+            table.clear()
+            self._populate_table()
+
+            # Update selection
+            if self.entries:
+                self.selected_entry = self.entries[0]
+                self._update_detail_panel(self.entries[0])
+            else:
+                self.selected_entry = None
+                self.query_one("#detail-title", Static).update("")
+                self.query_one("#detail-meta", Static).update("")
+                self.query_one("#detail-content", Static).update(t("inbox.empty"))
+
+            self.show_left_notify(t("inbox.delete.success"))
+
+    def action_refresh(self) -> None:
+        """Refresh the table."""
+        self._load_entries()
+        table = self.query_one("#inbox-table", DataTable)
+        table.clear()
+        self._populate_table()
+
+        # Update title count
+        title = t("inbox.quarantine") if self.show_quarantine else t("inbox.title")
+        count = len(self.entries)
+        self.query_one("#section-title", Static).update(f"[dim]{title} ({count})[/dim]")
+
+        if self.entries:
+            self.selected_entry = self.entries[0]
+            self._update_detail_panel(self.entries[0])
+
+        self.show_left_notify("Refreshed")
+
+    def action_setup_claude_hook(self) -> None:
+        """Setup Claude Code PostToolUse hook for real-time URL capture."""
+        import json
+        from importlib.resources import files
+        from pathlib import Path
+
+        settings_path = Path.home() / ".claude" / "settings.json"
+        hook_dest = Path.home() / ".claude" / "hooks" / "rekall-webfetch.sh"
+
+        # Step 1: Ensure hook script exists (install if missing)
+        if not hook_dest.exists():
+            try:
+                # Get source hook from package
+                try:
+                    hook_source = files("rekall.data.hooks").joinpath("rekall-webfetch.sh")
+                    content = hook_source.read_text()
+                except Exception:
+                    # Fallback for development
+                    dev_path = Path(__file__).parent / "data" / "hooks" / "rekall-webfetch.sh"
+                    if dev_path.exists():
+                        content = dev_path.read_text()
+                    else:
+                        self.show_left_notify("[red]Hook script not found in package[/red]", timeout=5.0)
+                        return
+
+                hook_dest.parent.mkdir(parents=True, exist_ok=True)
+                hook_dest.write_text(content)
+                hook_dest.chmod(0o755)
+            except Exception as e:
+                self.show_left_notify(f"[red]Error installing hook: {e}[/red]", timeout=5.0)
+                return
+
+        # Step 2: Load or create settings
+        settings = {}
+        if settings_path.exists():
+            try:
+                settings = json.loads(settings_path.read_text())
+            except json.JSONDecodeError:
+                settings = {}
+
+        # Check if hook already configured
+        hooks = settings.get("hooks", {})
+        post_tool_use = hooks.get("PostToolUse", [])
+
+        # Check if our hook is already there
+        hook_already_exists = any(
+            h.get("matcher") == "WebFetch" and
+            any("rekall-webfetch" in hh.get("command", "") for hh in h.get("hooks", []))
+            for h in post_tool_use
+        )
+
+        if hook_already_exists:
+            self.show_left_notify("[green]✓ Hook already configured[/green]")
+            return
+
+        # Add our hook configuration
+        new_hook = {
+            "matcher": "WebFetch",
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": str(hook_dest)
+                }
+            ]
+        }
+        post_tool_use.append(new_hook)
+        hooks["PostToolUse"] = post_tool_use
+        settings["hooks"] = hooks
+
+        # Ensure .claude directory exists
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Write settings
+        try:
+            settings_path.write_text(json.dumps(settings, indent=2))
+            self.show_left_notify("[green]✓ Claude hook installed![/green]", timeout=5.0)
+        except Exception as e:
+            self.show_left_notify(f"[red]Error: {e}[/red]", timeout=5.0)
+
+
+def run_inbox_browser(db, show_quarantine: bool = False) -> str | None:
+    """Run the inbox browser TUI.
+
+    Args:
+        db: Database instance
+        show_quarantine: Whether to show quarantine view initially
+
+    Returns:
+        Action string ("import", "enrich") or None
+    """
+    app = InboxBrowseApp(db, show_quarantine)
+    return app.run()
+
+
+# =============================================================================
+# Sources Staging Browser (Feature 013 - US4)
+# =============================================================================
+
+
+class StagingBrowseApp(App):
+    """Textual app for browsing staging entries with DataTable, scores and detail panel."""
+
+    CSS = """
+    Screen {
+        background: $surface;
+    }
+
+    #left-notify {
+        dock: bottom;
+        width: auto;
+        max-width: 60;
+        height: auto;
+        padding: 1 2;
+        margin: 1 2;
+        background: #1e2a4a;
+        border: thick #4367CD;
+        color: #93B5F7;
+        text-style: bold;
+        display: none;
+        layer: notification;
+    }
+
+    #left-notify.visible {
+        display: block;
+    }
+
+    #browse-container {
+        height: 100%;
+    }
+
+    #section-title {
+        padding: 0 2;
+        margin-bottom: 1;
+    }
+
+    #staging-table {
+        height: 1fr;
+        min-height: 8;
+        border: solid $primary;
+        margin: 0 1;
+    }
+
+    DataTable {
+        height: 100%;
+    }
+
+    DataTable > .datatable--cursor {
+        background: $primary 40%;
+    }
+
+    DataTable:focus > .datatable--cursor {
+        background: $primary 60%;
+    }
+
+    #detail-panel {
+        height: 1fr;
+        min-height: 10;
+        border: solid $secondary;
+        margin: 0 1 1 1;
+        padding: 1 2;
+        background: $surface-darken-1;
+    }
+
+    #detail-title {
+        text-style: bold;
+        color: $text;
+    }
+
+    #detail-meta {
+        color: $text-muted;
+        margin-top: 1;
+    }
+
+    #detail-content {
+        color: $text;
+        margin-top: 1;
+        height: auto;
+        overflow-y: auto;
+    }
+
+    Footer {
+        background: $surface-darken-1;
+    }
+    """ + BANNER_CSS
+
+    BINDINGS = [
+        Binding("escape", "quit", "Back", show=True),
+        Binding("q", "quit", "Quit", show=True),
+        Binding("p", "promote_selected", "Promote", show=True),
+        Binding("a", "auto_promote", "Auto-promote", show=True),
+        Binding("r", "refresh_scores", "Refresh", show=True),
+        Binding("enter", "view_details", "Details", show=True),
+    ]
+
+    def __init__(self, db, show_promoted: bool = False):
+        super().__init__()
+        self.db = db
+        self.show_promoted = show_promoted
+        self.entries: list = []
+        self.selected_entry = None
+        self.result_action = None
+
+    def compose(self) -> ComposeResult:
+        yield create_banner_container()
+        title = t("staging.title")
+        yield Static(f"[dim]{title}[/dim]", id="section-title")
+        yield Container(
+            Container(
+                DataTable(id="staging-table"),
+            ),
+            VerticalScroll(
+                Static("", id="detail-title"),
+                Static("", id="detail-meta"),
+                Static("", id="detail-content"),
+                id="detail-panel",
+            ),
+            Footer(),
+            id="browse-container",
+        )
+        yield Static("", id="left-notify")
+
+    def show_left_notify(self, message: str, timeout: float = 3.0) -> None:
+        """Show a notification on the left side."""
+        notify_widget = self.query_one("#left-notify", Static)
+        notify_widget.update(message)
+        notify_widget.add_class("visible")
+        self.set_timer(timeout, lambda: notify_widget.remove_class("visible"))
+
+    def on_mount(self) -> None:
+        """Populate the DataTable with staging entries."""
+        self._load_entries()
+        self._setup_table()
+
+    def _load_entries(self) -> None:
+        """Load entries from database and calculate scores."""
+        from rekall.promotion import calculate_promotion_score
+
+        # Get all staging entries
+        if self.show_promoted:
+            self.entries = self.db.get_staging_entries(limit=500)
+        else:
+            # Get non-promoted entries
+            all_entries = self.db.get_staging_entries(limit=500)
+            self.entries = [e for e in all_entries if e.promoted_at is None]
+
+        # Calculate and cache scores
+        for entry in self.entries:
+            entry.promotion_score = calculate_promotion_score(entry)
+
+    def _setup_table(self) -> None:
+        """Setup and populate the DataTable."""
+        table = self.query_one("#staging-table", DataTable)
+        table.cursor_type = "row"
+        table.zebra_stripes = True
+
+        # Clear existing
+        table.clear(columns=True)
+
+        # Add columns
+        table.add_column("", width=3, key="indicator")  # Promotion indicator
+        table.add_column(t("staging.domain"), width=25, key="domain")
+        table.add_column(t("staging.title.desc")[:20], width=35, key="title")
+        table.add_column(t("staging.content_type"), width=14, key="type")
+        table.add_column(t("staging.citations"), width=8, key="citations")
+        table.add_column(t("staging.projects"), width=8, key="projects")
+        table.add_column("Score", width=8, key="score")
+
+        # Populate rows
+        self._populate_table()
+
+        # Update detail panel for first entry
+        if self.entries:
+            self.selected_entry = self.entries[0]
+            self._update_detail_panel(self.entries[0])
+
+    def _populate_table(self) -> None:
+        """Populate table rows with current entries."""
+        from rekall.promotion import get_promotion_indicator
+
+        table = self.query_one("#staging-table", DataTable)
+
+        for entry in self.entries:
+            # Get promotion indicator
+            indicator = get_promotion_indicator(entry, score=entry.promotion_score)
+            if indicator == "⬆":
+                indicator_str = f"[green]{indicator}[/green]"
+            elif indicator == "→":
+                indicator_str = f"[yellow]{indicator}[/yellow]"
+            elif indicator == "✓":
+                indicator_str = f"[blue]{indicator}[/blue]"
+            elif indicator == "⚠":
+                indicator_str = f"[red]{indicator}[/red]"
+            else:
+                indicator_str = " "
+
+            # Format domain
+            domain = entry.domain or "—"
+            if len(domain) > 23:
+                domain = domain[:20] + "..."
+
+            # Format title
+            title = entry.title or "—"
+            if len(title) > 33:
+                title = title[:30] + "..."
+
+            # Format content type
+            content_type = entry.content_type or "other"
+
+            # Format counts
+            citations = str(entry.citation_count)
+            projects = str(entry.project_count)
+
+            # Format score with color
+            score = entry.promotion_score or 0.0
+            if score >= 70:
+                score_str = f"[green]{score:.0f}[/green]"
+            elif score >= 56:  # Near threshold (80% of 70)
+                score_str = f"[yellow]{score:.0f}[/yellow]"
+            else:
+                score_str = f"[dim]{score:.0f}[/dim]"
+
+            table.add_row(
+                indicator_str, domain, title, content_type,
+                citations, projects, score_str, key=entry.id
+            )
+
+    def _update_detail_panel(self, entry) -> None:
+        """Update detail panel with entry information."""
+        title_widget = self.query_one("#detail-title", Static)
+        meta_widget = self.query_one("#detail-meta", Static)
+        content_widget = self.query_one("#detail-content", Static)
+
+        # Title: Full URL
+        title_widget.update(f"[bold]{entry.url}[/bold]")
+
+        # Meta info
+        meta_parts = []
+        if entry.title:
+            meta_parts.append(f"[bold]{entry.title}[/bold]")
+        meta_parts.append(f"[dim]Type:[/dim] {entry.content_type or 'other'}")
+        meta_parts.append(f"[dim]Lang:[/dim] {entry.language or '—'}")
+        if entry.http_status:
+            color = "green" if entry.http_status == 200 else "yellow"
+            meta_parts.append(f"[dim]HTTP:[/dim] [{color}]{entry.http_status}[/{color}]")
+        meta_widget.update(" | ".join(meta_parts))
+
+        # Content: Description and stats
+        content_parts = []
+        if entry.description:
+            content_parts.append(f"[bold]Description:[/bold]\n{entry.description}")
+
+        content_parts.append("\n[bold]Statistics:[/bold]")
+        content_parts.append(f"  Citations: {entry.citation_count}")
+        content_parts.append(f"  Projects: {entry.project_count} ({entry.projects_list or '—'})")
+        content_parts.append(f"  Score: {entry.promotion_score:.1f}/100")
+
+        if entry.first_seen:
+            content_parts.append(f"  First seen: {entry.first_seen.strftime('%Y-%m-%d')}")
+        if entry.last_seen:
+            content_parts.append(f"  Last seen: {entry.last_seen.strftime('%Y-%m-%d')}")
+
+        if entry.promoted_at:
+            content_parts.append(f"\n[green]✓ Promoted on {entry.promoted_at.strftime('%Y-%m-%d')}[/green]")
+
+        content_widget.update("\n".join(content_parts))
+
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        """Update detail panel when row is highlighted."""
+        if event.row_key is None:
+            return
+
+        entry_id = str(event.row_key.value)
+        for entry in self.entries:
+            if entry.id == entry_id:
+                self.selected_entry = entry
+                self._update_detail_panel(entry)
+                break
+
+    def action_quit(self) -> None:
+        """Exit the app."""
+        self.exit(result=None)
+
+    def action_promote_selected(self) -> None:
+        """Promote selected entry manually."""
+        if not self.selected_entry:
+            return
+
+        if self.selected_entry.promoted_at:
+            self.show_left_notify("Already promoted")
+            return
+
+        from rekall.promotion import promote_source
+
+        result = promote_source(self.db, self.selected_entry)
+        if result.success:
+            self.show_left_notify(t("promotion.success"))
+            self._load_entries()
+            table = self.query_one("#staging-table", DataTable)
+            table.clear()
+            self._populate_table()
+        else:
+            self.show_left_notify(f"[red]{result.error}[/red]")
+
+    def action_auto_promote(self) -> None:
+        """Auto-promote all eligible entries."""
+        from rekall.promotion import auto_promote_eligible
+
+        result = auto_promote_eligible(self.db)
+
+        if result.promoted > 0:
+            self.show_left_notify(t("promotion.auto.success", count=result.promoted))
+            self._load_entries()
+            table = self.query_one("#staging-table", DataTable)
+            table.clear()
+            self._populate_table()
+        else:
+            self.show_left_notify(t("promotion.auto.none"))
+
+    def action_refresh_scores(self) -> None:
+        """Refresh scores for all entries."""
+        self._load_entries()
+
+        # Update scores in database
+        for entry in self.entries:
+            self.db.update_staging(entry)
+
+        # Refresh table
+        table = self.query_one("#staging-table", DataTable)
+        table.clear()
+        self._populate_table()
+
+        # Update title count
+        count = len(self.entries)
+        title = t("staging.title")
+        self.query_one("#section-title", Static).update(f"[dim]{title} ({count})[/dim]")
+
+        if self.entries:
+            self.selected_entry = self.entries[0]
+            self._update_detail_panel(self.entries[0])
+
+        self.show_left_notify("Scores refreshed")
+
+    def action_view_details(self) -> None:
+        """View details of selected entry (placeholder for future expansion)."""
+        if self.selected_entry:
+            self.show_left_notify(f"URL: {self.selected_entry.url[:50]}...")
+
+
+def run_staging_browser(db, show_promoted: bool = False) -> str | None:
+    """Run the staging browser TUI.
+
+    Args:
+        db: Database instance
+        show_promoted: Whether to include promoted entries
+
+    Returns:
+        Action string or None
+    """
+    app = StagingBrowseApp(db, show_promoted)
+    return app.run()
+
+
+# =============================================================================
 # Main TUI Loop
 # =============================================================================
 
@@ -5752,21 +7803,17 @@ def get_menu_items():
         ("__section__", "GÉNÉRAL", ""),
         ("language", t("menu.language"), t("menu.language.desc")),
         ("config", t("menu.config"), t("menu.config.desc")),
+        ("__spacer__", "", ""),
+        # Section 2: Base de connaissances (Feature 011)
+        ("__section__", t("menu.knowledge_base"), ""),
         ("browse", t("menu.browse"), t("menu.browse.desc")),
-        ("__spacer__", "", ""),
-        # Section 2: Recherche
-        ("__section__", "RECHERCHE", ""),
-        ("research", t("menu.research"), t("menu.research.desc")),
-        ("__spacer__", "", ""),
-        # Section 3: Sources (Feature 009)
-        ("__section__", "SOURCES", ""),
         ("sources", t("menu.sources"), t("menu.sources.desc")),
         ("__spacer__", "", ""),
-        # Section 4: Données
+        # Section 3: Données
         ("__section__", "DONNÉES", ""),
         ("export", t("menu.export"), t("menu.export.desc")),
         ("__spacer__", "", ""),
-        # Section 5: Quitter
+        # Section 4: Quitter
         ("quit", t("menu.quit"), t("menu.quit.desc")),
     ]
 
