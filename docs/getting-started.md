@@ -140,10 +140,21 @@ rekall
 By default, Rekall uses FTS5 full-text search. To enable semantic understanding:
 
 ```bash
+# Install with embeddings support
+uv pip install "rekall[embeddings]"
+
+# Or if using pipx
+pipx inject rekall sentence-transformers numpy
+
+# Enable semantic search
 rekall config set embeddings.enabled true
 ```
 
-On first search, Rekall downloads EmbeddingGemma (~200MB). After that:
+> **Network Download**: On first search, Rekall downloads the `all-MiniLM-L6-v2` model
+> from Hugging Face (~90MB). This requires internet access. After download, the model
+> is cached locally and works offline.
+
+With embeddings enabled:
 - Searches understand meaning, not just keywords
 - "browser blocking API" finds "CORS error on Safari"
 - ~500ms per embedding on standard CPU

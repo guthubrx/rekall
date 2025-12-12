@@ -382,9 +382,9 @@ class Source:
     # Feature 010 - Sources Autonomes fields
     is_seed: bool = False  # Migrated from speckit research files
     is_promoted: bool = False  # Automatically promoted based on usage
-    promoted_at: Optional[datetime] = None  # Timestamp of promotion
+    promoted_at: datetime | None = None  # Timestamp of promotion
     role: SourceRole = "unclassified"  # hub/authority/unclassified
-    seed_origin: Optional[str] = None  # Path to speckit file (if seed)
+    seed_origin: str | None = None  # Path to speckit file (if seed)
     citation_quality_factor: float = 0.0  # PR-Index inspired quality (0.0-1.0)
 
     def __post_init__(self):
@@ -547,7 +547,7 @@ class SavedFilter:
     sur les sources documentaires.
     """
 
-    id: Optional[int] = None
+    id: int | None = None
     name: str = ""
     filter_json: str = "{}"
     created_at: datetime = field(default_factory=datetime.now)
@@ -683,19 +683,19 @@ class InboxEntry:
 
     id: str
     url: str
-    domain: Optional[str] = None
+    domain: str | None = None
     cli_source: str = ""
-    project: Optional[str] = None
-    conversation_id: Optional[str] = None
-    user_query: Optional[str] = None
-    assistant_snippet: Optional[str] = None
-    surrounding_text: Optional[str] = None
+    project: str | None = None
+    conversation_id: str | None = None
+    user_query: str | None = None
+    assistant_snippet: str | None = None
+    surrounding_text: str | None = None
     captured_at: datetime = field(default_factory=datetime.now)
     import_source: str = "history_import"
-    raw_json: Optional[str] = None
+    raw_json: str | None = None
     is_valid: bool = True
-    validation_error: Optional[str] = None
-    enriched_at: Optional[datetime] = None
+    validation_error: str | None = None
+    enriched_at: datetime | None = None
 
     def __post_init__(self):
         """Valider les champs requis."""
@@ -715,23 +715,23 @@ class StagingEntry:
     id: str
     url: str
     domain: str
-    title: Optional[str] = None
-    description: Optional[str] = None
-    content_type: Optional[str] = None
-    language: Optional[str] = None
-    last_verified: Optional[datetime] = None
+    title: str | None = None
+    description: str | None = None
+    content_type: str | None = None
+    language: str | None = None
+    last_verified: datetime | None = None
     is_accessible: bool = True
-    http_status: Optional[int] = None
+    http_status: int | None = None
     citation_count: int = 1
     project_count: int = 1
-    projects_list: Optional[str] = None  # JSON array
-    first_seen: Optional[datetime] = None
-    last_seen: Optional[datetime] = None
+    projects_list: str | None = None  # JSON array
+    first_seen: datetime | None = None
+    last_seen: datetime | None = None
     promotion_score: float = 0.0
-    inbox_ids: Optional[str] = None  # JSON array
-    enriched_at: Optional[datetime] = None
-    promoted_at: Optional[datetime] = None
-    promoted_to: Optional[str] = None
+    inbox_ids: str | None = None  # JSON array
+    enriched_at: datetime | None = None
+    promoted_at: datetime | None = None
+    promoted_to: str | None = None
 
     def __post_init__(self):
         """Valider les champs requis."""
@@ -753,8 +753,8 @@ class ConnectorImport:
     """
 
     connector: str
-    last_import: Optional[datetime] = None
-    last_file_marker: Optional[str] = None
+    last_import: datetime | None = None
+    last_file_marker: str | None = None
     entries_imported: int = 0
     errors_count: int = 0
 
