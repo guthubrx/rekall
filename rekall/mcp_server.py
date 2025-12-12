@@ -9,7 +9,15 @@ Tools provided:
 - rekall_show: Get full details of an entry
 - rekall_add: Add a new entry
 - rekall_link: Create a link between entries
+- rekall_unlink: Remove a link between entries (Feature 015)
 - rekall_suggest: Get pending suggestions
+- rekall_related: Explore related entries in the knowledge graph (Feature 015)
+- rekall_similar: Find semantically similar entries (Feature 015)
+- rekall_sources_suggest: Suggest sources for an entry (Feature 015)
+- rekall_info: Get knowledge base statistics (Feature 015)
+- rekall_stale: Find entries not accessed recently (Feature 015)
+- rekall_generalize: Create a pattern from multiple entries (Feature 015)
+- rekall_sources_verify: Check URL accessibility (Feature 015)
 
 Requires: pip install mcp
 """
@@ -69,6 +77,30 @@ REKALL_HELP = """# Rekall - Developer Knowledge Management
 - config: Configuration and setup notes
 - reference: External references and docs
 
+## Tools Available
+
+### Core Tools
+- rekall_help: Get this usage guide
+- rekall_search: Search the knowledge base
+- rekall_show: Get full details of an entry
+- rekall_add: Add a new entry with structured context
+- rekall_link: Create a link between entries
+- rekall_unlink: Remove a link between entries
+- rekall_suggest: Get pending suggestions
+
+### Discovery Tools
+- rekall_related: Explore entries linked to a given entry (depth 1-3)
+- rekall_similar: Find semantically similar entries (requires embeddings)
+- rekall_info: Get knowledge base statistics
+
+### Maintenance Tools
+- rekall_stale: Find entries not accessed in N days
+- rekall_generalize: Create a pattern from multiple entries
+
+### Source Management
+- rekall_sources_suggest: Suggest sources for an entry based on tags
+- rekall_sources_verify: Check URL accessibility (link rot detection)
+
 ## Citation Format
 When citing entries: [Title](rekall://entry_id)
 
@@ -76,6 +108,8 @@ When citing entries: [Title](rekall://entry_id)
 - Use --context for better semantic matching
 - Check suggestions with rekall_suggest()
 - Link related entries to build knowledge graph
+- Use rekall_info() to get an overview of the knowledge base
+- Use rekall_stale(days=90) to find maintenance candidates
 """
 
 
@@ -327,6 +361,148 @@ rekall_add(
                     "required": ["entry_ids"],
                 },
             ),
+            # ===== Feature 015: MCP Tools Expansion =====
+            Tool(
+                name="rekall_unlink",
+                description="Remove an existing link between two entries. Use to correct the knowledge graph.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "source_id": {
+                            "type": "string",
+                            "description": "Source entry ID of the link to remove",
+                        },
+                        "target_id": {
+                            "type": "string",
+                            "description": "Target entry ID of the link to remove",
+                        },
+                    },
+                    "required": ["source_id", "target_id"],
+                },
+            ),
+            Tool(
+                name="rekall_related",
+                description="Explore entries related to a given entry through links (incoming and outgoing).",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "entry_id": {
+                            "type": "string",
+                            "description": "Entry ID to explore relationships for",
+                        },
+                        "depth": {
+                            "type": "integer",
+                            "description": "Depth of graph traversal (default: 1, max: 3)",
+                            "default": 1,
+                        },
+                    },
+                    "required": ["entry_id"],
+                },
+            ),
+            Tool(
+                name="rekall_similar",
+                description="Find semantically similar entries using embeddings. Requires smart_embeddings to be enabled.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "entry_id": {
+                            "type": "string",
+                            "description": "Reference entry ID to find similar entries for",
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum number of similar entries (default: 5)",
+                            "default": 5,
+                        },
+                    },
+                    "required": ["entry_id"],
+                },
+            ),
+            Tool(
+                name="rekall_sources_suggest",
+                description="Suggest relevant web sources to enrich an entry based on its content and tags.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "entry_id": {
+                            "type": "string",
+                            "description": "Entry ID to suggest sources for",
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum number of suggestions (default: 5)",
+                            "default": 5,
+                        },
+                    },
+                    "required": ["entry_id"],
+                },
+            ),
+            Tool(
+                name="rekall_info",
+                description="Get statistics about the knowledge base: entry counts, types, projects, links.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {},
+                },
+            ),
+            Tool(
+                name="rekall_stale",
+                description="Find entries that haven't been accessed recently, suggesting maintenance candidates.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "days": {
+                            "type": "integer",
+                            "description": "Threshold in days of inactivity (default: 90)",
+                            "default": 90,
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum number of results (default: 20)",
+                            "default": 20,
+                        },
+                    },
+                },
+            ),
+            Tool(
+                name="rekall_generalize",
+                description="Create a generalized pattern entry from multiple similar entries.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "entry_ids": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "IDs of entries to generalize (minimum 2)",
+                        },
+                        "title": {
+                            "type": "string",
+                            "description": "Title for the new pattern entry (auto-generated if omitted)",
+                        },
+                        "type": {
+                            "type": "string",
+                            "description": "Type of the new entry (default: pattern)",
+                            "enum": ["pattern", "reference", "decision"],
+                            "default": "pattern",
+                        },
+                    },
+                    "required": ["entry_ids"],
+                },
+            ),
+            Tool(
+                name="rekall_sources_verify",
+                description="Check accessibility of source URLs to detect link rot.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum number of URLs to check (default: 10)",
+                            "default": 10,
+                        },
+                    },
+                },
+            ),
         ]
 
     @server.call_tool()
@@ -353,6 +529,31 @@ rekall_add(
 
             elif name == "rekall_get_context":
                 return await _handle_get_context(arguments)
+
+            # ===== Feature 015: MCP Tools Expansion =====
+            elif name == "rekall_unlink":
+                return await _handle_unlink(arguments)
+
+            elif name == "rekall_related":
+                return await _handle_related(arguments)
+
+            elif name == "rekall_similar":
+                return await _handle_similar(arguments)
+
+            elif name == "rekall_sources_suggest":
+                return await _handle_sources_suggest(arguments)
+
+            elif name == "rekall_info":
+                return await _handle_info(arguments)
+
+            elif name == "rekall_stale":
+                return await _handle_stale(arguments)
+
+            elif name == "rekall_generalize":
+                return await _handle_generalize(arguments)
+
+            elif name == "rekall_sources_verify":
+                return await _handle_sources_verify(arguments)
 
             else:
                 return [TextContent(type="text", text=f"Unknown tool: {name}")]
@@ -760,6 +961,442 @@ async def _handle_get_context(args: dict) -> list:
             output += "(No context stored)\n\n"
 
     return [TextContent(type="text", text=output)]
+
+
+# =============================================================================
+# Feature 015: MCP Tools Expansion - Handlers
+# =============================================================================
+
+
+async def _handle_unlink(args: dict) -> list:
+    """Handle rekall_unlink tool call - Remove a link between entries."""
+    from mcp.types import TextContent
+
+    db = get_db()
+    source_id = args["source_id"]
+    target_id = args["target_id"]
+
+    try:
+        success = db.delete_link(source_id, target_id)
+        db.close()
+
+        if success:
+            return [TextContent(
+                type="text",
+                text=f"Link removed: {source_id} → {target_id}"
+            )]
+        else:
+            return [TextContent(
+                type="text",
+                text=f"No link found between {source_id} and {target_id}"
+            )]
+    except Exception as e:
+        db.close()
+        return [TextContent(type="text", text=f"Error removing link: {e}")]
+
+
+async def _handle_related(args: dict) -> list:
+    """Handle rekall_related tool call - Explore related entries."""
+    from mcp.types import TextContent
+
+    db = get_db()
+    entry_id = args["entry_id"]
+    depth = min(args.get("depth", 1), 3)  # Cap at 3
+
+    # Verify entry exists
+    entry = db.get(entry_id, update_access=False)
+    if not entry:
+        db.close()
+        return [TextContent(type="text", text=f"Entry not found: {entry_id}")]
+
+    try:
+        related = db.get_related_entries(entry_id, depth=depth)
+        db.close()
+
+        if not related:
+            return [TextContent(
+                type="text",
+                text=f"No related entries found for {entry_id[:12]}..."
+            )]
+
+        output = f"Related entries for [{entry_id[:12]}...] {entry.title}:\n\n"
+
+        for rel_entry, relation_type, direction in related:
+            arrow = "→" if direction == "outgoing" else "←"
+            output += f"- {arrow} [{relation_type}] [{rel_entry.id[:12]}...] {rel_entry.title}\n"
+            output += f"    Type: {rel_entry.type} | Tags: {', '.join(rel_entry.tags[:3]) if rel_entry.tags else 'none'}\n"
+
+        output += f"\nTotal: {len(related)} related entries (depth={depth})"
+        return [TextContent(type="text", text=output)]
+
+    except Exception as e:
+        db.close()
+        return [TextContent(type="text", text=f"Error exploring relationships: {e}")]
+
+
+async def _handle_similar(args: dict) -> list:
+    """Handle rekall_similar tool call - Find semantically similar entries."""
+    from mcp.types import TextContent
+
+    from rekall.config import get_config
+
+    cfg = get_config()
+
+    if not cfg.smart_embeddings_enabled:
+        return [TextContent(
+            type="text",
+            text="Embeddings not enabled. Enable with: rekall config set smart_embeddings.enabled true\n"
+                 "Then calculate embeddings: rekall embeddings calculate"
+        )]
+
+    db = get_db()
+    entry_id = args["entry_id"]
+    limit = args.get("limit", 5)
+
+    # Verify entry exists
+    entry = db.get(entry_id, update_access=False)
+    if not entry:
+        db.close()
+        return [TextContent(type="text", text=f"Entry not found: {entry_id}")]
+
+    try:
+        from rekall.embeddings import get_embedding_service
+
+        service = get_embedding_service(dimensions=cfg.smart_embeddings_dimensions)
+
+        if not service.available:
+            db.close()
+            return [TextContent(
+                type="text",
+                text="Embedding service not available. Check model installation."
+            )]
+
+        similar = service.find_similar(entry_id, db, limit=limit)
+        db.close()
+
+        if not similar:
+            return [TextContent(
+                type="text",
+                text=f"No similar entries found for [{entry_id[:12]}...] {entry.title}"
+            )]
+
+        output = f"Entries similar to [{entry_id[:12]}...] {entry.title}:\n\n"
+
+        for sim_entry, score in similar:
+            output += f"- [{sim_entry.id[:12]}...] {sim_entry.title} ({score:.0%} similar)\n"
+            output += f"    Type: {sim_entry.type} | Tags: {', '.join(sim_entry.tags[:3]) if sim_entry.tags else 'none'}\n"
+
+        output += f"\nTotal: {len(similar)} similar entries"
+        return [TextContent(type="text", text=output)]
+
+    except Exception as e:
+        db.close()
+        return [TextContent(type="text", text=f"Error finding similar entries: {e}")]
+
+
+async def _handle_sources_suggest(args: dict) -> list:
+    """Handle rekall_sources_suggest tool call - Suggest sources for an entry."""
+    from mcp.types import TextContent
+
+    db = get_db()
+    entry_id = args["entry_id"]
+    limit = args.get("limit", 5)
+
+    # Get the entry
+    entry = db.get(entry_id, update_access=False)
+    if not entry:
+        db.close()
+        return [TextContent(type="text", text=f"Entry not found: {entry_id}")]
+
+    try:
+        # Get sources matching entry tags
+        sources = []
+        if entry.tags:
+            for tag in entry.tags[:5]:  # Limit tag search
+                tag_sources = db.get_sources_by_tags([tag], limit=limit)
+                sources.extend(tag_sources)
+
+        # Deduplicate by source ID
+        seen_ids = set()
+        unique_sources = []
+        for source in sources:
+            if source.id not in seen_ids:
+                seen_ids.add(source.id)
+                unique_sources.append(source)
+                if len(unique_sources) >= limit:
+                    break
+
+        db.close()
+
+        if not unique_sources:
+            return [TextContent(
+                type="text",
+                text=f"No sources found matching tags for [{entry_id[:12]}...] {entry.title}\n"
+                     f"Tags searched: {', '.join(entry.tags) if entry.tags else 'none'}"
+            )]
+
+        output = f"Suggested sources for [{entry_id[:12]}...] {entry.title}:\n\n"
+
+        for source in unique_sources:
+            score_display = f" (score: {source.score:.0f})" if source.score else ""
+            output += f"- [{source.id[:12]}...] {source.title or source.domain}{score_display}\n"
+            output += f"    URL: {source.url}\n"
+            output += f"    Tier: {source.tier} | Tags: {', '.join(source.tags[:3]) if source.tags else 'none'}\n"
+
+        output += f"\nTotal: {len(unique_sources)} suggested sources"
+        return [TextContent(type="text", text=output)]
+
+    except Exception as e:
+        db.close()
+        return [TextContent(type="text", text=f"Error suggesting sources: {e}")]
+
+
+async def _handle_info(args: dict) -> list:
+    """Handle rekall_info tool call - Get knowledge base statistics."""
+    from mcp.types import TextContent
+
+    db = get_db()
+
+    try:
+        # Get all entries for aggregation
+        all_entries = db.list_all(limit=10000)
+
+        # Count by type
+        type_counts: dict[str, int] = {}
+        project_counts: dict[str, int] = {}
+        for entry in all_entries:
+            type_counts[entry.type] = type_counts.get(entry.type, 0) + 1
+            proj = entry.project or "(no project)"
+            project_counts[proj] = project_counts.get(proj, 0) + 1
+
+        # Get source statistics
+        source_stats = db.get_source_statistics()
+
+        # Count links
+        link_count = 0
+        try:
+            cursor = db.conn.execute("SELECT COUNT(*) FROM links")
+            link_count = cursor.fetchone()[0]
+        except Exception:
+            pass
+
+        db.close()
+
+        output = "# Rekall Knowledge Base Statistics\n\n"
+
+        output += f"## Entries: {len(all_entries)}\n\n"
+        output += "**By Type:**\n"
+        for entry_type, count in sorted(type_counts.items(), key=lambda x: -x[1]):
+            output += f"- {entry_type}: {count}\n"
+
+        output += "\n**By Project:**\n"
+        for project, count in sorted(project_counts.items(), key=lambda x: -x[1])[:10]:
+            output += f"- {project}: {count}\n"
+
+        output += f"\n## Links: {link_count}\n"
+
+        output += f"\n## Sources: {source_stats.get('total', 0)}\n"
+        output += f"- Bronze: {source_stats.get('bronze', 0)}\n"
+        output += f"- Silver: {source_stats.get('silver', 0)}\n"
+        output += f"- Gold: {source_stats.get('gold', 0)}\n"
+
+        return [TextContent(type="text", text=output)]
+
+    except Exception as e:
+        db.close()
+        return [TextContent(type="text", text=f"Error getting statistics: {e}")]
+
+
+async def _handle_stale(args: dict) -> list:
+    """Handle rekall_stale tool call - Find stale entries."""
+    from mcp.types import TextContent
+
+    db = get_db()
+    days = args.get("days", 90)
+    limit = args.get("limit", 20)
+
+    try:
+        stale_entries = db.get_stale_entries(days=days, limit=limit)
+        db.close()
+
+        if not stale_entries:
+            return [TextContent(
+                type="text",
+                text=f"No entries inactive for more than {days} days. Knowledge base is well-maintained!"
+            )]
+
+        output = f"Entries not accessed in {days}+ days:\n\n"
+
+        for entry in stale_entries:
+            last_access = entry.last_accessed.strftime("%Y-%m-%d") if entry.last_accessed else "never"
+            output += f"- [{entry.id[:12]}...] {entry.title}\n"
+            output += f"    Type: {entry.type} | Last accessed: {last_access}\n"
+
+        output += f"\nTotal: {len(stale_entries)} stale entries"
+        output += "\n\nConsider: rekall deprecate <id> to mark obsolete entries"
+        return [TextContent(type="text", text=output)]
+
+    except Exception as e:
+        db.close()
+        return [TextContent(type="text", text=f"Error finding stale entries: {e}")]
+
+
+async def _handle_generalize(args: dict) -> list:
+    """Handle rekall_generalize tool call - Create pattern from entries."""
+    from mcp.types import TextContent
+
+    from rekall.models import Entry, generate_ulid
+
+    entry_ids = args["entry_ids"]
+
+    if len(entry_ids) < 2:
+        return [TextContent(
+            type="text",
+            text="Error: At least 2 entry IDs are required for generalization"
+        )]
+
+    db = get_db()
+
+    try:
+        # Get all source entries
+        source_entries = []
+        for eid in entry_ids:
+            entry = db.get(eid, update_access=False)
+            if entry:
+                source_entries.append(entry)
+            else:
+                db.close()
+                return [TextContent(type="text", text=f"Entry not found: {eid}")]
+
+        # Generate title if not provided
+        title = args.get("title")
+        if not title:
+            # Combine keywords from titles
+            words = set()
+            for e in source_entries:
+                words.update(e.title.split()[:3])
+            title = f"Pattern: {' '.join(list(words)[:5])}"
+
+        # Determine type
+        entry_type = args.get("type", "pattern")
+
+        # Create content summarizing sources
+        content = f"## Generalized from {len(source_entries)} entries\n\n"
+        content += "### Source Entries:\n"
+        for e in source_entries:
+            content += f"- [{e.id[:12]}...] {e.title} ({e.type})\n"
+
+        # Collect common tags
+        all_tags: dict[str, int] = {}
+        for e in source_entries:
+            for tag in e.tags:
+                all_tags[tag] = all_tags.get(tag, 0) + 1
+        common_tags = [t for t, c in all_tags.items() if c >= 2][:5]
+
+        # Create the new entry
+        new_entry = Entry(
+            id=generate_ulid(),
+            title=title,
+            type=entry_type,
+            content=content,
+            tags=common_tags,
+            project=source_entries[0].project if source_entries else None,
+            confidence=3,
+        )
+
+        db.add(new_entry)
+
+        # Create derived_from links
+        for source in source_entries:
+            db.add_link(
+                new_entry.id,
+                source.id,
+                "derived_from",
+                reason=f"Generalized from {len(source_entries)} entries"
+            )
+
+        db.close()
+
+        output = f"Created generalized entry: {new_entry.id}\n"
+        output += f"Title: {new_entry.title}\n"
+        output += f"Type: {new_entry.type}\n"
+        output += f"Tags: {', '.join(new_entry.tags) if new_entry.tags else 'none'}\n"
+        output += f"\nLinked to {len(source_entries)} source entries via 'derived_from'"
+
+        return [TextContent(type="text", text=output)]
+
+    except Exception as e:
+        db.close()
+        return [TextContent(type="text", text=f"Error creating generalized entry: {e}")]
+
+
+async def _handle_sources_verify(args: dict) -> list:
+    """Handle rekall_sources_verify tool call - Check source URL accessibility."""
+    from mcp.types import TextContent
+
+    db = get_db()
+    limit = args.get("limit", 10)
+
+    try:
+        # Get sources to verify
+        sources_to_check = db.get_sources_to_verify(limit=limit)
+
+        if not sources_to_check:
+            db.close()
+            return [TextContent(
+                type="text",
+                text="No sources need verification. All sources were checked recently."
+            )]
+
+        # Import link rot checker
+        from rekall.link_rot import LinkRotChecker
+
+        checker = LinkRotChecker()
+        results = []
+
+        for source in sources_to_check:
+            is_accessible, status_msg = checker.check_url(source.url)
+            results.append({
+                "source": source,
+                "accessible": is_accessible,
+                "status": status_msg,
+            })
+
+            # Update source status in DB
+            new_status = "accessible" if is_accessible else "broken"
+            db.update_source_status(source.id, new_status)
+
+        db.close()
+
+        # Format output
+        accessible_count = sum(1 for r in results if r["accessible"])
+        broken_count = len(results) - accessible_count
+
+        output = f"# Link Rot Check Results\n\n"
+        output += f"Checked: {len(results)} URLs\n"
+        output += f"Accessible: {accessible_count} | Broken: {broken_count}\n\n"
+
+        if broken_count > 0:
+            output += "## Broken URLs:\n"
+            for r in results:
+                if not r["accessible"]:
+                    source = r["source"]
+                    output += f"- [{source.id[:12]}...] {source.title or source.domain}\n"
+                    output += f"    URL: {source.url}\n"
+                    output += f"    Status: {r['status']}\n"
+
+        if accessible_count > 0:
+            output += "\n## Accessible URLs:\n"
+            for r in results:
+                if r["accessible"]:
+                    source = r["source"]
+                    output += f"- [{source.id[:12]}...] {source.title or source.domain} ✓\n"
+
+        return [TextContent(type="text", text=output)]
+
+    except Exception as e:
+        db.close()
+        return [TextContent(type="text", text=f"Error verifying sources: {e}")]
 
 
 async def run_server() -> None:
