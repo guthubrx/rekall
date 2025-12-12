@@ -6,13 +6,73 @@ URLs from AI CLI tool histories (Claude Code, Cursor IDE, etc.).
 
 from __future__ import annotations
 
+import ipaddress
 import re
+import socket
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Iterator, Optional
 from urllib.parse import urlparse
+
+# Private IP ranges to block (SSRF prevention)
+PRIVATE_IPV4_NETWORKS = [
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),  # link-local
+    ipaddress.ip_network("0.0.0.0/8"),  # "this" network
+]
+
+PRIVATE_IPV6_NETWORKS = [
+    ipaddress.ip_network("::1/128"),  # loopback
+    ipaddress.ip_network("fc00::/7"),  # unique local
+    ipaddress.ip_network("fe80::/10"),  # link-local
+]
+
+
+def _is_private_ip(ip_str: str) -> bool:
+    """Check if an IP address is in a private/reserved range.
+
+    Args:
+        ip_str: IP address string (IPv4 or IPv6)
+
+    Returns:
+        True if the IP is private/reserved, False otherwise
+    """
+    try:
+        ip = ipaddress.ip_address(ip_str)
+        networks = PRIVATE_IPV4_NETWORKS if ip.version == 4 else PRIVATE_IPV6_NETWORKS
+        return any(ip in network for network in networks)
+    except ValueError:
+        # Invalid IP address format - treat as suspicious
+        return True
+
+
+def _resolve_and_validate_ip(hostname: str) -> tuple[bool, str | None]:
+    """Resolve hostname to IP and validate it's not private.
+
+    Args:
+        hostname: Hostname to resolve
+
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    try:
+        # Resolve hostname to IP addresses
+        _, _, ip_list = socket.gethostbyname_ex(hostname)
+        for ip_str in ip_list:
+            if _is_private_ip(ip_str):
+                return False, f"Hostname resolves to private IP: {ip_str}"
+        return True, None
+    except socket.gaierror:
+        # DNS resolution failed - could be temporary or invalid hostname
+        # Allow for now, will fail on actual fetch
+        return True, None
+    except Exception:
+        return False, "Failed to resolve hostname"
 
 
 @dataclass
@@ -115,6 +175,9 @@ class BaseConnector(ABC):
     def validate_url(self, url: str) -> tuple[bool, Optional[str]]:
         """Validate a URL for inclusion in the inbox.
 
+        SSRF hardening: validates hostname (not netloc) and resolves DNS
+        to ensure we're not accessing private/internal resources.
+
         Args:
             url: URL to validate
 
@@ -138,23 +201,29 @@ class BaseConnector(ABC):
         if parsed.scheme.lower() not in ("http", "https"):
             return False, f"Invalid scheme: {parsed.scheme}"
 
-        # Must have a netloc (host)
-        if not parsed.netloc:
+        # Use hostname (not netloc) to avoid userinfo bypass attacks
+        # e.g., https://localhost@evil.com/ would have netloc="localhost@evil.com"
+        # but hostname="evil.com"
+        hostname = parsed.hostname
+        if not hostname:
             return False, "Missing host"
-
-        # Check quarantine patterns
-        if self._quarantine_regex is None:
-            pattern = "|".join(f"({p})" for p in self.QUARANTINE_PATTERNS)
-            self._quarantine_regex = re.compile(pattern, re.IGNORECASE)
-
-        # Check host against quarantine patterns
-        host = parsed.netloc.lower()
-        if self._quarantine_regex.search(host):
-            return False, f"Quarantined host: {host}"
 
         # Check for file:// that might have bypassed scheme check
         if url.lower().startswith("file:"):
             return False, "file:// URLs not allowed"
+
+        # Check quarantine patterns against hostname (not netloc)
+        if self._quarantine_regex is None:
+            pattern = "|".join(f"({p})" for p in self.QUARANTINE_PATTERNS)
+            self._quarantine_regex = re.compile(pattern, re.IGNORECASE)
+
+        if self._quarantine_regex.search(hostname):
+            return False, f"Quarantined host: {hostname}"
+
+        # SSRF protection: resolve DNS and validate IP is not private
+        is_valid, error = _resolve_and_validate_ip(hostname)
+        if not is_valid:
+            return False, error
 
         return True, None
 

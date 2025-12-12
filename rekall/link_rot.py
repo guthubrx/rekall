@@ -127,16 +127,12 @@ class LinkRotChecker:
         return self.check_url_accessibility(url)
 
 
-<<<<<<< HEAD
-def verify_sources(db: Database, limit: int = 100) -> dict:
-=======
 def verify_sources(
     db: "Database",
     limit: int = 100,
     on_progress: callable | None = None,
     days_since_check: int = 1,
 ) -> dict:
->>>>>>> 015-mcp-tools-expansion
     """Verify accessibility of sources and update their status.
 
     Args:

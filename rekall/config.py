@@ -6,14 +6,26 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import logging
+
 # TOML support: use stdlib tomllib in Python 3.11+, fallback to tomli
 try:
     import tomllib
 except ImportError:
     import tomli as tomllib
 
+import tomlkit
+
 from rekall.paths import PathResolver, ResolvedPaths
 from rekall.utils import secure_file_permissions
+
+logger = logging.getLogger(__name__)
+
+
+class ConfigError(Exception):
+    """Raised when configuration file is invalid or cannot be loaded."""
+
+    pass
 
 
 def _default_paths() -> ResolvedPaths:
@@ -26,19 +38,12 @@ class Config:
     """Rekall configuration settings."""
 
     paths: ResolvedPaths = field(default_factory=_default_paths)
-<<<<<<< HEAD
     editor: str | None = None
     default_project: str | None = None
 
     # Legacy embedding settings (external providers)
     embeddings_provider: str | None = None  # ollama | openai
     embeddings_model: str | None = None  # e.g., nomic-embed-text
-=======
-
-    # Legacy embedding settings (external providers) - still read by cli.py
-    embeddings_provider: Optional[str] = None  # ollama | openai
-    embeddings_model: Optional[str] = None  # e.g., nomic-embed-text
->>>>>>> 015-mcp-tools-expansion
 
     # Smart embeddings settings (local EmbeddingGemma)
     smart_embeddings_enabled: bool = False  # Enable semantic features
@@ -133,6 +138,9 @@ def load_config_from_toml(config_dir: Path) -> dict[str, Any]:
 
     Returns:
         Dict with configuration values (empty if file doesn't exist)
+
+    Raises:
+        ConfigError: If the TOML file exists but is malformed
     """
     config_file = config_dir / "config.toml"
     if not config_file.exists():
@@ -141,14 +149,19 @@ def load_config_from_toml(config_dir: Path) -> dict[str, Any]:
     try:
         with open(config_file, "rb") as f:
             return tomllib.load(f)
-    except Exception:
-        return {}
+    except tomllib.TOMLDecodeError as e:
+        logger.error("Invalid TOML in %s: %s", config_file, e)
+        raise ConfigError(f"Configuration file is malformed: {config_file}\n{e}") from e
+    except Exception as e:
+        logger.error("Failed to load config from %s: %s", config_file, e)
+        raise ConfigError(f"Failed to load configuration: {config_file}\n{e}") from e
 
 
 def save_config_to_toml(config_dir: Path, updates: dict[str, Any]) -> bool:
     """Save configuration updates to config.toml file.
 
     Merges updates with existing config (preserves existing values).
+    Uses tomlkit for proper TOML serialization.
 
     Args:
         config_dir: Directory containing config.toml
@@ -159,8 +172,13 @@ def save_config_to_toml(config_dir: Path, updates: dict[str, Any]) -> bool:
     """
     config_file = config_dir / "config.toml"
 
-    # Load existing config
-    existing = load_config_from_toml(config_dir)
+    # Load existing config (may raise ConfigError for malformed TOML)
+    try:
+        existing = load_config_from_toml(config_dir)
+    except ConfigError:
+        # If existing config is malformed, start fresh
+        logger.warning("Existing config malformed, starting fresh: %s", config_file)
+        existing = {}
 
     # Merge updates (deep merge for nested dicts)
     for key, value in updates.items():
@@ -172,36 +190,15 @@ def save_config_to_toml(config_dir: Path, updates: dict[str, Any]) -> bool:
     # Create directory if needed
     config_dir.mkdir(parents=True, exist_ok=True)
 
-    # Write TOML manually (tomllib is read-only)
+    # Write TOML using tomlkit for proper serialization
     try:
-        lines = []
-        for key, value in existing.items():
-            if isinstance(value, dict):
-                # Section header
-                lines.append(f"\n[{key}]")
-                for sub_key, sub_value in value.items():
-                    lines.append(_format_toml_value(sub_key, sub_value))
-            else:
-                lines.append(_format_toml_value(key, value))
-
-        config_file.write_text("\n".join(lines).strip() + "\n")
+        config_file.write_text(tomlkit.dumps(existing))
         # Secure file permissions (rw------- for sensitive config)
         secure_file_permissions(config_file)
         return True
-    except Exception:
+    except Exception as e:
+        logger.error("Failed to save config to %s: %s", config_file, e)
         return False
-
-
-def _format_toml_value(key: str, value: Any) -> str:
-    """Format a key-value pair for TOML."""
-    if isinstance(value, bool):
-        return f"{key} = {str(value).lower()}"
-    elif isinstance(value, (int, float)):
-        return f"{key} = {value}"
-    elif isinstance(value, str):
-        return f'{key} = "{value}"'
-    else:
-        return f'{key} = "{value}"'
 
 
 def apply_toml_config(config: Config) -> Config:
@@ -292,13 +289,13 @@ def get_promotion_config() -> "PromotionConfig":
 
 
 def set_promotion_config(
-    threshold: Optional[float] = None,
-    citation_weight: Optional[float] = None,
-    project_weight: Optional[float] = None,
-    recency_weight: Optional[float] = None,
-    recency_half_life_days: Optional[float] = None,
-    max_citations: Optional[int] = None,
-    max_projects: Optional[int] = None,
+    threshold: float | None = None,
+    citation_weight: float | None = None,
+    project_weight: float | None = None,
+    recency_weight: float | None = None,
+    recency_half_life_days: float | None = None,
+    max_citations: int | None = None,
+    max_projects: int | None = None,
 ) -> bool:
     """Update promotion configuration and persist to config.toml.
 
@@ -376,9 +373,9 @@ def get_autoscan_config() -> AutoscanConfig:
 
 
 def set_autoscan_config(
-    enabled: Optional[bool] = None,
-    interval_hours: Optional[float] = None,
-    connectors: Optional[list[str]] = None,
+    enabled: bool | None = None,
+    interval_hours: float | None = None,
+    connectors: list[str] | None = None,
 ) -> bool:
     """Update autoscan configuration and persist to config.toml.
 

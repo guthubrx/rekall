@@ -2799,9 +2799,6 @@ class Database:
         # Clamp to 0-100 range
         return min(100.0, max(0.0, score))
 
-<<<<<<< HEAD
-    def update_source_usage(self, source_id: str) -> Source | None:
-=======
     def calculate_citation_quality(self, source_id: str) -> float:
         """Calculate citation quality factor based on co-citation patterns.
 
@@ -2928,7 +2925,7 @@ class Database:
         # Clamp to 0-100 range
         return min(100.0, max(0.0, score))
 
-    def update_citation_quality(self, source_id: str) -> Optional[float]:
+    def update_citation_quality(self, source_id: str) -> float | None:
         """Update citation quality factor for a source.
 
         Args:
@@ -2953,8 +2950,7 @@ class Database:
 
         return cq_factor
 
-    def update_source_usage(self, source_id: str) -> Optional[Source]:
->>>>>>> 015-mcp-tools-expansion
+    def update_source_usage(self, source_id: str) -> Source | None:
         """Increment usage count and recalculate score for a source.
 
         Should be called when a source is cited in a new entry.
@@ -2982,15 +2978,11 @@ class Database:
 
         return source
 
-<<<<<<< HEAD
-    def recalculate_source_score(self, source_id: str) -> float | None:
-=======
     def recalculate_source_score(
         self,
         source_id: str,
         update_citation_quality: bool = True
-    ) -> Optional[float]:
->>>>>>> 015-mcp-tools-expansion
+    ) -> float | None:
         """Recalculate and update score for a source (e.g., for decay).
 
         Uses score v2 formula with role bonus, seed bonus, and citation quality.
