@@ -1520,7 +1520,7 @@ class BrowseApp(App):
 
     def _update_header(self, suffix: str = None) -> None:
         """Update header bar text."""
-        header = self.query_one("#header-bar", Static)
+        header = self.query_one("#section-title", Static)
         base = f"[bold]REKALL[/bold] - {t('menu.browse')} ({len(self.entries)} {t('browse.entries')})"
         if suffix:
             header.update(f"{base} - {suffix}")
