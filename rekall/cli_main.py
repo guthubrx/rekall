@@ -289,11 +289,13 @@ def config(
         help="Display current configuration paths and sources",
     ),
 ):
-    """Manage Rekall configuration.
+    """Manage Rekall configuration and IDE integrations.
 
-    Display or modify configuration settings.
+    Opens the interactive configuration TUI for IDE integrations.
+    Use --show to display configuration paths.
 
     Examples:
+        rekall config           # Open interactive TUI
         rekall config --show    # Show all paths and their sources
     """
     import os
@@ -329,8 +331,11 @@ def config(
         else:
             console.print("[bold]Projet local:[/bold] [dim]Non détecté[/dim]")
     else:
-        console.print("Use [cyan]rekall config --show[/cyan] to display configuration.")
-        console.print("Use [cyan]rekall config --help[/cyan] for more options.")
+        # Launch the ConfigApp TUI for IDE integrations
+        from rekall.tui_main import run_config_app
+        from pathlib import Path
+
+        run_config_app(Path.cwd())
 
 
 # ============================================================================
@@ -387,19 +392,19 @@ def init(
 @app.command()
 def search(
     query: str = typer.Argument(..., help="Search query"),
-    entry_type: str | None = typer.Option(
+    entry_type: Optional[str] = typer.Option(
         None,
         "--type",
         "-t",
         help=f"Filter by type: {', '.join(VALID_TYPES)}",
     ),
-    project: str | None = typer.Option(
+    project: Optional[str] = typer.Option(
         None,
         "--project",
         "-p",
         help="Filter by project",
     ),
-    memory_type: str | None = typer.Option(
+    memory_type: Optional[str] = typer.Option(
         None,
         "--memory-type",
         "-m",
@@ -407,7 +412,7 @@ def search(
     ),
     limit: int = typer.Option(20, "--limit", "-l", help="Maximum results"),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON for AI agents"),
-    context: str | None = typer.Option(
+    context: Optional[str] = typer.Option(
         None,
         "--context",
         help="Conversation context for semantic search (AI agent use)",
@@ -494,7 +499,7 @@ def search(
         # Convert to SearchResult format
         from rekall.db import SearchResult
         results = []
-        for entry, _combined_score, sem_score in hybrid_results:
+        for entry, _combined_score, sem_score, _matched_kws in hybrid_results:
             results.append(SearchResult(entry=entry, rank=None))
             if sem_score is not None:
                 semantic_scores[entry.id] = sem_score
@@ -624,13 +629,13 @@ def add(
         help=f"Entry type: {', '.join(VALID_TYPES)}",
     ),
     title: str = typer.Argument(..., help="Entry title"),
-    tags: str | None = typer.Option(
+    tags: Optional[str] = typer.Option(
         None,
         "--tags",
         "-t",
         help="Comma-separated tags",
     ),
-    project: str | None = typer.Option(
+    project: Optional[str] = typer.Option(
         None,
         "--project",
         "-p",
@@ -644,7 +649,7 @@ def add(
         max=5,
         help="Confidence level (0-5)",
     ),
-    content: str | None = typer.Option(
+    content: Optional[str] = typer.Option(
         None,
         "--content",
         help="Entry content (markdown)",
@@ -655,12 +660,12 @@ def add(
         "-m",
         help=f"Memory type: {', '.join(VALID_MEMORY_TYPES)}",
     ),
-    context: str | None = typer.Option(
+    context: Optional[str] = typer.Option(
         None,
         "--context",
         help="Conversation context for semantic embedding (AI agent use)",
     ),
-    context_json: str | None = typer.Option(
+    context_json: Optional[str] = typer.Option(
         None,
         "--context-json",
         "-cj",
@@ -731,21 +736,40 @@ def add(
         raise typer.Exit(1)
 
     # Check context requirement based on config
-    # Context can be provided via --context, --context-json, or --context-interactive
     cfg = get_config()
     context_mode = cfg.smart_embeddings_context_mode
-    has_context = context or context_json or context_interactive
-    if not has_context:
-        if context_mode == "required":
+    has_structured_context = context_json or context_interactive
+    has_any_context = context or has_structured_context
+
+    if context_mode == "required":
+        # Mode required: contexte STRUCTURÉ obligatoire (--context-json ou --context-interactive)
+        if not has_structured_context:
             console.print(
-                "[red]Error: --context is required[/red]\n"
-                "Set context_mode = \"optional\" in config.toml to disable this check."
+                "[red]Error: Structured context is required[/red]\n\n"
+                "Use one of these options:\n"
+                "  [cyan]--context-json[/cyan] '{...}'  (for scripts/AI agents)\n"
+                "  [cyan]--context-interactive[/cyan] / [cyan]-ci[/cyan]  (interactive prompts)\n\n"
+                "[bold]Expected JSON format:[/bold]\n"
+                '{\n'
+                '  "situation": "What was the problem?",\n'
+                '  "solution": "How was it resolved?",\n'
+                '  "trigger_keywords": ["keyword1", "keyword2", "keyword3"],\n'
+                '  "what_failed": "What was tried but didn\'t work? (optional)",\n'
+                '  "conversation_excerpt": "Relevant conversation excerpt (optional)",\n'
+                '  "files_modified": ["file1.py", "file2.py"] (optional),\n'
+                '  "error_messages": ["Error 1", "Error 2"] (optional)\n'
+                '}\n\n'
+                "[dim]To disable this check: set context_mode = \"optional\" in config.toml[/dim]"
             )
             raise typer.Exit(1)
-        elif context_mode == "recommended":
+    elif context_mode == "recommended":
+        # Mode recommended: warning si pas de contexte structuré
+        if not has_structured_context:
             console.print(
-                "[yellow]⚠ Warning: --context not provided[/yellow]\n"
-                "[dim]Context helps AI verify suggestions. Use --context to add conversation context.[/dim]"
+                "[yellow]⚠ Warning: No structured context provided[/yellow]\n"
+                "[dim]Structured context (--context-json or -ci) helps find this entry later.\n"
+                "Use --context-json '{\"situation\": \"...\", \"solution\": \"...\", \"trigger_keywords\": [...]}'\n"
+                "Or use -ci for interactive prompts.[/dim]\n"
             )
 
     # Create entry
@@ -1008,19 +1032,19 @@ def show(
 
 @app.command()
 def browse(
-    entry_type: str | None = typer.Option(
+    entry_type: Optional[str] = typer.Option(
         None,
         "--type",
         "-t",
         help=f"Filter by type: {', '.join(VALID_TYPES)}",
     ),
-    project: str | None = typer.Option(
+    project: Optional[str] = typer.Option(
         None,
         "--project",
         "-p",
         help="Filter by project",
     ),
-    memory_type: str | None = typer.Option(
+    memory_type: Optional[str] = typer.Option(
         None,
         "--memory-type",
         "-m",
@@ -1072,7 +1096,7 @@ def browse(
 @app.command()
 def deprecate(
     entry_id: str = typer.Argument(..., help="Entry ID to deprecate"),
-    replaced_by: str | None = typer.Option(
+    replaced_by: Optional[str] = typer.Option(
         None,
         "--replaced-by",
         "-r",
@@ -1107,7 +1131,7 @@ def deprecate(
 
 @app.command()
 def install(
-    ide: str | None = typer.Argument(
+    ide: Optional[str] = typer.Argument(
         None,
         help="IDE/Agent to install integration for",
     ),
@@ -1210,7 +1234,7 @@ def get_research_topics() -> dict[str, Path]:
 
 @app.command()
 def research(
-    topic: str | None = typer.Argument(
+    topic: Optional[str] = typer.Argument(
         None,
         help="Research topic to display",
     ),
@@ -1341,19 +1365,19 @@ def export(
         ...,
         help="Output file path (.rekall.zip for archive, .md or .json for text)",
     ),
-    format: str | None = typer.Option(
+    format: Optional[str] = typer.Option(
         None,
         "--format",
         "-f",
         help="Export format: rekall (default), md, or json",
     ),
-    entry_type: str | None = typer.Option(
+    entry_type: Optional[str] = typer.Option(
         None,
         "--type",
         "-t",
         help="Filter by entry type",
     ),
-    project: str | None = typer.Option(
+    project: Optional[str] = typer.Option(
         None,
         "--project",
         "-p",
@@ -1559,7 +1583,7 @@ def link(
         "-t",
         help=f"Relation type: {', '.join(VALID_RELATION_TYPES)}",
     ),
-    reason: str | None = typer.Option(
+    reason: Optional[str] = typer.Option(
         None,
         "--reason",
         "-r",
@@ -1604,7 +1628,7 @@ def link(
 def unlink(
     source_id: str = typer.Argument(..., help="Source entry ID"),
     target_id: str = typer.Argument(..., help="Target entry ID"),
-    relation_type: str | None = typer.Option(
+    relation_type: Optional[str] = typer.Option(
         None,
         "--type",
         "-t",
@@ -1641,7 +1665,7 @@ def unlink(
 @app.command()
 def related(
     entry_id: str = typer.Argument(..., help="Entry ID"),
-    relation_type: str | None = typer.Option(
+    relation_type: Optional[str] = typer.Option(
         None,
         "--type",
         "-t",
@@ -1841,7 +1865,7 @@ def review(
         "-l",
         help="Number of entries to review",
     ),
-    project: str | None = typer.Option(
+    project: Optional[str] = typer.Option(
         None,
         "--project",
         "-p",
@@ -1928,7 +1952,7 @@ def review(
 @app.command()
 def generalize(
     entry_ids: list[str] = typer.Argument(..., help="Entry IDs to generalize (2+ required)"),
-    title: str | None = typer.Option(
+    title: Optional[str] = typer.Option(
         None,
         "--title",
         "-t",
@@ -2118,7 +2142,7 @@ def info():
 
 @app.command()
 def backup(
-    output: Path | None = typer.Option(
+    output: Optional[Path] = typer.Option(
         None,
         "--output",
         "-o",
@@ -2250,19 +2274,19 @@ def restore(
 
 @app.command()
 def suggest(
-    accept: str | None = typer.Option(
+    accept: Optional[str] = typer.Option(
         None,
         "--accept",
         "-a",
         help="Accept suggestion by ID (creates link or shows generalize command)",
     ),
-    reject: str | None = typer.Option(
+    reject: Optional[str] = typer.Option(
         None,
         "--reject",
         "-r",
         help="Reject suggestion by ID",
     ),
-    suggestion_type: str | None = typer.Option(
+    suggestion_type: Optional[str] = typer.Option(
         None,
         "--type",
         "-t",
@@ -2722,7 +2746,7 @@ def migrate(
 
 @app.command()
 def changelog(
-    version_filter: str | None = typer.Argument(
+    version_filter: Optional[str] = typer.Argument(
         None,
         help="Show changes for specific version (e.g., '0.2.0')",
     ),

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 from rich import box
 from rich.console import Console
@@ -16,23 +17,134 @@ from textual.binding import Binding
 from textual.containers import Container, VerticalScroll
 from textual.message import Message
 from textual.widgets import (
+    Button,
+    Collapsible,
     DataTable,
     Footer,
     Input,
     ListItem,
     ListView,
     Markdown,
+    RadioButton,
+    RadioSet,
     SelectionList,
     Static,
+    TabbedContent,
+    TabPane,
 )
 from textual.widgets.selection_list import Selection
+from textual.suggester import Suggester, SuggestFromList
 
 from rekall.config import get_config, save_config_to_toml
+
+
+class MultiTagSuggester(Suggester):
+    """Suggester for comma-separated tags - suggests for the last tag being typed."""
+
+    def __init__(self, tags: list[str], case_sensitive: bool = False):
+        super().__init__(use_cache=False, case_sensitive=case_sensitive)
+        self.tags = tags
+        self._case_sensitive = case_sensitive
+
+    async def get_suggestion(self, value: str) -> Optional[str]:
+        """Get suggestion for the last tag in a comma-separated list."""
+        if not value:
+            return None
+
+        # Split by comma and get the last part being typed
+        parts = value.split(",")
+        current_tag = parts[-1].strip()
+
+        if not current_tag:
+            return None
+
+        # Find matching tag
+        for tag in self.tags:
+            if self._case_sensitive:
+                if tag.startswith(current_tag):
+                    # Return full value with completed tag
+                    prefix = ", ".join(p.strip() for p in parts[:-1])
+                    if prefix:
+                        return f"{prefix}, {tag}"
+                    return tag
+            else:
+                if tag.lower().startswith(current_tag.lower()):
+                    prefix = ", ".join(p.strip() for p in parts[:-1])
+                    if prefix:
+                        return f"{prefix}, {tag}"
+                    return tag
+
+        return None
+
+
 from rekall.db import Database
 from rekall.i18n import LANGUAGES, get_lang, load_lang_preference, set_lang, t
 from rekall.models import VALID_TYPES, Entry, generate_ulid
 
 console = Console()
+
+
+# =============================================================================
+# Sortable DataTable Mixin - Shared functionality for browse apps
+# =============================================================================
+
+
+class SortableTableMixin:
+    """Mixin providing sortable column functionality for DataTable apps.
+
+    Usage:
+        class MyApp(SortableTableMixin, App):
+            TABLE_ID = "my-table"
+
+            def get_sort_key(self, column_key: str) -> Callable:
+                return lambda item: getattr(item, column_key, "")
+
+    Attributes:
+        sort_column: Current sort column key (None = no sort)
+        sort_reverse: True for descending, False for ascending
+        entries: List of data items to display
+    """
+
+    TABLE_ID: str = "data-table"  # Override in subclass
+
+    def init_sorting(self) -> None:
+        """Initialize sorting state. Call in __init__."""
+        self.sort_column: str | None = None
+        self.sort_reverse: bool = False
+
+    def get_sort_key(self, column_key: str):
+        """Get sort key function for a column.
+
+        Override in subclass to provide custom sort keys.
+
+        Args:
+            column_key: The column key to sort by
+
+        Returns:
+            Function that extracts sortable value from an item
+        """
+        return lambda item: getattr(item, column_key, "")
+
+    def sort_entries(self) -> None:
+        """Sort entries by current sort column."""
+        if not self.sort_column or not hasattr(self, "entries"):
+            return
+
+        try:
+            key_func = self.get_sort_key(self.sort_column)
+            # Handle None values by converting to empty string for comparison
+            safe_key = lambda x: (key_func(x) is None, key_func(x) if key_func(x) is not None else "")
+            self.entries.sort(key=safe_key, reverse=self.sort_reverse)
+        except (AttributeError, TypeError):
+            # If sorting fails, don't crash
+            pass
+
+    def refresh_table(self) -> None:
+        """Refresh the DataTable with current entries.
+
+        Override in subclass to implement table refresh logic.
+        """
+        raise NotImplementedError("Subclass must implement refresh_table()")
 
 
 # =============================================================================
@@ -718,8 +830,10 @@ class DeleteConfirmOverlay(Container):
         self.post_message(self.DeleteCancelled())
 
 
-class BrowseApp(App):
+class BrowseApp(SortableTableMixin, App):
     """Textual app for browsing entries with DataTable and detail panel."""
+
+    TABLE_ID = "entries-table"
 
     CSS = """
     Screen {
@@ -957,8 +1071,9 @@ class BrowseApp(App):
 
     def __init__(self, entries: list, db):
         super().__init__()
+        self.init_sorting()  # Initialize sorting from SortableTableMixin
         self.all_entries = entries  # Keep original list
-        self.entries = entries  # Current filtered list
+        self.entries = list(entries)  # Current filtered list (copy for sorting)
         self.graph_nav_ids: list[str] = []  # IDs navigable from graph modal
         self.context_sizes: dict[str, int] = {}  # Context compressed sizes
         self.preview_mode = "content"  # "content" or "context"
@@ -1199,6 +1314,91 @@ class BrowseApp(App):
                 ctx_str,
                 key=str(i),
             )
+
+    # =========================================================================
+    # Sortable table implementation (SortableTableMixin)
+    # =========================================================================
+
+    # Column definitions: (key, label_translation_key, width)
+    COLUMNS = [
+        ("type", "browse.type", 10),
+        ("project", "add.project", 12),
+        ("title", "add.title", 50),
+        ("created", "browse.created", 18),
+        ("updated", "browse.updated", 18),
+        ("confidence", "add.confidence", 4),
+        ("access", "browse.access", 6),
+        ("score", "browse.score", 5),
+        ("links_in", "browse.links_in", 3),
+        ("links_out", "browse.links_out", 3),
+        ("context", None, 6),  # "Ctx" label, no translation
+    ]
+
+    def get_sort_key(self, column_key: str):
+        """Get sort key function for a column."""
+        # Map column keys to entry attributes
+        key_map = {
+            "type": lambda e: e.type or "",
+            "project": lambda e: (e.project or "").lower(),
+            "title": lambda e: e.title.lower(),
+            "created": lambda e: e.created_at,
+            "updated": lambda e: e.updated_at,
+            "confidence": lambda e: e.confidence,
+            "access": lambda e: e.access_count,
+            "score": lambda e: e.consolidation_score,
+            "links_in": lambda e: self.db.count_links_by_direction(e.id)[0],
+            "links_out": lambda e: self.db.count_links_by_direction(e.id)[1],
+            "context": lambda e: self.context_sizes.get(e.id, 0),
+        }
+        return key_map.get(column_key, lambda e: "")
+
+    def refresh_table(self) -> None:
+        """Refresh the DataTable with current entries and sort state."""
+        table = self.query_one("#entries-table", DataTable)
+        table.clear(columns=True)
+
+        # Add columns with sort indicators
+        for key, label_key, width in self.COLUMNS:
+            if label_key:
+                base_label = t(label_key)
+            else:
+                base_label = "Ctx"  # Special case for context column
+
+            # Add sort indicator if this column is sorted
+            if self.sort_column == key:
+                indicator = " ▼" if self.sort_reverse else " ▲"
+                label = f"{base_label}{indicator}"
+            else:
+                label = base_label
+
+            table.add_column(label, width=width, key=key)
+
+        # Re-populate rows
+        self._populate_table()
+
+        # Update header
+        self._update_header()
+
+    def on_data_table_header_selected(self, event: DataTable.HeaderSelected) -> None:
+        """Handle column header click for sorting."""
+        column_key = event.column_key.value
+
+        # Toggle sort direction if same column, otherwise sort ascending
+        if self.sort_column == column_key:
+            self.sort_reverse = not self.sort_reverse
+        else:
+            self.sort_column = column_key
+            self.sort_reverse = False
+
+        # Sort entries
+        self.sort_entries()
+
+        # Refresh table
+        self.refresh_table()
+
+        # Notify user
+        direction = "▼" if self.sort_reverse else "▲"
+        self.show_left_notify(f"Trié par {column_key} {direction}", 1.5)
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         """Update detail panel when row selection changes."""
@@ -1559,8 +1759,10 @@ class BrowseApp(App):
         return pattern.sub(replacer, text)
 
 
-class SourcesBrowseApp(App):
+class SourcesBrowseApp(SortableTableMixin, App):
     """Textual app for browsing sources with DataTable and detail panel."""
+
+    TABLE_ID = "sources-table"
 
     CSS = """
     Screen {
@@ -1658,7 +1860,9 @@ class SourcesBrowseApp(App):
 
     def __init__(self, sources: list, db, title: str = None):
         super().__init__()
-        self.sources = sources
+        self.init_sorting()  # Initialize sorting from SortableTableMixin
+        self.sources = list(sources)  # Copy for sorting
+        self.entries = self.sources  # Alias for mixin compatibility
         self.db = db
         self.title = title or t("sources.manage")
         self.selected_source = sources[0] if sources else None
@@ -1776,6 +1980,70 @@ class SourcesBrowseApp(App):
                 Text.from_markup(tags_str),
                 key=str(i),
             )
+
+    # =========================================================================
+    # Sortable table implementation (SortableTableMixin)
+    # =========================================================================
+
+    # Column definitions: (key, label_translation_key, width)
+    COLUMNS = [
+        ("domain", "source.domain", 30),
+        ("score", "source.score", 8),
+        ("status", "source.status", 12),
+        ("role", "source.role", 14),
+        ("reliability", "source.reliability", 5),
+        ("usages", "source.usage_count", 6),
+        ("last_used", "source.last_used", 12),
+        ("tags", "tags.label", 25),
+    ]
+
+    def get_sort_key(self, column_key: str):
+        """Get sort key function for a column."""
+        key_map = {
+            "domain": lambda s: s.domain.lower(),
+            "score": lambda s: s.personal_score,
+            "status": lambda s: s.status or "",
+            "role": lambda s: s.role or "",
+            "reliability": lambda s: s.reliability or "",
+            "usages": lambda s: s.usage_count,
+            "last_used": lambda s: s.last_used or datetime.min,
+            "tags": lambda s: ",".join(self.source_tags.get(s.id, [])),
+        }
+        return key_map.get(column_key, lambda s: "")
+
+    def refresh_table(self) -> None:
+        """Refresh the DataTable with current sources and sort state."""
+        table = self.query_one("#sources-table", DataTable)
+        table.clear(columns=True)
+
+        # Add columns with sort indicators
+        for key, label_key, width in self.COLUMNS:
+            base_label = t(label_key)
+            if self.sort_column == key:
+                indicator = " ▼" if self.sort_reverse else " ▲"
+                label = f"{base_label}{indicator}"
+            else:
+                label = base_label
+            table.add_column(label, width=width, key=key)
+
+        # Re-populate rows
+        self._populate_table()
+
+    def on_data_table_header_selected(self, event: DataTable.HeaderSelected) -> None:
+        """Handle column header click for sorting."""
+        column_key = event.column_key.value
+
+        if self.sort_column == column_key:
+            self.sort_reverse = not self.sort_reverse
+        else:
+            self.sort_column = column_key
+            self.sort_reverse = False
+
+        self.sort_entries()
+        self.refresh_table()
+
+        direction = "▼" if self.sort_reverse else "▲"
+        self.show_left_notify(f"Trié par {column_key} {direction}", 1.5)
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         """Update detail panel when row selection changes."""
@@ -2119,7 +2387,7 @@ class IDEStatusApp(App):
     }
 
     #ide-container {
-        height: auto;
+        height: 1fr;
     }
 
     #status-table {
@@ -2179,6 +2447,54 @@ class IDEStatusApp(App):
         background: #4367CD 30%;
     }
 
+    #preview-panel {
+        height: 1fr;
+        min-height: 10;
+        border: solid #4367CD;
+        margin: 1 1 0 1;
+        padding: 0;
+        background: $surface-darken-1;
+    }
+
+    #preview-title {
+        text-style: bold;
+        color: #93B5F7;
+        padding: 0 1;
+        height: auto;
+    }
+
+    #preview-scroll {
+        height: 1fr;
+        padding: 0 1;
+    }
+
+    #preview-panel Collapsible {
+        padding: 0;
+        margin: 0 0 1 0;
+    }
+
+    #preview-panel CollapsibleTitle {
+        padding: 0 1;
+        background: $surface-darken-2;
+    }
+
+    #preview-panel Collapsible > Contents {
+        padding: 0 1;
+    }
+
+    .file-content {
+        padding: 0;
+        margin: 0;
+    }
+
+    .file-exists {
+        color: green;
+    }
+
+    .file-new {
+        color: yellow;
+    }
+
     Footer {
         background: $surface-darken-1;
     }
@@ -2188,15 +2504,20 @@ class IDEStatusApp(App):
         Binding("escape", "back_or_quit", "Back", show=True),
         Binding("q", "quit", "Quit", show=True),
         Binding("enter", "select_ide", "Select", show=True),
-        Binding("l", "install_all_local", "All Local", show=True),
-        Binding("g", "install_all_global", "All Global", show=True),
+        Binding("l", "install_all_local", "Install Local", show=True),
+        Binding("g", "install_all_global", "Install Global", show=True),
+        Binding("L", "uninstall_all_local", "Uninstall Local", show=True),
+        Binding("G", "uninstall_all_global", "Uninstall Global", show=True),
+        Binding("c", "check_current", "Check", show=True),
+        Binding("C", "check_all", "Check All", show=True),
     ]
 
-    def __init__(self, ide_data: list, status: dict, stats: dict):
+    def __init__(self, ide_data: list, status: dict, stats: dict, base_path: Path):
         super().__init__()
         self.ide_data = ide_data  # [(name, desc, local_target, global_target), ...]
         self.status = status
         self.stats = stats
+        self.base_path = base_path
         self.result = None
         self.selected_ide = None  # Currently selected IDE name
         self.action_panel_visible = False
@@ -2211,6 +2532,11 @@ class IDEStatusApp(App):
                 Static("", id="action-title"),
                 ListView(id="action-list"),
                 id="action-panel",
+            ),
+            Container(
+                Static("Files to install:", id="preview-title"),
+                VerticalScroll(id="preview-scroll"),
+                id="preview-panel",
             ),
             Footer(),
             id="ide-container",
@@ -2250,8 +2576,74 @@ class IDEStatusApp(App):
 
             table.add_row(name, desc, local_str, global_str, key=name)
 
-        # Focus on the table
+        # Focus on the table and show first IDE preview
         table.focus()
+        if self.ide_data:
+            self._update_preview(self.ide_data[0][0])
+
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        """Update preview when a different row is highlighted."""
+        if event.row_key is not None:
+            ide_name = str(event.row_key.value)
+            self._update_preview(ide_name)
+
+    def _update_preview(self, ide_name: str) -> None:
+        """Update the preview panel with files for selected IDE."""
+        from rekall.integrations import get_integration_files
+
+        # Get files info - use global_install based on current status
+        st = self.status.get(ide_name, {})
+        # Show global files if integration supports global
+        use_global = st.get("supports_global", False)
+
+        files = get_integration_files(ide_name, self.base_path, global_install=use_global)
+
+        # Update title
+        title = self.query_one("#preview-title", Static)
+        file_count = len(files)
+        title.update(f"[bold #93B5F7]► {ide_name}[/] - {file_count} file{'s' if file_count != 1 else ''}")
+
+        # Clear and rebuild preview scroll
+        scroll = self.query_one("#preview-scroll", VerticalScroll)
+        scroll.remove_children()
+
+        if not files:
+            scroll.mount(Static("[dim]No files to preview[/dim]"))
+            return
+
+        # Add collapsible for each file
+        for i, file_info in enumerate(files):
+            path = file_info["path"]
+            content = file_info["content"]
+            description = file_info["description"]
+            exists = file_info["exists"]
+
+            # Shorten path for display
+            display_path = path.replace(str(Path.home()), "~")
+
+            # Status indicator
+            if exists:
+                status = "[green]✓[/green]"
+            else:
+                status = "[yellow]NEW[/yellow]"
+
+            # Create collapsible title
+            coll_title = f"{status} {description}"
+
+            # Truncate content for preview (first 50 lines max)
+            lines = content.split('\n')
+            if len(lines) > 50:
+                preview_content = '\n'.join(lines[:50]) + f"\n... ({len(lines) - 50} more lines)"
+            else:
+                preview_content = content
+
+            # Create collapsible (collapsed by default, first one expanded)
+            collapsible = Collapsible(
+                Static(f"[dim]{display_path}[/dim]\n\n{preview_content}", classes="file-content"),
+                title=coll_title,
+                collapsed=(i != 0),  # First one expanded
+            )
+            scroll.mount(collapsible)
 
     def _show_action_panel(self, ide_name: str) -> None:
         """Show action panel for selected IDE."""
@@ -2361,6 +2753,124 @@ class IDEStatusApp(App):
         else:
             self.show_left_notify("Tous déjà installés en global")
 
+    def action_uninstall_all_local(self) -> None:
+        """Uninstall all IDEs locally."""
+        if self.action_panel_visible:
+            return
+        if self.stats['local_installed'] > 0:
+            self.result = ("uninstall_all", False)
+            self.exit(result=self.result)
+        else:
+            self.show_left_notify("Aucun installé en local")
+
+    def action_uninstall_all_global(self) -> None:
+        """Uninstall all IDEs globally."""
+        if self.action_panel_visible:
+            return
+        if self.stats['global_installed'] > 0:
+            self.result = ("uninstall_all", True)
+            self.exit(result=self.result)
+        else:
+            self.show_left_notify("Aucun installé en global")
+
+    def action_check_current(self) -> None:
+        """Check installation status of current IDE."""
+        if self.action_panel_visible:
+            return
+        table = self.query_one("#status-table", DataTable)
+        if table.cursor_row is None:
+            return
+        ide_name = self.ide_data[table.cursor_row][0]
+        self._check_and_update_ide(ide_name)
+
+    def action_check_all(self) -> None:
+        """Check installation status of all IDEs."""
+        if self.action_panel_visible:
+            return
+        for ide_name, _, _, _ in self.ide_data:
+            self._check_and_update_ide(ide_name)
+        self.show_left_notify(f"✓ {len(self.ide_data)} IDEs vérifiés")
+
+    def _check_and_update_ide(self, ide_name: str) -> None:
+        """Check and update status for a single IDE."""
+        from rekall.integrations import get_ide_status
+
+        # Get fresh status
+        fresh_status = get_ide_status(self.base_path)
+        st = fresh_status.get(ide_name, {})
+
+        # Update internal status
+        self.status[ide_name] = st
+
+        # Update table row
+        table = self.query_one("#status-table", DataTable)
+
+        # Find row index
+        row_idx = None
+        for i, (name, _, _, _) in enumerate(self.ide_data):
+            if name == ide_name:
+                row_idx = i
+                break
+
+        if row_idx is None:
+            return
+
+        # Build new status strings
+        if st.get("local"):
+            local_str = "[green]✓[/green]"
+        else:
+            local_str = "[red]✗[/red]"
+
+        if st.get("supports_global"):
+            if st.get("global"):
+                global_str = "[green]✓[/green]"
+            else:
+                global_str = "[red]✗[/red]"
+        else:
+            global_str = "[dim]—[/dim]"
+
+        # Update cells
+        row_key = table.get_row_at(row_idx)
+        table.update_cell(row_key, "local", local_str)
+        table.update_cell(row_key, "global", global_str)
+
+        # Update stats
+        self._recalculate_stats()
+
+        # Update preview
+        self._update_preview(ide_name)
+
+    def _recalculate_stats(self) -> None:
+        """Recalculate stats from current status."""
+        local_installed = 0
+        global_installed = 0
+        local_not_installed = 0
+        global_not_installed = 0
+
+        for name, _, _, _ in self.ide_data:
+            st = self.status.get(name, {})
+            if st.get("local"):
+                local_installed += 1
+            else:
+                local_not_installed += 1
+            if st.get("supports_global"):
+                if st.get("global"):
+                    global_installed += 1
+                else:
+                    global_not_installed += 1
+
+        self.stats = {
+            "local_installed": local_installed,
+            "global_installed": global_installed,
+            "local_not_installed": local_not_installed,
+            "global_not_installed": global_not_installed,
+        }
+
+        # Update legend
+        stats_text = f"Local: {local_installed} ✓ / {local_not_installed} ✗ | Global: {global_installed} ✓ / {global_not_installed} ✗"
+        legend = self.query_one("#legend", Static)
+        legend.update(f"[dim]✓ {t('ide.installed')}  ✗ {t('ide.not_installed')}  — {t('ide.not_supported')}  |  {stats_text}[/dim]")
+
     def show_left_notify(self, message: str, timeout: float = 3.0) -> None:
         """Show a notification on the left side."""
         notify_widget = self.query_one("#left-notify", Static)
@@ -2432,7 +2942,8 @@ class SpeckitApp(App):
     }
 
     #action-panel {
-        height: 1fr;
+        height: auto;
+        max-height: 8;
         border: solid #4367CD;
         margin: 0 1;
         padding: 0 1;
@@ -2448,6 +2959,22 @@ class SpeckitApp(App):
         text-style: bold;
         color: #93B5F7;
         padding: 0 1;
+    }
+
+    #preview-panel {
+        height: 1fr;
+        min-height: 10;
+        border: solid #4367CD;
+        margin: 1 1 0 1;
+        padding: 0;
+        background: $surface-darken-1;
+    }
+
+    #preview-title {
+        text-style: bold;
+        color: #93B5F7;
+        padding: 0 1;
+        height: auto;
     }
 
     #preview-box {
@@ -2541,8 +3068,10 @@ class SpeckitApp(App):
         Binding("escape", "back_or_quit", "Back", show=True),
         Binding("q", "quit", "Quit", show=True),
         Binding("enter", "select_component", "Select", show=True),
-        Binding("i", "install_all", "Install All", show=True),
-        Binding("u", "uninstall_all", "Uninstall All", show=True),
+        Binding("i", "install_current", "Install", show=True),
+        Binding("I", "install_all", "Install All", show=True),
+        Binding("u", "uninstall_current", "Uninstall", show=True),
+        Binding("U", "uninstall_all", "Uninstall All", show=True),
     ]
 
     def __init__(self, status: dict, components: list, labels: dict):
@@ -2552,6 +3081,7 @@ class SpeckitApp(App):
         self.labels = labels
         self.result = None
         self.selected_component = None  # Currently selected component key
+        self.highlighted_component = None  # Currently highlighted component
         self.action_panel_visible = False
         # Compute stats
         self.stats = {
@@ -2564,15 +3094,19 @@ class SpeckitApp(App):
         stats_text = f"{t('ide.installed')}: {self.stats['installed']} ✓ | {t('ide.not_installed')}: {self.stats['not_installed']} ✗"
         yield Container(
             DataTable(id="status-table"),
-            Static(f"[dim]✓ {t('ide.installed')}  ✗ {t('ide.not_installed')}  ⚠ {t('speckit.file_missing')}  |  {stats_text}[/dim]", id="legend"),
+            Static(f"[dim]✓ {t('ide.installed')}  ✗ {t('ide.not_installed')}  ⚠ {t('speckit.file_missing')}  |  i/I install  u/U uninstall  |  {stats_text}[/dim]", id="legend"),
             Container(
                 Static("", id="action-title"),
+                ListView(id="action-list"),
+                id="action-panel",
+            ),
+            Container(
+                Static("Preview", id="preview-title"),
                 VerticalScroll(
                     Markdown("", id="preview-content"),
                     id="preview-box",
                 ),
-                ListView(id="action-list"),
-                id="action-panel",
+                id="preview-panel",
             ),
             Footer(),
             id="speckit-container",
@@ -2603,6 +3137,11 @@ class SpeckitApp(App):
 
         # Focus on the table
         table.focus()
+
+        # Initialize preview with first component
+        if self.components:
+            self.highlighted_component = self.components[0]
+            self._update_preview(self.components[0])
 
     def _format_preview_as_markdown(self, preview_text: str) -> str:
         """Convert preview text to markdown format."""
@@ -2701,23 +3240,24 @@ class SpeckitApp(App):
             component = str(event.row_key.value)
             await self._show_action_panel(component)
 
-    async def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
-        """Handle row highlight (arrow keys) - update preview if panel visible."""
-        if self.action_panel_visible and event.row_key:
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        """Handle row highlight (arrow keys) - always update preview."""
+        if event.row_key:
             component = str(event.row_key.value)
-            # Update preview for highlighted row without changing focus
-            await self._update_preview_only(component)
+            self.highlighted_component = component
+            self._update_preview(component)
 
-    async def _update_preview_only(self, component: str) -> None:
-        """Update preview content without changing focus or actions."""
+    def _update_preview(self, component: str) -> None:
+        """Update preview panel for the given component."""
         from rekall.integrations import get_speckit_preview, get_speckit_uninstall_preview
 
         st = self.status.get(component)
         label = self.labels.get(component, component)
 
         # Update title
-        title = self.query_one("#action-title", Static)
-        title.update(f"► {label}")
+        title = self.query_one("#preview-title", Static)
+        status_icon = "[green]✓[/green]" if st is True else "[red]✗[/red]" if st is False else "[yellow]⚠[/yellow]"
+        title.update(f"{status_icon} {label}")
 
         # Load and display preview
         preview_widget = self.query_one("#preview-content", Markdown)
@@ -2731,20 +3271,6 @@ class SpeckitApp(App):
             preview_text = f"⚠ {t('speckit.file_missing')}"
         preview_md = self._format_preview_as_markdown(preview_text)
         preview_widget.update(preview_md)
-
-        # Update selected component and rebuild actions
-        self.selected_component = component
-        action_list = self.query_one("#action-list", ListView)
-        await action_list.clear()
-
-        if st is True:
-            action_list.append(ListItem(Static(f"[red]✗[/red] {t('ide.uninstall')}"), id="uninstall"))
-        elif st is False:
-            action_list.append(ListItem(Static(f"[green]✓[/green] {t('ide.install')}"), id="install"))
-        else:
-            action_list.append(ListItem(Static(f"[yellow]⚠ {t('speckit.file_missing')}[/yellow]"), id="missing"))
-
-        action_list.append(ListItem(Static(f"[dim]← {t('common.cancel')}[/dim]"), id="cancel"))
 
     async def action_select_component(self) -> None:
         """Handle Enter key - show action panel for selected component."""
@@ -2805,10 +3331,16 @@ class SpeckitApp(App):
             }
             self._refresh_table()
 
+            # Update preview to reflect new state
+            if self.highlighted_component:
+                self._update_preview(self.highlighted_component)
+
         except Exception as e:
             self.show_left_notify(f"✗ {t('common.error')}: {e}")
 
-        self._hide_action_panel()
+        # Only hide action panel if it was visible (from Enter key flow)
+        if self.action_panel_visible:
+            self._hide_action_panel()
 
     def _refresh_table(self) -> None:
         """Refresh the table with updated status."""
@@ -2829,7 +3361,7 @@ class SpeckitApp(App):
         # Update legend
         stats_text = f"{t('ide.installed')}: {self.stats['installed']} ✓ | {t('ide.not_installed')}: {self.stats['not_installed']} ✗"
         legend = self.query_one("#legend", Static)
-        legend.update(f"[dim]✓ {t('ide.installed')}  ✗ {t('ide.not_installed')}  ⚠ {t('speckit.file_missing')}  |  {stats_text}[/dim]")
+        legend.update(f"[dim]✓ {t('ide.installed')}  ✗ {t('ide.not_installed')}  ⚠ {t('speckit.file_missing')}  |  i/I install  u/U uninstall  |  {stats_text}[/dim]")
 
     def action_back_or_quit(self) -> None:
         """Escape - hide panel or quit."""
@@ -2837,6 +3369,34 @@ class SpeckitApp(App):
             self._hide_action_panel()
         else:
             self.exit(result=None)
+
+    def action_install_current(self) -> None:
+        """Install the currently highlighted component."""
+        if self.action_panel_visible:
+            return
+        if not self.highlighted_component:
+            return
+        st = self.status.get(self.highlighted_component)
+        if st is False:
+            self._execute_action("install", self.highlighted_component)
+        elif st is True:
+            self.show_left_notify(t("speckit.already_installed"))
+        else:
+            self.show_left_notify(t("speckit.file_missing"))
+
+    def action_uninstall_current(self) -> None:
+        """Uninstall the currently highlighted component."""
+        if self.action_panel_visible:
+            return
+        if not self.highlighted_component:
+            return
+        st = self.status.get(self.highlighted_component)
+        if st is True:
+            self._execute_action("uninstall", self.highlighted_component)
+        elif st is False:
+            self.show_left_notify(t("speckit.not_installed"))
+        else:
+            self.show_left_notify(t("speckit.file_missing"))
 
     def action_install_all(self) -> None:
         """Install all components."""
@@ -3016,6 +3576,7 @@ class MCPConfigApp(App):
         Binding("left", "prev_cli", "←", show=True),
         Binding("right", "next_cli", "→", show=True),
         Binding("i", "install_config", "Install", show=True),
+        Binding("r", "remove_config", "Remove", show=True),
         Binding("c", "copy_config", "Copy", show=True),
         Binding("question_mark", "toggle_info", "?", show=True),
     ]
@@ -3038,18 +3599,71 @@ class MCPConfigApp(App):
             # Config section
             with VerticalScroll(id="config-scroll"):
                 yield Static(self._build_config(), id="config-section", markup=True)
-        yield Static("[dim]←/→ change CLI • I install • C copy • ? info • Esc back[/dim]", id="footer-hint")
+        yield Static("[dim]←/→ change CLI • i install • r remove • c copy • ? info • Esc back[/dim]", id="footer-hint")
         yield Static("", id="left-notify")
         # Info overlay
         with Container(id="info-overlay"):
             yield Static(self._build_info_text(), id="info-content", markup=True)
 
+    def _check_cli_installed(self) -> bool:
+        """Check if Rekall is configured in the current CLI's config file."""
+        import json
+        from pathlib import Path
+
+        cli_config = self.cli_configs[self.cli_keys[self.selected_idx]]
+        file_path_str = cli_config["file"]
+
+        if file_path_str.startswith("~"):
+            file_path = Path(file_path_str).expanduser()
+        elif file_path_str.startswith("."):
+            file_path = Path.home() / file_path_str
+        else:
+            file_path = Path(file_path_str)
+
+        if not file_path.exists():
+            return False
+
+        try:
+            with open(file_path, encoding="utf-8") as f:
+                content = f.read().strip()
+                if not content:
+                    return False
+                config = json.loads(content)
+
+            # Check all possible formats
+            if "mcpServers" in config:
+                if isinstance(config["mcpServers"], dict):
+                    return "rekall" in config["mcpServers"]
+                elif isinstance(config["mcpServers"], list):
+                    return any(e.get("name") == "rekall" for e in config["mcpServers"])
+            if "context_servers" in config:
+                return "rekall" in config["context_servers"]
+            if "mcp" in config:
+                return "rekall" in config["mcp"]
+            return False
+        except Exception:
+            return False
+
     def _build_status(self) -> str:
         """Build status section content."""
+        cli_name = self.cli_configs[self.cli_keys[self.selected_idx]]["name"]
+        cli_installed = self._check_cli_installed()
+
+        lines = ["[bold]MCP Server[/bold]"]
+
+        # Package status
         if self.deps_ok:
-            return "[bold]MCP Server[/bold]\n[green]✓[/green] Server ready [dim](?)[/dim]"
+            lines.append("[green]✓[/green] Package mcp installé")
         else:
-            return "[bold]MCP Server[/bold]\n[yellow]⚠[/yellow] Server needs: [dim]pip install mcp[/dim] [dim](?)[/dim]"
+            lines.append("[yellow]⚠[/yellow] Package manquant: [dim]pip install mcp[/dim]")
+
+        # CLI config status
+        if cli_installed:
+            lines.append(f"[green]✓[/green] Configuré dans {cli_name}")
+        else:
+            lines.append(f"[dim]○[/dim] Non configuré dans {cli_name}")
+
+        return "\n".join(lines)
 
     def _build_cli_selector(self) -> str:
         """Build CLI selector with arrows."""
@@ -3088,6 +3702,7 @@ d'accéder à vos souvenirs Rekall.
 
     def _update_display(self) -> None:
         """Update display after CLI change."""
+        self.query_one("#status-section", Static).update(self._build_status())
         self.query_one("#cli-label", Static).update(self._build_cli_selector())
         self.query_one("#config-section", Static).update(self._build_config())
 
@@ -3128,6 +3743,15 @@ d'accéder à vos souvenirs Rekall.
         cli_config = self.cli_configs[cli_key]
         result = _install_mcp_config(cli_config)
         self.show_left_notify(result, 4.0)
+        self._update_display()  # Refresh status
+
+    def action_remove_config(self) -> None:
+        """Remove MCP config from the selected CLI's config file."""
+        cli_key = self.cli_keys[self.selected_idx]
+        cli_config = self.cli_configs[cli_key]
+        result = _uninstall_mcp_config(cli_config)
+        self.show_left_notify(result, 4.0)
+        self._update_display()  # Refresh status
 
     def action_toggle_info(self) -> None:
         """Toggle info overlay visibility."""
@@ -3310,37 +3934,7 @@ def action_install_ide():
         menu_options = []
         actions = []
 
-        # ─── DATABASE ───
-        menu_options.append("─── DATABASE ───")
-        actions.append(None)
-
-        menu_options.append(f"  ⓘ {t('maintenance.db_info')}")
-        actions.append("db_info")
-
-        if has_global_db:
-            menu_options.append(f"  {global_icon} {t('setup.use_global')}")
-            actions.append("use_global")
-        else:
-            menu_options.append(f"  {global_icon} {t('setup.create_global')}")
-            actions.append("create_global")
-
-        if has_local_db:
-            menu_options.append(f"  {local_icon} {t('setup.use_local')}")
-            actions.append("use_local")
-        else:
-            menu_options.append(f"  {local_icon} {t('setup.create_local')}")
-            actions.append("create_local")
-
-        if has_global_db and not has_local_db:
-            menu_options.append(f"  → {t('setup.copy_global_to_local')}")
-            actions.append("migrate_to_local")
-        if has_local_db and not has_global_db:
-            menu_options.append(f"  → {t('setup.copy_local_to_global')}")
-            actions.append("migrate_to_global")
-
-        # Spacer + INTEGRATIONS section
-        menu_options.append("")
-        actions.append(None)
+        # ─── INTEGRATIONS ───
         menu_options.append("─── INTEGRATIONS ───")
         actions.append(None)
 
@@ -3379,6 +3973,36 @@ def action_install_ide():
         size_kb = config.max_context_size // 1024
         menu_options.append(f"      └─ Max size: {size_kb} KB")
         actions.append("settings_max_context_size")
+
+        # Spacer + DATABASE section
+        menu_options.append("")
+        actions.append(None)
+        menu_options.append("─── DATABASE ───")
+        actions.append(None)
+
+        menu_options.append(f"  ⓘ {t('maintenance.db_info')}")
+        actions.append("db_info")
+
+        if has_global_db:
+            menu_options.append(f"  {global_icon} {t('setup.use_global')}")
+            actions.append("use_global")
+        else:
+            menu_options.append(f"  {global_icon} {t('setup.create_global')}")
+            actions.append("create_global")
+
+        if has_local_db:
+            menu_options.append(f"  {local_icon} {t('setup.use_local')}")
+            actions.append("use_local")
+        else:
+            menu_options.append(f"  {local_icon} {t('setup.create_local')}")
+            actions.append("create_local")
+
+        if has_global_db and not has_local_db:
+            menu_options.append(f"  → {t('setup.copy_global_to_local')}")
+            actions.append("migrate_to_local")
+        if has_local_db and not has_global_db:
+            menu_options.append(f"  → {t('setup.copy_local_to_global')}")
+            actions.append("migrate_to_global")
 
         # Spacer + ABOUT section
         menu_options.append("")
@@ -3594,6 +4218,7 @@ def _ide_integration_submenu():
         get_ide_status,
         install,
         install_all_ide,
+        uninstall_all_ide,
         uninstall_ide,
     )
 
@@ -3635,7 +4260,7 @@ def _ide_integration_submenu():
         }
 
         # Show IDEStatusApp - table with action panel below
-        app = IDEStatusApp(filtered, status, stats)
+        app = IDEStatusApp(filtered, status, stats, Path.cwd())
         result = app.run()
 
         if result is None:
@@ -3664,6 +4289,13 @@ def _ide_integration_submenu():
             res = install_all_ide(Path.cwd(), global_install)
             installed_count = len(res.get("installed", []))
             show_toast(f"✓ Installation {loc}: {installed_count} IDE(s)", 2.0)
+        elif action == "uninstall_all":
+            # Bulk uninstall: ("uninstall_all", global_bool)
+            global_install = result[1]
+            loc = "GLOBAL" if global_install else "LOCAL"
+            res = uninstall_all_ide(Path.cwd(), global_install)
+            removed_count = len(res.get("removed", []))
+            show_toast(f"✓ Désinstallation {loc}: {removed_count} IDE(s)", 2.0)
 
 
 def action_speckit_integration():
@@ -3675,7 +4307,8 @@ def action_speckit_integration():
 
     # Component display names
     COMPONENT_LABELS = {
-        "article": "Article XCIX (constitution)",
+        "article_short": "Article XCIX - Court (~350 tokens) ★ recommandé",
+        "article_extensive": "Article XCIX - Extensif (~1000 tokens)",
         "speckit.implement.md": "speckit.implement.md",
         "speckit.clarify.md": "speckit.clarify.md",
         "speckit.specify.md": "speckit.specify.md",
@@ -3685,7 +4318,7 @@ def action_speckit_integration():
     }
 
     # All components in order (skill is now installed via Claude Code IDE integration)
-    ALL_COMPONENTS = ["article"] + list(SPECKIT_PATCHES.keys())
+    ALL_COMPONENTS = ["article_short", "article_extensive"] + list(SPECKIT_PATCHES.keys())
 
     while True:
         # Get current status
@@ -3864,154 +4497,82 @@ def action_search():
 
 
 def action_sources():
-    """Sources Dashboard - manage documentary sources."""
+    """Unified Sources Manager - manage Sources, Inbox, and Staging."""
     db = get_db()
 
+    result = run_unified_sources(db)
+
+    # Handle result actions that need external processing
+    if result:
+        action_type, item = result
+        if action_type == "tags":
+            _edit_source_tags_standalone(db, item)
+        elif action_type == "enrich":
+            # Trigger enrichment for inbox entry
+            from rekall.sources_inbox import enrich_inbox_entry
+            enrich_inbox_entry(db, item.id)
+
+
+def _edit_source_tags_standalone(db, source):
+    """Edit tags for a source (standalone function for external call)."""
     while True:
-        # Get statistics
-        stats = db.get_source_statistics()
+        current_tags = db.get_source_themes(source.id)
 
-        # Build dashboard menu
         menu_options = []
-        actions = []
-
-        # ─── STATISTICS ───
-        menu_options.append(f"─── {t('dashboard.statistics').upper()} ───")
-        actions.append(None)
-
-        menu_options.append(f"  {t('dashboard.total_sources')}: {stats.get('total', 0)}")
-        actions.append(None)
-
-        menu_options.append(f"  {t('dashboard.total_links')}: {stats.get('total_links', 0)}")
-        actions.append(None)
-
-        menu_options.append(f"  {t('dashboard.avg_score')}: {stats.get('avg_score', 0):.1f}")
-        actions.append(None)
-
-        # ─── SEEDS SOURCES (Feature 010) ───
-        seeds = db.get_seed_sources(limit=3)
-        if seeds:
-            menu_options.append("")
-            actions.append(None)
-            menu_options.append(f"─── {t('dashboard.seeds').upper()} ───")
-            actions.append(None)
-
-            for source in seeds:
-                role_icon = _role_icon(source.role)
-                origin = source.seed_origin.split("/")[-1][:20] if source.seed_origin else ""
-                menu_options.append(f"  🌱 {role_icon} {source.domain} [dim]({origin})[/dim]")
-                actions.append(("view_source", source))
-
-        # ─── PROMOTED SOURCES (Feature 010) ───
-        promoted = db.get_promoted_sources(limit=3)
-        if promoted:
-            menu_options.append("")
-            actions.append(None)
-            menu_options.append(f"─── {t('dashboard.promoted').upper()} ───")
-            actions.append(None)
-
-            for source in promoted:
-                role_icon = _role_icon(source.role)
-                promoted_at = source.promoted_at.strftime("%Y-%m-%d") if source.promoted_at else ""
-                menu_options.append(f"  ⭐ {role_icon} {source.domain} [dim]({promoted_at})[/dim]")
-                actions.append(("view_source", source))
-
-        # ─── TOP SOURCES ───
+        menu_options.append(f"[bold]{source.domain}[/bold]")
         menu_options.append("")
-        actions.append(None)
-
-        menu_options.append(f"─── {t('dashboard.top_sources').upper()} ───")
-        actions.append(None)
-
-        top_sources = db.get_top_sources(limit=5)
-        if top_sources:
-            for source in top_sources:
-                role_icon = _role_icon(source.role)
-                score_bar = _score_bar(source.personal_score)
-                menu_options.append(f"  {score_bar} {role_icon} {source.domain}")
-                actions.append(("view_source", source))
-        else:
-            menu_options.append(f"  [dim]{t('source.no_sources')}[/dim]")
-            actions.append(None)
-
-        # ─── DORMANT SOURCES ───
-        dormant = db.get_dormant_sources(limit=3)
-        if dormant:
-            menu_options.append("")
-            actions.append(None)
-            menu_options.append(f"─── {t('dashboard.dormant_sources').upper()} ───")
-            actions.append(None)
-
-            for source in dormant:
-                last_used = source.last_used.strftime("%Y-%m-%d") if source.last_used else t("source_detail.never_used")
-                menu_options.append(f"  💤 {source.domain} ({last_used})")
-                actions.append(("view_source", source))
-
-        # ─── INACCESSIBLE SOURCES ───
-        inaccessible = db.get_inaccessible_sources(limit=3)
-        if inaccessible:
-            menu_options.append("")
-            actions.append(None)
-            menu_options.append(f"─── {t('dashboard.inaccessible_sources').upper()} ───")
-            actions.append(None)
-
-            for source in inaccessible:
-                menu_options.append(f"  ⚠️ {source.domain}")
-                actions.append(("view_source", source))
-
-        # ─── ACTIONS ───
+        menu_options.append(f"Tags: {', '.join(current_tags) if current_tags else '[dim]aucun[/dim]'}")
         menu_options.append("")
-        actions.append(None)
-        menu_options.append("─── ACTIONS ───")
-        actions.append(None)
 
-        menu_options.append(f"  🏷️ {t('tags.browse_by_tag')}")
-        actions.append("browse_by_tag")
+        if current_tags:
+            for tag in current_tags:
+                menu_options.append(f"  ❌ Retirer: {tag}")
 
-        menu_options.append(f"  🔎 {t('filter.title')}")
-        actions.append("advanced_search")
-
-        menu_options.append(f"  📁 {t('filter.saved_views')}")
-        actions.append("saved_views")
-
-        menu_options.append(f"  🔍 {t('dashboard.verify_links')}")
-        actions.append("verify_links")
-
-        menu_options.append(f"  ➕ {t('dashboard.add_source')}")
-        actions.append("add_source")
-
-        menu_options.append(f"  📋 {t('sources.manage')}")
-        actions.append("list_all")
-
-        # ─── BACK ───
         menu_options.append("")
-        actions.append(None)
+        menu_options.append("  ➕ Ajouter un tag")
         menu_options.append(f"← {t('common.back')}")
-        actions.append("back")
 
-        # Show menu
-        app = SimpleMenuApp(t("menu.sources"), menu_options)
+        app = SimpleMenuApp("Éditer les tags", menu_options)
         idx = app.run()
 
-        if idx is None or actions[idx] == "back":
+        if idx is None:
             return
 
-        action = actions[idx]
+        # Calculate indices
+        first_tag_idx = 4  # After header
+        add_tag_idx = first_tag_idx + len(current_tags) + 1
+        back_idx = add_tag_idx + 1
 
-        if action == "browse_by_tag":
-            _browse_by_tag(db)
-        elif action == "advanced_search":
-            _advanced_search_sources(db)
-        elif action == "saved_views":
-            _manage_saved_views(db)
-        elif action == "verify_links":
-            _verify_source_links(db)
-        elif action == "add_source":
-            _add_standalone_source(db)
-        elif action == "list_all":
-            _list_all_sources(db)
-        elif isinstance(action, tuple) and action[0] == "view_source":
-            _show_source_detail(db, action[1])
+        if idx == back_idx or idx == back_idx - 1:  # Back
+            return
+        elif idx == add_tag_idx:  # Add tag
+            all_tags = db.get_all_tags_with_counts()
+            existing_tag_names = [t["theme"] for t in all_tags]
+
+            tag_options = [f"{t['theme']} ({t['count']})" for t in all_tags]
+            tag_options.append("")
+            tag_options.append("✏️  Nouveau tag...")
+            tag_options.append(f"← {t('common.cancel')}")
+
+            tag_app = SimpleMenuApp("Choisir un tag", tag_options)
+            tag_idx = tag_app.run()
+
+            if tag_idx is None or tag_idx >= len(existing_tag_names) + 2:
+                continue
+
+            if tag_idx == len(existing_tag_names) + 1:  # New tag
+                new_tag = show_input("Nom du nouveau tag:")
+                if new_tag and new_tag.strip():
+                    db.add_source_theme(source.id, new_tag.strip())
+            elif tag_idx < len(existing_tag_names):
+                selected_tag = existing_tag_names[tag_idx]
+                if selected_tag not in current_tags:
+                    db.add_source_theme(source.id, selected_tag)
+
+        elif first_tag_idx <= idx < first_tag_idx + len(current_tags):
+            # Remove tag
+            tag_to_remove = current_tags[idx - first_tag_idx]
+            db.remove_source_theme(source.id, tag_to_remove)
 
 
 def _score_bar(score: float, width: int = 5) -> str:
@@ -5987,6 +6548,87 @@ def _install_mcp_config(cli_config: dict) -> str:
         return f"⚠ Error: {str(e)[:40]}"
 
 
+def _uninstall_mcp_config(cli_config: dict) -> str:
+    """Remove MCP config from the CLI's config file.
+
+    Removes the 'rekall' entry from mcpServers, context_servers, or mcp section.
+
+    Args:
+        cli_config: Dict with 'name', 'file', 'config' keys
+
+    Returns:
+        Status message for notification
+    """
+    import json
+    from pathlib import Path
+
+    file_path_str = cli_config["file"]
+
+    # Expand path
+    if file_path_str.startswith("~"):
+        file_path = Path(file_path_str).expanduser()
+    elif file_path_str.startswith("."):
+        file_path = Path.home() / file_path_str
+    else:
+        file_path = Path(file_path_str)
+
+    if not file_path.exists():
+        return "⚠ Config file not found"
+
+    try:
+        with open(file_path, encoding="utf-8") as f:
+            content = f.read().strip()
+            if not content:
+                return "⚠ Config file is empty"
+            existing_config = json.loads(content)
+
+        removed = False
+
+        # Check mcpServers (dict format - most CLIs)
+        if "mcpServers" in existing_config:
+            if isinstance(existing_config["mcpServers"], dict):
+                if "rekall" in existing_config["mcpServers"]:
+                    del existing_config["mcpServers"]["rekall"]
+                    removed = True
+            elif isinstance(existing_config["mcpServers"], list):
+                # Array format (Continue.dev)
+                original_len = len(existing_config["mcpServers"])
+                existing_config["mcpServers"] = [
+                    entry for entry in existing_config["mcpServers"]
+                    if entry.get("name") != "rekall"
+                ]
+                if len(existing_config["mcpServers"]) < original_len:
+                    removed = True
+
+        # Check context_servers (Zed format)
+        if "context_servers" in existing_config:
+            if "rekall" in existing_config["context_servers"]:
+                del existing_config["context_servers"]["rekall"]
+                removed = True
+
+        # Check mcp (OpenCode format)
+        if "mcp" in existing_config:
+            if "rekall" in existing_config["mcp"]:
+                del existing_config["mcp"]["rekall"]
+                removed = True
+
+        if not removed:
+            return "⚠ Rekall not found in config"
+
+        # Write updated config
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(json.dumps(existing_config, indent=2, ensure_ascii=False) + "\n")
+
+        return f"✓ Removed from {file_path.name}"
+
+    except json.JSONDecodeError:
+        return "⚠ Invalid JSON in config file"
+    except PermissionError:
+        return f"⚠ Permission denied: {file_path}"
+    except Exception as e:
+        return f"⚠ Error: {str(e)[:40]}"
+
+
 def _configure_mcp():
     """Configure MCP Server - single screen with CLI selector."""
     mcp_ok = _check_mcp_deps()
@@ -6986,8 +7628,10 @@ def format_relative_time(dt: datetime) -> str:
     return t("inbox.time_ago", time=time_str)
 
 
-class InboxBrowseApp(App):
+class InboxBrowseApp(SortableTableMixin, App):
     """Textual app for browsing inbox entries with DataTable and detail panel."""
+
+    TABLE_ID = "inbox-table"
 
     CSS = """
     Screen {
@@ -7080,11 +7724,11 @@ class InboxBrowseApp(App):
         Binding("v", "toggle_quarantine", "Quarantine", show=True),
         Binding("d", "delete_entry", "Delete", show=True),
         Binding("r", "refresh", "Refresh", show=True),
-        Binding("h", "setup_claude_hook", "Hook", show=True),
     ]
 
     def __init__(self, db, show_quarantine: bool = False):
         super().__init__()
+        self.init_sorting()  # Initialize sorting from SortableTableMixin
         self.db = db
         self.show_quarantine = show_quarantine
         self.entries: list = []
@@ -7189,6 +7833,69 @@ class InboxBrowseApp(App):
             captured = format_relative_time(entry.captured_at)
 
             table.add_row(url, domain, cli, project, status, captured, key=entry.id)
+
+    # =========================================================================
+    # Sortable table implementation (SortableTableMixin)
+    # =========================================================================
+
+    COLUMNS = [
+        ("url", "inbox.url", 50),
+        ("domain", "inbox.domain", 20),
+        ("cli", "inbox.cli_source", 10),
+        ("project", "inbox.project", 20),
+        ("status", "inbox.status", 12),
+        ("captured", "inbox.captured_at", 12),
+    ]
+
+    def get_sort_key(self, column_key: str):
+        """Get sort key function for a column."""
+        key_map = {
+            "url": lambda e: e.url.lower(),
+            "domain": lambda e: (e.domain or "").lower(),
+            "cli": lambda e: (e.cli_source or ""),
+            "project": lambda e: (e.project or "").lower(),
+            "status": lambda e: (0 if not e.is_valid else (1 if e.enriched_at else 2)),  # quarantine, enriched, pending
+            "captured": lambda e: e.captured_at,
+        }
+        return key_map.get(column_key, lambda e: "")
+
+    def refresh_table(self) -> None:
+        """Refresh the DataTable with current entries and sort state."""
+        table = self.query_one("#inbox-table", DataTable)
+        table.clear(columns=True)
+
+        # Add columns with sort indicators
+        for key, label_key, width in self.COLUMNS:
+            base_label = t(label_key)
+            if self.sort_column == key:
+                indicator = " ▼" if self.sort_reverse else " ▲"
+                label = f"{base_label}{indicator}"
+            else:
+                label = base_label
+            table.add_column(label, width=width, key=key)
+
+        # Re-populate rows
+        self._populate_table()
+
+        # Update header
+        title = t("inbox.quarantine") if self.show_quarantine else t("inbox.title")
+        self.query_one("#section-title", Static).update(f"[dim]{title} ({len(self.entries)})[/dim]")
+
+    def on_data_table_header_selected(self, event: DataTable.HeaderSelected) -> None:
+        """Handle column header click for sorting."""
+        column_key = event.column_key.value
+
+        if self.sort_column == column_key:
+            self.sort_reverse = not self.sort_reverse
+        else:
+            self.sort_column = column_key
+            self.sort_reverse = False
+
+        self.sort_entries()
+        self.refresh_table()
+
+        direction = "▼" if self.sort_reverse else "▲"
+        self.show_left_notify(f"Trié par {column_key} {direction}", 1.5)
 
     def _update_detail_panel(self, entry) -> None:
         """Update detail panel with entry information."""
@@ -7313,85 +8020,6 @@ class InboxBrowseApp(App):
 
         self.show_left_notify("Refreshed")
 
-    def action_setup_claude_hook(self) -> None:
-        """Setup Claude Code PostToolUse hook for real-time URL capture."""
-        import json
-        from importlib.resources import files
-        from pathlib import Path
-
-        settings_path = Path.home() / ".claude" / "settings.json"
-        hook_dest = Path.home() / ".claude" / "hooks" / "rekall-webfetch.sh"
-
-        # Step 1: Ensure hook script exists (install if missing)
-        if not hook_dest.exists():
-            try:
-                # Get source hook from package
-                try:
-                    hook_source = files("rekall.data.hooks").joinpath("rekall-webfetch.sh")
-                    content = hook_source.read_text()
-                except Exception:
-                    # Fallback for development
-                    dev_path = Path(__file__).parent / "data" / "hooks" / "rekall-webfetch.sh"
-                    if dev_path.exists():
-                        content = dev_path.read_text()
-                    else:
-                        self.show_left_notify("[red]Hook script not found in package[/red]", timeout=5.0)
-                        return
-
-                hook_dest.parent.mkdir(parents=True, exist_ok=True)
-                hook_dest.write_text(content)
-                hook_dest.chmod(0o755)
-            except Exception as e:
-                self.show_left_notify(f"[red]Error installing hook: {e}[/red]", timeout=5.0)
-                return
-
-        # Step 2: Load or create settings
-        settings = {}
-        if settings_path.exists():
-            try:
-                settings = json.loads(settings_path.read_text())
-            except json.JSONDecodeError:
-                settings = {}
-
-        # Check if hook already configured
-        hooks = settings.get("hooks", {})
-        post_tool_use = hooks.get("PostToolUse", [])
-
-        # Check if our hook is already there
-        hook_already_exists = any(
-            h.get("matcher") == "WebFetch" and
-            any("rekall-webfetch" in hh.get("command", "") for hh in h.get("hooks", []))
-            for h in post_tool_use
-        )
-
-        if hook_already_exists:
-            self.show_left_notify("[green]✓ Hook already configured[/green]")
-            return
-
-        # Add our hook configuration
-        new_hook = {
-            "matcher": "WebFetch",
-            "hooks": [
-                {
-                    "type": "command",
-                    "command": str(hook_dest)
-                }
-            ]
-        }
-        post_tool_use.append(new_hook)
-        hooks["PostToolUse"] = post_tool_use
-        settings["hooks"] = hooks
-
-        # Ensure .claude directory exists
-        settings_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Write settings
-        try:
-            settings_path.write_text(json.dumps(settings, indent=2))
-            self.show_left_notify("[green]✓ Claude hook installed![/green]", timeout=5.0)
-        except Exception as e:
-            self.show_left_notify(f"[red]Error: {e}[/red]", timeout=5.0)
-
 
 def run_inbox_browser(db, show_quarantine: bool = False) -> str | None:
     """Run the inbox browser TUI.
@@ -7412,8 +8040,10 @@ def run_inbox_browser(db, show_quarantine: bool = False) -> str | None:
 # =============================================================================
 
 
-class StagingBrowseApp(App):
+class StagingBrowseApp(SortableTableMixin, App):
     """Textual app for browsing staging entries with DataTable, scores and detail panel."""
+
+    TABLE_ID = "staging-table"
 
     CSS = """
     Screen {
@@ -7509,6 +8139,7 @@ class StagingBrowseApp(App):
 
     def __init__(self, db, show_promoted: bool = False):
         super().__init__()
+        self.init_sorting()  # Initialize sorting from SortableTableMixin
         self.db = db
         self.show_promoted = show_promoted
         self.entries: list = []
@@ -7638,6 +8269,79 @@ class StagingBrowseApp(App):
                 indicator_str, domain, title, content_type,
                 citations, projects, score_str, key=entry.id
             )
+
+    # =========================================================================
+    # Sortable table implementation (SortableTableMixin)
+    # =========================================================================
+
+    COLUMNS = [
+        ("indicator", None, 3),  # No translation for indicator
+        ("domain", "staging.domain", 25),
+        ("title", "staging.title.desc", 35),
+        ("type", "staging.content_type", 14),
+        ("citations", "staging.citations", 8),
+        ("projects", "staging.projects", 8),
+        ("score", None, 8),  # "Score" label
+    ]
+
+    def get_sort_key(self, column_key: str):
+        """Get sort key function for a column."""
+        key_map = {
+            "indicator": lambda e: e.promotion_score or 0,  # Sort by score for indicator
+            "domain": lambda e: (e.domain or "").lower(),
+            "title": lambda e: (e.title or "").lower(),
+            "type": lambda e: e.content_type or "",
+            "citations": lambda e: e.citation_count,
+            "projects": lambda e: e.project_count,
+            "score": lambda e: e.promotion_score or 0,
+        }
+        return key_map.get(column_key, lambda e: "")
+
+    def refresh_table(self) -> None:
+        """Refresh the DataTable with current entries and sort state."""
+        table = self.query_one("#staging-table", DataTable)
+        table.clear(columns=True)
+
+        # Add columns with sort indicators
+        for key, label_key, width in self.COLUMNS:
+            if label_key:
+                base_label = t(label_key)
+                if len(base_label) > width - 2:
+                    base_label = base_label[:width - 2]
+            elif key == "score":
+                base_label = "Score"
+            else:
+                base_label = ""  # indicator column
+
+            if self.sort_column == key:
+                indicator = " ▼" if self.sort_reverse else " ▲"
+                label = f"{base_label}{indicator}"
+            else:
+                label = base_label
+            table.add_column(label, width=width, key=key)
+
+        # Re-populate rows
+        self._populate_table()
+
+        # Update header
+        title = t("staging.title")
+        self.query_one("#section-title", Static).update(f"[dim]{title} ({len(self.entries)})[/dim]")
+
+    def on_data_table_header_selected(self, event: DataTable.HeaderSelected) -> None:
+        """Handle column header click for sorting."""
+        column_key = event.column_key.value
+
+        if self.sort_column == column_key:
+            self.sort_reverse = not self.sort_reverse
+        else:
+            self.sort_column = column_key
+            self.sort_reverse = False
+
+        self.sort_entries()
+        self.refresh_table()
+
+        direction = "▼" if self.sort_reverse else "▲"
+        self.show_left_notify(f"Trié par {column_key} {direction}", 1.5)
 
     def _update_detail_panel(self, entry) -> None:
         """Update detail panel with entry information."""
@@ -7776,6 +8480,1154 @@ def run_staging_browser(db, show_promoted: bool = False) -> str | None:
 
 
 # =============================================================================
+# Unified Sources Manager (Feature 018)
+# =============================================================================
+
+
+class UnifiedSourcesApp(SortableTableMixin, App):
+    """Unified Sources Manager with tabs for Sources, Inbox, and Staging.
+
+    Provides a single interface to manage the entire sources workflow:
+    - Sources: Promoted/active sources in the knowledge base
+    - Inbox: Captured URLs awaiting processing
+    - Staging: Enriched sources awaiting promotion
+    """
+
+    CSS = """
+    Screen {
+        background: $surface;
+        layers: base modal;
+    }
+
+    /* Tab styling */
+    TabbedContent {
+        height: 1fr;
+    }
+
+    TabPane {
+        padding: 0;
+    }
+
+    /* Tables */
+    .sources-table {
+        height: 1fr;
+        min-height: 10;
+        border: solid $primary;
+        margin: 0 1;
+    }
+
+    DataTable {
+        height: 100%;
+    }
+
+    DataTable > .datatable--cursor {
+        background: $primary 40%;
+    }
+
+    DataTable:focus > .datatable--cursor {
+        background: $primary 60%;
+    }
+
+    /* Detail panel */
+    #detail-panel {
+        height: auto;
+        max-height: 12;
+        border: solid $secondary;
+        margin: 0 1 1 1;
+        padding: 1 2;
+        background: $surface-darken-1;
+    }
+
+    #detail-title {
+        text-style: bold;
+        color: $text;
+    }
+
+    #detail-meta {
+        color: $text-muted;
+        margin-top: 1;
+    }
+
+    /* Left notification */
+    #left-notify {
+        dock: bottom;
+        width: auto;
+        max-width: 60;
+        height: auto;
+        padding: 1 2;
+        margin: 1 2;
+        background: #1e2a4a;
+        border: thick #4367CD;
+        color: #93B5F7;
+        text-style: bold;
+        display: none;
+        layer: notification;
+    }
+
+    #left-notify.visible {
+        display: block;
+    }
+
+    /* Filter overlay */
+    #filter-overlay {
+        display: none;
+        layer: modal;
+        dock: top;
+        width: 60;
+        height: auto;
+        max-height: 80%;
+        padding: 1 2;
+        margin: 10 40;
+        background: $surface;
+        border: thick $primary;
+    }
+
+    #filter-overlay.visible {
+        display: block;
+    }
+
+    #filter-title {
+        text-style: bold;
+        text-align: center;
+        margin-bottom: 1;
+    }
+
+    /* Actions overlay */
+    #actions-overlay {
+        display: none;
+        layer: modal;
+        dock: top;
+        width: 50;
+        height: auto;
+        max-height: 80%;
+        padding: 1 2;
+        margin: 10 45;
+        background: $surface;
+        border: thick $secondary;
+    }
+
+    #actions-overlay.visible {
+        display: block;
+    }
+
+    #actions-title {
+        text-style: bold;
+        text-align: center;
+        margin-bottom: 1;
+    }
+
+    #actions-list {
+        height: auto;
+        max-height: 15;
+    }
+
+    /* Enrich overlay */
+    #enrich-overlay {
+        display: none;
+        layer: modal;
+        dock: top;
+        width: 80;
+        height: auto;
+        max-height: 80%;
+        padding: 1 2;
+        margin: 5 30;
+        background: $surface;
+        border: thick #4367CD;
+    }
+
+    #enrich-overlay.visible {
+        display: block;
+    }
+
+    #enrich-type {
+        layout: horizontal;
+        height: auto;
+        width: auto;
+    }
+
+    #enrich-type > RadioButton {
+        width: auto;
+        padding: 0 1;
+    }
+
+    #enrich-score {
+        layout: horizontal;
+        height: auto;
+        width: auto;
+    }
+
+    #enrich-score > RadioButton {
+        width: auto;
+        padding: 0 1;
+    }
+
+    #enrich-title {
+        text-style: bold;
+        text-align: center;
+        color: #93B5F7;
+        margin-bottom: 0;
+    }
+
+    #enrich-url {
+        color: #93B5F7;
+        margin-bottom: 0;
+    }
+
+    #enrich-form {
+        height: auto;
+        padding: 0;
+    }
+
+    .enrich-label {
+        color: #93B5F7;
+        text-style: bold;
+        margin-top: 0;
+    }
+
+    #enrich-buttons {
+        layout: horizontal;
+        margin-top: 1;
+        align: center middle;
+        height: 3;
+    }
+
+    #enrich-buttons Button {
+        margin: 0 1;
+        min-width: 12;
+        background: #4367CD;
+        color: #93B5F7;
+    }
+
+    #enrich-buttons Button:hover {
+        background: #93B5F7;
+        color: #4367CD;
+    }
+
+    Footer {
+        background: $surface-darken-1;
+    }
+    """ + BANNER_CSS
+
+    BINDINGS = [
+        Binding("escape", "close_or_quit", "Back", show=True),
+        Binding("q", "quit", "Quit", show=True),
+        Binding("s", "tab_sources", "Sources", show=True),
+        Binding("i", "tab_inbox", "Inbox", show=True),
+        Binding("g", "tab_staging", "Staging", show=True),
+        Binding("f", "toggle_filter", "Filter", show=True),
+        Binding("enter", "show_actions", "Actions", show=True),
+        Binding("slash", "search", "Search", show=False),
+        Binding("e", "quick_edit", "Edit", show=False),
+        Binding("d", "quick_delete", "Delete", show=False),
+        Binding("t", "quick_tags", "Tags", show=False),
+        Binding("p", "quick_promote", "Promote", show=False),
+        Binding("r", "refresh", "Refresh", show=True),
+    ]
+
+    def __init__(self, db):
+        super().__init__()
+        self.init_sorting()
+        self.db = db
+        self.current_tab = "sources"  # sources, inbox, staging
+
+        # Data for each tab
+        self.sources: list = []
+        self.inbox_entries: list = []
+        self.staging_entries: list = []
+
+        # Selected items
+        self.selected_source = None
+        self.selected_inbox = None
+        self.selected_staging = None
+
+        # For mixin compatibility
+        self.entries = self.sources
+
+        # Cache
+        self.source_tags: dict[str, list[str]] = {}
+
+        # Tags suggester for auto-completion (supports comma-separated tags)
+        all_tags = db.get_all_tags_with_counts()
+        self.all_tag_names = [t["theme"] for t in all_tags]
+        self.tags_suggester = MultiTagSuggester(self.all_tag_names, case_sensitive=False)
+
+        # Result for caller
+        self.result_action = None
+
+    def compose(self) -> ComposeResult:
+        yield create_banner_container()
+
+        # Tabbed content with counts in labels
+        with TabbedContent(id="tabs"):
+            with TabPane("Sources (0)", id="tab-sources"):
+                yield DataTable(id="sources-table", classes="sources-table")
+
+            with TabPane("Inbox (0)", id="tab-inbox"):
+                yield DataTable(id="inbox-table", classes="sources-table")
+
+            with TabPane("Staging (0)", id="tab-staging"):
+                yield DataTable(id="staging-table", classes="sources-table")
+
+        # Detail panel (shared)
+        yield Container(
+            Static("", id="detail-title"),
+            Static("", id="detail-meta"),
+            id="detail-panel",
+        )
+
+        yield Footer()
+        yield Static("", id="left-notify")
+
+        # Filter overlay
+        yield Container(
+            Static("[bold]Filtrer les sources[/bold]", id="filter-title"),
+            Static("[dim]f: fermer • Entrez critères de recherche[/dim]"),
+            Input(placeholder="Recherche...", id="filter-input"),
+            id="filter-overlay",
+        )
+
+        # Actions overlay
+        yield Container(
+            Static("[bold]Actions[/bold]", id="actions-title"),
+            ListView(id="actions-list"),
+            Static("[dim]Entrée: sélectionner • Esc: fermer[/dim]"),
+            id="actions-overlay",
+        )
+
+        # Enrich overlay
+        yield Container(
+            Static("[bold]Enrichissement[/bold]", id="enrich-title"),
+            Static("", id="enrich-url"),
+            Container(
+                Static("Titre", classes="enrich-label"),
+                Input(placeholder="Titre de la source", id="enrich-input-title"),
+                Static("Type", classes="enrich-label"),
+                RadioSet(
+                    RadioButton("documentation", id="type-doc"),
+                    RadioButton("article", id="type-article"),
+                    RadioButton("tutorial", id="type-tutorial"),
+                    RadioButton("paper", id="type-paper"),
+                    RadioButton("tool", id="type-tool"),
+                    RadioButton("reference", id="type-ref"),
+                    RadioButton("other", id="type-other"),
+                    id="enrich-type",
+                ),
+                Static("Tags", classes="enrich-label"),
+                Input(
+                    placeholder="tag1, tag2, tag3",
+                    id="enrich-input-tags",
+                    suggester=self.tags_suggester,
+                ),
+                Static("Score (1-5)", classes="enrich-label"),
+                RadioSet(
+                    RadioButton("1", id="score-1"),
+                    RadioButton("2", id="score-2"),
+                    RadioButton("3", id="score-3", value=True),
+                    RadioButton("4", id="score-4"),
+                    RadioButton("5", id="score-5"),
+                    id="enrich-score",
+                ),
+                id="enrich-form",
+            ),
+            Container(
+                Button("Annuler", id="enrich-cancel"),
+                Button("OK", id="enrich-submit"),
+                id="enrich-buttons",
+            ),
+            id="enrich-overlay",
+        )
+
+    def on_mount(self) -> None:
+        """Initialize all tables and load data."""
+        self._load_all_data()
+        self._setup_sources_table()
+        self._setup_inbox_table()
+        self._setup_staging_table()
+        self._update_stats()
+
+        # Focus first tab
+        self._switch_to_tab("sources")
+
+    def _load_all_data(self) -> None:
+        """Load data for all tabs."""
+        # Sources
+        self.sources = list(self.db.list_sources(limit=500))
+        for source in self.sources:
+            self.source_tags[source.id] = self.db.get_source_themes(source.id)
+
+        # Inbox
+        self.inbox_entries = list(self.db.get_inbox_entries(valid_only=True, limit=500))
+
+        # Staging
+        self.staging_entries = list(self.db.get_staging_entries(promoted=False, limit=500))
+
+    def _update_stats(self) -> None:
+        """Update tab labels with counts."""
+        tabs = self.query_one("#tabs", TabbedContent)
+        # Update tab labels with counts
+        for tab in tabs.query("Tab"):
+            tab_id = str(tab.id)
+            if "tab-sources" in tab_id:
+                tab.label = f"Sources ({len(self.sources)})"
+            elif "tab-inbox" in tab_id:
+                tab.label = f"Inbox ({len(self.inbox_entries)})"
+            elif "tab-staging" in tab_id:
+                tab.label = f"Staging ({len(self.staging_entries)})"
+
+    # =========================================================================
+    # Sources Table
+    # =========================================================================
+
+    def _setup_sources_table(self) -> None:
+        """Setup sources table columns and data."""
+        table = self.query_one("#sources-table", DataTable)
+        table.cursor_type = "row"
+        table.zebra_stripes = True
+
+        table.add_column(t("source.domain"), width=25, key="domain")
+        table.add_column(t("source.score"), width=8, key="score")
+        table.add_column(t("source.status"), width=10, key="status")
+        table.add_column(t("source.role"), width=12, key="role")
+        table.add_column(t("source.reliability"), width=5, key="reliability")
+        table.add_column(t("source.usage_count"), width=6, key="usages")
+        table.add_column(t("tags.label"), width=20, key="tags")
+
+        self._populate_sources_table()
+
+    def _populate_sources_table(self) -> None:
+        """Populate sources table rows."""
+        table = self.query_one("#sources-table", DataTable)
+        table.clear()
+
+        for i, source in enumerate(self.sources):
+            score = source.personal_score
+            if score >= 70:
+                score_str = f"[green]{score:.0f}[/green]"
+            elif score >= 40:
+                score_str = f"[yellow]{score:.0f}[/yellow]"
+            else:
+                score_str = f"[red]{score:.0f}[/red]"
+
+            status_icons = {"active": "✓", "inaccessible": "⚠", "archived": "📦"}
+            status_str = f"{status_icons.get(source.status, '?')} {source.status}"
+
+            role_icons = {"hub": "🔗", "authority": "⭐", "unclassified": "·"}
+            role_str = f"{role_icons.get(source.role, '·')} {source.role}"
+
+            tags = self.source_tags.get(source.id, [])
+            tags_str = ", ".join(tags[:2]) + (f" +{len(tags)-2}" if len(tags) > 2 else "") if tags else "—"
+
+            table.add_row(
+                source.domain[:23] + "…" if len(source.domain) > 23 else source.domain,
+                Text.from_markup(score_str),
+                Text.from_markup(status_str),
+                Text.from_markup(role_str),
+                source.reliability or "—",
+                str(source.usage_count),
+                tags_str,
+                key=str(i),
+            )
+
+        if self.sources:
+            self.selected_source = self.sources[0]
+
+    # =========================================================================
+    # Inbox Table
+    # =========================================================================
+
+    def _setup_inbox_table(self) -> None:
+        """Setup inbox table columns and data."""
+        table = self.query_one("#inbox-table", DataTable)
+        table.cursor_type = "row"
+        table.zebra_stripes = True
+
+        table.add_column(t("inbox.url"), width=40, key="url")
+        table.add_column(t("inbox.domain"), width=18, key="domain")
+        table.add_column(t("inbox.project"), width=15, key="project")
+        table.add_column(t("inbox.status"), width=12, key="status")
+        table.add_column(t("inbox.captured_at"), width=12, key="captured")
+
+        self._populate_inbox_table()
+
+    def _populate_inbox_table(self) -> None:
+        """Populate inbox table rows."""
+        table = self.query_one("#inbox-table", DataTable)
+        table.clear()
+
+        for entry in self.inbox_entries:
+            url = entry.url[:38] + "…" if len(entry.url) > 38 else entry.url
+            domain = (entry.domain or "—")[:16]
+            project = (entry.project or "—")[:13]
+
+            if not entry.is_valid:
+                status = f"[red]⚠ quarantine[/red]"
+            elif entry.enriched_at:
+                status = f"[green]✓ enriched[/green]"
+            else:
+                status = f"[yellow]○ pending[/yellow]"
+
+            captured = format_relative_time(entry.captured_at)
+
+            table.add_row(url, domain, project, Text.from_markup(status), captured, key=entry.id)
+
+        if self.inbox_entries:
+            self.selected_inbox = self.inbox_entries[0]
+
+    # =========================================================================
+    # Staging Table
+    # =========================================================================
+
+    def _setup_staging_table(self) -> None:
+        """Setup staging table columns and data."""
+        table = self.query_one("#staging-table", DataTable)
+        table.cursor_type = "row"
+        table.zebra_stripes = True
+
+        table.add_column(t("staging.domain"), width=22, key="domain")
+        table.add_column("Title", width=30, key="title")
+        table.add_column(t("staging.content_type"), width=12, key="type")
+        table.add_column(t("staging.citations"), width=8, key="citations")
+        table.add_column("Score", width=8, key="score")
+        table.add_column("", width=3, key="indicator")
+
+        self._populate_staging_table()
+
+    def _populate_staging_table(self) -> None:
+        """Populate staging table rows."""
+        from rekall.promotion import get_promotion_indicator
+
+        table = self.query_one("#staging-table", DataTable)
+        table.clear()
+
+        for entry in self.staging_entries:
+            domain = (entry.domain or "—")[:20]
+            title = (entry.title or "—")[:28]
+            content_type = entry.content_type or "other"
+
+            score = entry.promotion_score or 0
+            if score >= 70:
+                score_str = f"[green]{score:.0f}[/green]"
+            elif score >= 56:
+                score_str = f"[yellow]{score:.0f}[/yellow]"
+            else:
+                score_str = f"[dim]{score:.0f}[/dim]"
+
+            indicator = get_promotion_indicator(entry, score=score)
+            ind_colors = {"⬆": "green", "→": "yellow", "✓": "blue", "⚠": "red"}
+            ind_str = f"[{ind_colors.get(indicator, 'white')}]{indicator}[/]" if indicator else " "
+
+            table.add_row(
+                domain, title, content_type,
+                str(entry.citation_count),
+                Text.from_markup(score_str),
+                Text.from_markup(ind_str),
+                key=entry.id,
+            )
+
+        if self.staging_entries:
+            self.selected_staging = self.staging_entries[0]
+
+    # =========================================================================
+    # Tab Navigation
+    # =========================================================================
+
+    def _switch_to_tab(self, tab: str) -> None:
+        """Switch to a specific tab."""
+        self.current_tab = tab
+        tabs = self.query_one("#tabs", TabbedContent)
+
+        tab_map = {"sources": "tab-sources", "inbox": "tab-inbox", "staging": "tab-staging"}
+        tabs.active = tab_map[tab]
+
+        # Update entries reference for sorting
+        if tab == "sources":
+            self.entries = self.sources
+        elif tab == "inbox":
+            self.entries = self.inbox_entries
+        else:
+            self.entries = self.staging_entries
+
+        # Reset sort state on tab switch
+        self.sort_column = None
+        self.sort_reverse = False
+
+        self._update_detail_panel()
+
+    def action_tab_sources(self) -> None:
+        """Switch to Sources tab."""
+        self._switch_to_tab("sources")
+        self.show_left_notify("Sources", 1.0)
+
+    def action_tab_inbox(self) -> None:
+        """Switch to Inbox tab."""
+        self._switch_to_tab("inbox")
+        self.show_left_notify("Inbox", 1.0)
+
+    def action_tab_staging(self) -> None:
+        """Switch to Staging tab."""
+        self._switch_to_tab("staging")
+        self.show_left_notify("Staging", 1.0)
+
+    def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
+        """Handle tab activation via click."""
+        tab_id = str(event.tab.id)
+        if "sources" in tab_id:
+            self.current_tab = "sources"
+            self.entries = self.sources
+            if self.sources and not self.selected_source:
+                self.selected_source = self.sources[0]
+        elif "inbox" in tab_id:
+            self.current_tab = "inbox"
+            self.entries = self.inbox_entries
+            if self.inbox_entries and not self.selected_inbox:
+                self.selected_inbox = self.inbox_entries[0]
+        elif "staging" in tab_id:
+            self.current_tab = "staging"
+            self.entries = self.staging_entries
+            if self.staging_entries and not self.selected_staging:
+                self.selected_staging = self.staging_entries[0]
+
+        self.sort_column = None
+        self.sort_reverse = False
+        self._update_detail_panel()
+
+    # =========================================================================
+    # Detail Panel
+    # =========================================================================
+
+    def _update_detail_panel(self) -> None:
+        """Update detail panel based on current tab and selection."""
+        title_widget = self.query_one("#detail-title", Static)
+        meta_widget = self.query_one("#detail-meta", Static)
+
+        if self.current_tab == "sources" and self.selected_source:
+            src = self.selected_source
+            title_widget.update(f"[bold cyan]{src.domain}[/bold cyan]")
+            tags = self.source_tags.get(src.id, [])
+            tags_str = ", ".join(tags) if tags else "[dim]no tags[/dim]"
+            meta_widget.update(
+                f"Score: {src.personal_score:.0f} | "
+                f"Status: {src.status} | "
+                f"Uses: {src.usage_count} | "
+                f"Tags: {tags_str}"
+            )
+
+        elif self.current_tab == "inbox" and self.selected_inbox:
+            entry = self.selected_inbox
+            title_widget.update(f"[bold]{entry.url[:60]}{'…' if len(entry.url) > 60 else ''}[/bold]")
+            meta_widget.update(
+                f"Domain: {entry.domain or '—'} | "
+                f"Project: {entry.project or '—'} | "
+                f"CLI: {entry.cli_source or '—'}"
+            )
+
+        elif self.current_tab == "staging" and self.selected_staging:
+            entry = self.selected_staging
+            title_widget.update(f"[bold]{entry.title or entry.url[:50]}[/bold]")
+            meta_widget.update(
+                f"Domain: {entry.domain or '—'} | "
+                f"Type: {entry.content_type or '—'} | "
+                f"Score: {entry.promotion_score:.0f} | "
+                f"Citations: {entry.citation_count}"
+            )
+        else:
+            title_widget.update("[dim]No selection[/dim]")
+            meta_widget.update("")
+
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        """Handle row selection in any table."""
+        if event.row_key is None:
+            return
+
+        table_id = event.data_table.id
+        key = str(event.row_key.value) if event.row_key.value else None
+
+        if not key:
+            return
+
+        if table_id == "sources-table":
+            try:
+                idx = int(key)
+                if 0 <= idx < len(self.sources):
+                    self.selected_source = self.sources[idx]
+            except ValueError:
+                pass
+        elif table_id == "inbox-table":
+            for entry in self.inbox_entries:
+                if str(entry.id) == key:
+                    self.selected_inbox = entry
+                    break
+        elif table_id == "staging-table":
+            for entry in self.staging_entries:
+                if str(entry.id) == key:
+                    self.selected_staging = entry
+                    break
+
+        self._update_detail_panel()
+
+    async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        """Handle Enter key on DataTable row - show actions."""
+        await self.action_show_actions()
+
+    # =========================================================================
+    # Filter Overlay
+    # =========================================================================
+
+    def action_toggle_filter(self) -> None:
+        """Toggle filter overlay."""
+        overlay = self.query_one("#filter-overlay", Container)
+        overlay.toggle_class("visible")
+        if overlay.has_class("visible"):
+            self.query_one("#filter-input", Input).focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Handle filter input submission."""
+        if event.input.id == "filter-input":
+            query = event.value.strip().lower()
+            self._apply_filter(query)
+            self.query_one("#filter-overlay", Container).remove_class("visible")
+
+    def _apply_filter(self, query: str) -> None:
+        """Apply filter to current tab's data."""
+        if not query:
+            self._load_all_data()
+            self._refresh_current_table()
+            self.show_left_notify("Filtre effacé", 1.5)
+            return
+
+        if self.current_tab == "sources":
+            self.sources = [
+                s for s in self.db.list_sources(limit=500)
+                if query in s.domain.lower() or
+                   query in (s.status or "").lower() or
+                   any(query in tag.lower() for tag in self.source_tags.get(s.id, []))
+            ]
+            self._populate_sources_table()
+        elif self.current_tab == "inbox":
+            self.inbox_entries = [
+                e for e in self.db.get_inbox_entries(limit=1000)
+                if query in e.url.lower() or query in (e.domain or "").lower()
+            ]
+            self._populate_inbox_table()
+        elif self.current_tab == "staging":
+            self.staging_entries = [
+                e for e in self.db.get_staging_entries(promoted=False, limit=1000)
+                if query in (e.domain or "").lower() or query in (e.title or "").lower()
+            ]
+            self._populate_staging_table()
+
+        self._update_stats()
+        self.show_left_notify(f"Filtré: {len(self.entries)} résultats", 1.5)
+
+    def _refresh_current_table(self) -> None:
+        """Refresh the current tab's table."""
+        if self.current_tab == "sources":
+            self._populate_sources_table()
+        elif self.current_tab == "inbox":
+            self._populate_inbox_table()
+        else:
+            self._populate_staging_table()
+        self._update_stats()
+
+    # =========================================================================
+    # Actions Overlay
+    # =========================================================================
+
+    async def action_show_actions(self) -> None:
+        """Show actions overlay for current selection."""
+        overlay = self.query_one("#actions-overlay", Container)
+        actions_list = self.query_one("#actions-list", ListView)
+        # Remove all children properly and await completion
+        await actions_list.remove_children()
+
+        # Build action list based on current tab
+        if self.current_tab == "sources" and self.selected_source:
+            actions_list.append(ListItem(Static("📋 View details"), id="action-view"))
+            actions_list.append(ListItem(Static("🏷️  Edit tags"), id="action-tags"))
+            actions_list.append(ListItem(Static("🔗 View backlinks"), id="action-backlinks"))
+            actions_list.append(ListItem(Static("⬇️  Demote to staging"), id="action-demote"))
+            actions_list.append(ListItem(Static("🗑️  Delete"), id="action-delete"))
+
+        elif self.current_tab == "inbox" and self.selected_inbox:
+            actions_list.append(ListItem(Static("✨ Enrich & promote"), id="action-enrich"))
+            actions_list.append(ListItem(Static("⬆️  Quick promote (no enrich)"), id="action-promote-staging"))
+            actions_list.append(ListItem(Static("📋 View details"), id="action-view"))
+            actions_list.append(ListItem(Static("⚠️  Quarantine"), id="action-quarantine"))
+            actions_list.append(ListItem(Static("🗑️  Delete"), id="action-delete"))
+
+        elif self.current_tab == "staging" and self.selected_staging:
+            actions_list.append(ListItem(Static("📋 View details"), id="action-view"))
+            actions_list.append(ListItem(Static("⬆️  Promote to sources"), id="action-promote"))
+            actions_list.append(ListItem(Static("🔄 Refresh score"), id="action-refresh-score"))
+            actions_list.append(ListItem(Static("🗑️  Delete"), id="action-delete"))
+
+        else:
+            actions_list.append(ListItem(Static("[dim]No selection[/dim]")))
+
+        overlay.add_class("visible")
+        actions_list.focus()
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        """Handle action selection."""
+        action_id = event.item.id
+        self.query_one("#actions-overlay", Container).remove_class("visible")
+
+        if action_id == "action-view":
+            self._action_view_details()
+        elif action_id == "action-tags":
+            self._action_edit_tags()
+        elif action_id == "action-backlinks":
+            self._action_view_backlinks()
+        elif action_id == "action-demote":
+            self._action_demote()
+        elif action_id == "action-delete":
+            self._action_delete()
+        elif action_id == "action-enrich":
+            self._action_enrich()
+        elif action_id == "action-quarantine":
+            self._action_quarantine()
+        elif action_id == "action-promote-staging":
+            self._action_promote_to_staging()
+        elif action_id == "action-promote":
+            self._action_promote()
+        elif action_id == "action-refresh-score":
+            self._action_refresh_score()
+
+    # =========================================================================
+    # Action Implementations
+    # =========================================================================
+
+    def _action_view_details(self) -> None:
+        """View full details of selected item."""
+        if self.current_tab == "sources" and self.selected_source:
+            src = self.selected_source
+            self.show_left_notify(f"URL: {src.url_pattern or src.domain}", 3.0)
+        elif self.current_tab == "inbox" and self.selected_inbox:
+            self.show_left_notify(f"URL: {self.selected_inbox.url}", 3.0)
+        elif self.current_tab == "staging" and self.selected_staging:
+            self.show_left_notify(f"URL: {self.selected_staging.url}", 3.0)
+
+    def _action_edit_tags(self) -> None:
+        """Edit tags for selected source."""
+        if self.selected_source:
+            self.result_action = ("tags", self.selected_source)
+            self.exit()
+
+    def _action_view_backlinks(self) -> None:
+        """View entries citing the selected source."""
+        if self.selected_source:
+            count = self.db.count_source_backlinks(self.selected_source.id)
+            self.show_left_notify(f"Backlinks: {count} entries", 2.0)
+
+    def _action_demote(self) -> None:
+        """Demote source back to staging."""
+        if self.selected_source:
+            from rekall.promotion import demote_source
+            result = demote_source(self.db, self.selected_source.id)
+            if result:
+                self.sources.remove(self.selected_source)
+                self._populate_sources_table()
+                self._update_stats()
+                self.show_left_notify("Source demoted", 2.0)
+            else:
+                self.show_left_notify("[red]Demote failed[/red]", 2.0)
+
+    def _action_delete(self) -> None:
+        """Delete selected item."""
+        if self.current_tab == "sources" and self.selected_source:
+            self.db.delete_source(self.selected_source.id)
+            self.sources.remove(self.selected_source)
+            self._populate_sources_table()
+            self.show_left_notify("Source deleted", 2.0)
+        elif self.current_tab == "inbox" and self.selected_inbox:
+            self.db.delete_inbox_entry(self.selected_inbox.id)
+            self.inbox_entries.remove(self.selected_inbox)
+            self._populate_inbox_table()
+            self.show_left_notify("Entry deleted", 2.0)
+        elif self.current_tab == "staging" and self.selected_staging:
+            self.db.delete_staging_entry(self.selected_staging.id)
+            self.staging_entries.remove(self.selected_staging)
+            self._populate_staging_table()
+            self.show_left_notify("Entry deleted", 2.0)
+        self._update_stats()
+
+    def _action_enrich(self) -> None:
+        """Open enrich overlay for inbox entry."""
+        if self.selected_inbox:
+            self._show_enrich_overlay(self.selected_inbox)
+
+    def _show_enrich_overlay(self, entry) -> None:
+        """Show the enrichment overlay with entry data."""
+        overlay = self.query_one("#enrich-overlay", Container)
+
+        # Populate fields - InboxEntry has no title, use domain
+        self.query_one("#enrich-url", Static).update(
+            f"[cyan]{entry.url}[/cyan]"
+        )
+        self.query_one("#enrich-input-title", Input).value = entry.domain or ""
+        self.query_one("#enrich-input-tags", Input).value = ""
+
+        # Set default type - InboxEntry has no content_type
+        content_type = "other"
+        type_map = {
+            "documentation": "type-doc",
+            "article": "type-article",
+            "tutorial": "type-tutorial",
+            "paper": "type-paper",
+            "tool": "type-tool",
+            "reference": "type-ref",
+            "other": "type-other",
+        }
+        radio_id = type_map.get(content_type, "type-other")
+        try:
+            self.query_one(f"#{radio_id}", RadioButton).value = True
+        except Exception:
+            pass
+
+        # Show overlay
+        overlay.add_class("visible")
+        self.query_one("#enrich-input-title", Input).focus()
+
+    def _close_enrich_overlay(self) -> None:
+        """Close the enrichment overlay."""
+        self.query_one("#enrich-overlay", Container).remove_class("visible")
+
+    def _submit_enrichment(self) -> None:
+        """Submit the enrichment form."""
+        if not self.selected_inbox:
+            return
+
+        from rekall.enrichment import merge_into_staging
+
+        entry = self.selected_inbox
+        title = self.query_one("#enrich-input-title", Input).value or entry.domain or entry.url[:50]
+
+        # Get content type
+        content_type = "other"
+        type_set = self.query_one("#enrich-type", RadioSet)
+        if type_set.pressed_button:
+            content_type = type_set.pressed_button.label.plain
+
+        # Create staging entry
+        staging, is_new = merge_into_staging(
+            self.db,
+            entry,
+            title=title,
+            description=None,
+            content_type=content_type,
+            language=None,
+            is_accessible=True,
+            http_status=200,
+        )
+
+        # Mark inbox as enriched
+        self.db.mark_inbox_enriched(entry.id)
+
+        # Update UI
+        self.inbox_entries.remove(self.selected_inbox)
+        self._populate_inbox_table()
+        self._load_all_data()
+        self._populate_staging_table()
+        self._update_stats()
+
+        # Close overlay and notify
+        self._close_enrich_overlay()
+        action = "Created" if is_new else "Merged into"
+        self.show_left_notify(f"[green]{action} staging![/green]", 2.0)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle button presses in overlays."""
+        if event.button.id == "enrich-cancel":
+            self._close_enrich_overlay()
+        elif event.button.id == "enrich-submit":
+            self._submit_enrichment()
+
+    def _action_quarantine(self) -> None:
+        """Move inbox entry to quarantine."""
+        if self.selected_inbox:
+            self.db.quarantine_inbox_entry(self.selected_inbox.id, "Manual quarantine")
+            self.inbox_entries.remove(self.selected_inbox)
+            self._populate_inbox_table()
+            self._update_stats()
+            self.show_left_notify("Entry quarantined", 2.0)
+
+    def _action_promote_to_staging(self) -> None:
+        """Promote inbox entry to staging (without enrichment)."""
+        if self.selected_inbox:
+            from rekall.enrichment import merge_into_staging
+            entry = self.selected_inbox
+            # Create staging entry with basic info (no enrichment)
+            # InboxEntry has no title/content_type - use domain as title
+            staging, is_new = merge_into_staging(
+                self.db,
+                entry,
+                title=entry.domain or entry.url[:50],
+                description=None,
+                content_type="other",
+                language=None,
+                is_accessible=True,
+                http_status=200,
+            )
+            # Mark inbox as enriched
+            self.db.mark_inbox_enriched(entry.id)
+            self.inbox_entries.remove(self.selected_inbox)
+            self._populate_inbox_table()
+            self._load_all_data()  # Refresh staging
+            self._populate_staging_table()
+            self._update_stats()
+            action = "Created" if is_new else "Merged into"
+            self.show_left_notify(f"[green]{action} staging![/green]", 2.0)
+
+    def _action_promote(self) -> None:
+        """Promote staging entry to sources."""
+        if self.selected_staging:
+            from rekall.promotion import promote_source
+            result = promote_source(self.db, self.selected_staging.id)
+            if result:
+                self.staging_entries.remove(self.selected_staging)
+                self._populate_staging_table()
+                self._load_all_data()  # Refresh sources
+                self._populate_sources_table()
+                self._update_stats()
+                self.show_left_notify("[green]Promoted![/green]", 2.0)
+            else:
+                self.show_left_notify("[red]Promotion failed[/red]", 2.0)
+
+    def _action_refresh_score(self) -> None:
+        """Refresh promotion score for staging entry."""
+        if self.selected_staging:
+            from rekall.promotion import calculate_promotion_score
+            new_score = calculate_promotion_score(self.db, self.selected_staging)
+            self.db.update_staging_score(self.selected_staging.id, new_score)
+            self.selected_staging.promotion_score = new_score
+            self._populate_staging_table()
+            self.show_left_notify(f"Score: {new_score:.0f}", 2.0)
+
+    # =========================================================================
+    # Quick Actions (keyboard shortcuts)
+    # =========================================================================
+
+    def action_quick_edit(self) -> None:
+        """Quick edit via 'e' key."""
+        self._action_view_details()
+
+    def action_quick_delete(self) -> None:
+        """Quick delete via 'd' key."""
+        self._action_delete()
+
+    def action_quick_tags(self) -> None:
+        """Quick tags via 't' key."""
+        if self.current_tab == "sources":
+            self._action_edit_tags()
+
+    def action_quick_promote(self) -> None:
+        """Quick promote via 'p' key."""
+        if self.current_tab == "staging":
+            self._action_promote()
+
+    def action_refresh(self) -> None:
+        """Refresh current tab data."""
+        self._load_all_data()
+        self._refresh_current_table()
+        self.show_left_notify("Refreshed", 1.5)
+
+    def action_close_or_quit(self) -> None:
+        """Close overlays or quit."""
+        filter_overlay = self.query_one("#filter-overlay", Container)
+        actions_overlay = self.query_one("#actions-overlay", Container)
+        enrich_overlay = self.query_one("#enrich-overlay", Container)
+
+        if enrich_overlay.has_class("visible"):
+            enrich_overlay.remove_class("visible")
+        elif filter_overlay.has_class("visible"):
+            filter_overlay.remove_class("visible")
+        elif actions_overlay.has_class("visible"):
+            actions_overlay.remove_class("visible")
+        else:
+            self.exit()
+
+    # =========================================================================
+    # Sorting (SortableTableMixin implementation)
+    # =========================================================================
+
+    def get_sort_key(self, column_key: str):
+        """Get sort key for current tab."""
+        if self.current_tab == "sources":
+            key_map = {
+                "domain": lambda s: s.domain.lower(),
+                "score": lambda s: s.personal_score,
+                "status": lambda s: s.status or "",
+                "role": lambda s: s.role or "",
+                "reliability": lambda s: s.reliability or "",
+                "usages": lambda s: s.usage_count,
+                "tags": lambda s: ",".join(self.source_tags.get(s.id, [])),
+            }
+        elif self.current_tab == "inbox":
+            key_map = {
+                "url": lambda e: e.url.lower(),
+                "domain": lambda e: (e.domain or "").lower(),
+                "project": lambda e: (e.project or "").lower(),
+                "status": lambda e: 0 if not e.is_valid else (1 if e.enriched_at else 2),
+                "captured": lambda e: e.captured_at,
+            }
+        else:  # staging
+            key_map = {
+                "domain": lambda e: (e.domain or "").lower(),
+                "title": lambda e: (e.title or "").lower(),
+                "type": lambda e: e.content_type or "",
+                "citations": lambda e: e.citation_count,
+                "score": lambda e: e.promotion_score or 0,
+                "indicator": lambda e: e.promotion_score or 0,
+            }
+        return key_map.get(column_key, lambda x: "")
+
+    def refresh_table(self) -> None:
+        """Refresh current table with sort state."""
+        self._refresh_current_table()
+
+    def on_data_table_header_selected(self, event: DataTable.HeaderSelected) -> None:
+        """Handle column sort click."""
+        column_key = event.column_key.value
+
+        if self.sort_column == column_key:
+            self.sort_reverse = not self.sort_reverse
+        else:
+            self.sort_column = column_key
+            self.sort_reverse = False
+
+        self.sort_entries()
+        self._refresh_current_table()
+
+        direction = "▼" if self.sort_reverse else "▲"
+        self.show_left_notify(f"Sorted by {column_key} {direction}", 1.5)
+
+    # =========================================================================
+    # Notification
+    # =========================================================================
+
+    def show_left_notify(self, message: str, timeout: float = 2.0) -> None:
+        """Show notification toast."""
+        notify = self.query_one("#left-notify", Static)
+        notify.update(message)
+        notify.add_class("visible")
+        self.set_timer(timeout, lambda: notify.remove_class("visible"))
+
+
+def run_unified_sources(db) -> str | None:
+    """Run the Unified Sources Manager.
+
+    Args:
+        db: Database instance
+
+    Returns:
+        Action tuple or None
+    """
+    app = UnifiedSourcesApp(db)
+    app.run()
+    return app.result_action
+
+
+# =============================================================================
 # Main TUI Loop
 # =============================================================================
 
@@ -7813,6 +9665,452 @@ def get_menu_items():
         # Section 4: Quitter
         ("quit", t("menu.quit"), t("menu.quit.desc")),
     ]
+
+
+# =============================================================================
+# ConfigApp - Multi-IDE Configuration Screen (Feature 019)
+# =============================================================================
+
+
+class ConfigApp(App):
+    """Textual app for IDE integrations configuration.
+
+    Two sections:
+    1. INTÉGRATIONS - All supported IDEs with Global/Local columns
+    2. SPECKIT - Article 99 selection (visible if ~/.speckit/ exists)
+    """
+
+    CSS = """
+    Screen {
+        background: $surface;
+    }
+
+    #main-container {
+        height: 1fr;
+        padding: 0 2;
+    }
+
+    #detected-ide-header {
+        height: auto;
+        margin-bottom: 1;
+        padding: 0 1;
+        color: $success;
+    }
+
+    #integrations-section {
+        height: auto;
+        min-height: 10;
+        border: solid $primary;
+        padding: 1;
+        margin-bottom: 1;
+    }
+
+    #integrations-title {
+        text-style: bold;
+        color: $primary;
+        margin-bottom: 1;
+    }
+
+    #column-headers {
+        height: 1;
+        margin-bottom: 1;
+        color: $text-muted;
+    }
+
+    .ide-row {
+        height: 1;
+        padding: 0 1;
+    }
+
+    .ide-row:hover {
+        background: $surface-lighten-1;
+    }
+
+    .ide-row.selected {
+        background: $primary-darken-2;
+    }
+
+    .ide-name {
+        width: 20;
+    }
+
+    .global-toggle {
+        width: 12;
+        text-align: center;
+    }
+
+    .local-toggle {
+        width: 12;
+        text-align: center;
+    }
+
+    .global-toggle.disabled {
+        color: $text-muted;
+    }
+
+    #speckit-section {
+        height: auto;
+        min-height: 8;
+        border: solid $secondary;
+        padding: 1;
+        display: none;
+    }
+
+    #speckit-section.visible {
+        display: block;
+    }
+
+    #speckit-title {
+        text-style: bold;
+        color: $secondary;
+        margin-bottom: 1;
+    }
+
+    #article99-selector {
+        height: auto;
+        padding: 0 1;
+    }
+
+    .article99-option {
+        height: 1;
+        padding: 0 1;
+    }
+
+    .article99-option.selected {
+        background: $secondary-darken-2;
+    }
+
+    .article99-option .recommended {
+        color: $warning;
+    }
+
+    #footer-hint {
+        dock: bottom;
+        height: 1;
+        padding: 0 2;
+        color: $text-muted;
+    }
+
+    #notification {
+        dock: bottom;
+        width: auto;
+        max-width: 60;
+        height: auto;
+        padding: 1 2;
+        margin: 1 2;
+        background: #1e2a4a;
+        border: thick #4367CD;
+        color: #93B5F7;
+        text-style: bold;
+        display: none;
+        layer: notification;
+    }
+
+    #notification.visible {
+        display: block;
+    }
+    """ + BANNER_CSS
+
+    BINDINGS = [
+        Binding("escape", "quit", "Quitter", show=True),
+        Binding("q", "quit", "Quitter", show=False),
+        Binding("up", "move_up", "↑", show=True),
+        Binding("down", "move_down", "↓", show=True),
+        Binding("space", "toggle", "Toggle", show=True),
+        Binding("g", "install_global", "Global", show=True),
+        Binding("l", "install_local", "Local", show=True),
+        Binding("r", "remove", "Désinstaller", show=True),
+        Binding("tab", "switch_section", "Section", show=True),
+    ]
+
+    def __init__(self, base_path: Path | None = None):
+        super().__init__()
+        self.base_path = base_path or Path.cwd()
+        self._selected_ide_idx = 0
+        self._selected_article99_idx = 0
+        self._active_section = "integrations"  # or "speckit"
+        self._notification_timer = None
+
+        # Load data
+        from rekall.integrations import (
+            SUPPORTED_IDES,
+            detect_ide,
+            get_article99_recommendation,
+            Article99Version,
+        )
+        self._ides = SUPPORTED_IDES
+        self._detected = detect_ide(self.base_path)
+        self._article99_versions = list(Article99Version)
+        self._article99_recommendation = get_article99_recommendation(self.base_path)
+        self._speckit_exists = (Path.home() / ".speckit").exists()
+
+    def compose(self) -> ComposeResult:
+        yield create_banner_container()
+
+        with Container(id="main-container"):
+            # Detected IDE header
+            yield Static(self._build_detected_header(), id="detected-ide-header", markup=True)
+
+            # Section 1: INTÉGRATIONS
+            with Container(id="integrations-section"):
+                yield Static("[bold]INTÉGRATIONS[/bold]", id="integrations-title")
+                yield Static(self._build_column_headers(), id="column-headers", markup=True)
+                yield Static(self._build_ide_list(), id="ide-list", markup=True)
+
+            # Section 2: SPECKIT (conditional)
+            with Container(id="speckit-section", classes="visible" if self._speckit_exists else ""):
+                yield Static("[bold]SPECKIT[/bold]", id="speckit-title")
+                yield Static(self._build_article99_selector(), id="article99-selector", markup=True)
+
+        yield Static(
+            "[dim]↑↓ naviguer • g global • l local • r désinstaller • Tab section • Esc quitter[/dim]",
+            id="footer-hint"
+        )
+        yield Static("", id="notification")
+
+    def _build_detected_header(self) -> str:
+        """Build the detected IDE header."""
+        if self._detected.ide:
+            scope_str = "global" if self._detected.scope and self._detected.scope.value == "global" else "local"
+            return f"[green]► IDE détecté: {self._detected.ide.name} ({scope_str})[/green]"
+        return "[dim]Aucun IDE détecté[/dim]"
+
+    def _build_column_headers(self) -> str:
+        """Build column headers for IDE list."""
+        return f"{'IDE':<20} {'Global':^12} {'Local':^12}"
+
+    def _build_ide_list(self) -> str:
+        """Build the IDE list with Global/Local columns."""
+        from rekall.integrations import get_ide_status
+
+        lines = []
+        for idx, ide in enumerate(self._ides):
+            # Check if this is the detected IDE
+            is_detected = self._detected.ide and self._detected.ide.id == ide.id
+            marker = "►" if is_detected else " "
+
+            # Selection highlight
+            selected = idx == self._selected_ide_idx and self._active_section == "integrations"
+            prefix = "[reverse]" if selected else ""
+            suffix = "[/reverse]" if selected else ""
+
+            # Get installation status
+            try:
+                status = get_ide_status(ide.id, self.base_path)
+                global_status = "✓" if status.get("global_installed") else "-"
+                local_status = "✓" if status.get("local_installed") else "-"
+            except Exception:
+                global_status = "-"
+                local_status = "-"
+
+            # Global column (disabled if not supported)
+            if ide.global_marker:
+                global_col = f"{global_status:^12}"
+            else:
+                global_col = f"[dim]{'n/a':^12}[/dim]"
+
+            local_col = f"{local_status:^12}"
+
+            line = f"{prefix}{marker} {ide.name:<18} {global_col} {local_col}{suffix}"
+            lines.append(line)
+
+        return "\n".join(lines)
+
+    def _build_article99_selector(self) -> str:
+        """Build Article 99 version selector."""
+        from rekall.integrations import Article99Version
+
+        version_labels = {
+            Article99Version.MICRO: ("Micro", "~50 tokens"),
+            Article99Version.SHORT: ("Court", "~350 tokens"),
+            Article99Version.EXTENSIVE: ("Extensif", "~1000 tokens"),
+        }
+
+        lines = []
+        for idx, version in enumerate(self._article99_versions):
+            label, tokens = version_labels[version]
+
+            # Check if recommended
+            is_recommended = version == self._article99_recommendation.recommended
+            rec_marker = "★ recommandé" if is_recommended else ""
+
+            # Selection highlight
+            selected = idx == self._selected_article99_idx and self._active_section == "speckit"
+            prefix = "[reverse]" if selected else ""
+            suffix = "[/reverse]" if selected else ""
+
+            # Radio button style
+            checked = "◉" if idx == self._selected_article99_idx else "○"
+
+            line = f"{prefix}{checked} {label} ({tokens}) {rec_marker}{suffix}"
+            lines.append(line)
+
+        # Add recommendation reason
+        if self._article99_recommendation.reason:
+            lines.append("")
+            lines.append(f"[dim]{self._article99_recommendation.reason}[/dim]")
+
+        return "\n".join(lines)
+
+    def action_quit(self) -> None:
+        """Quit the application."""
+        self.exit()
+
+    def action_move_up(self) -> None:
+        """Move selection up."""
+        if self._active_section == "integrations":
+            self._selected_ide_idx = max(0, self._selected_ide_idx - 1)
+            self._refresh_ide_list()
+        else:
+            self._selected_article99_idx = max(0, self._selected_article99_idx - 1)
+            self._refresh_article99()
+
+    def action_move_down(self) -> None:
+        """Move selection down."""
+        if self._active_section == "integrations":
+            self._selected_ide_idx = min(len(self._ides) - 1, self._selected_ide_idx + 1)
+            self._refresh_ide_list()
+        else:
+            self._selected_article99_idx = min(len(self._article99_versions) - 1, self._selected_article99_idx + 1)
+            self._refresh_article99()
+
+    def action_switch_section(self) -> None:
+        """Switch between sections."""
+        if not self._speckit_exists:
+            return  # Can't switch if speckit doesn't exist
+
+        if self._active_section == "integrations":
+            self._active_section = "speckit"
+        else:
+            self._active_section = "integrations"
+
+        self._refresh_ide_list()
+        self._refresh_article99()
+
+    def action_toggle(self) -> None:
+        """Toggle current selection."""
+        if self._active_section == "integrations":
+            # Toggle would be handled by install/remove
+            pass
+        else:
+            # Article 99 selection is already handled by navigation
+            pass
+
+    def action_install_global(self) -> None:
+        """Install selected integration globally."""
+        if self._active_section == "integrations":
+            self._install_ide(global_install=True)
+        else:
+            self._install_article99()
+
+    def action_install_local(self) -> None:
+        """Install selected integration locally."""
+        if self._active_section == "integrations":
+            self._install_ide(global_install=False)
+        else:
+            self._install_article99()
+
+    def action_remove(self) -> None:
+        """Remove selected integration."""
+        if self._active_section == "integrations":
+            self._uninstall_ide()
+
+    def _install_ide(self, global_install: bool = True) -> None:
+        """Install the selected IDE integration.
+
+        Args:
+            global_install: If True, install globally; if False, install locally
+        """
+        from rekall.integrations import install
+
+        ide = self._ides[self._selected_ide_idx]
+
+        # Check if global is supported
+        if global_install and not ide.global_marker:
+            self._show_notification(f"✗ {ide.name} ne supporte pas l'installation globale")
+            return
+
+        try:
+            install(ide.id, self.base_path, global_install=global_install)
+
+            scope = "global" if global_install else "local"
+            self._show_notification(f"✓ {ide.name} installé ({scope})")
+            self._refresh_ide_list()
+        except Exception as e:
+            self._show_notification(f"✗ Erreur: {e}")
+
+    def _uninstall_ide(self) -> None:
+        """Uninstall the selected IDE integration."""
+        from rekall.integrations import uninstall_ide
+
+        ide = self._ides[self._selected_ide_idx]
+
+        try:
+            uninstall_ide(ide.id, self.base_path)
+            self._show_notification(f"✓ {ide.name} désinstallé")
+            self._refresh_ide_list()
+        except Exception as e:
+            self._show_notification(f"✗ Erreur: {e}")
+
+    def _install_article99(self) -> None:
+        """Install selected Article 99 version."""
+        from rekall.integrations import install_article99
+
+        version = self._article99_versions[self._selected_article99_idx]
+
+        try:
+            success = install_article99(version)
+            if success:
+                self._show_notification(f"✓ Article 99 ({version.value}) installé")
+            else:
+                self._show_notification("✗ ~/.speckit/ n'existe pas")
+        except Exception as e:
+            self._show_notification(f"✗ Erreur: {e}")
+
+    def _refresh_ide_list(self) -> None:
+        """Refresh the IDE list display."""
+        try:
+            ide_list = self.query_one("#ide-list", Static)
+            ide_list.update(self._build_ide_list())
+        except Exception:
+            pass
+
+    def _refresh_article99(self) -> None:
+        """Refresh the Article 99 selector display."""
+        try:
+            selector = self.query_one("#article99-selector", Static)
+            selector.update(self._build_article99_selector())
+        except Exception:
+            pass
+
+    def _show_notification(self, message: str) -> None:
+        """Show a notification message."""
+        try:
+            notif = self.query_one("#notification", Static)
+            notif.update(message)
+            notif.add_class("visible")
+
+            # Auto-hide after 2 seconds
+            if self._notification_timer:
+                self._notification_timer.stop()
+
+            self._notification_timer = self.set_timer(2.0, self._hide_notification)
+        except Exception:
+            pass
+
+    def _hide_notification(self) -> None:
+        """Hide the notification."""
+        try:
+            notif = self.query_one("#notification", Static)
+            notif.remove_class("visible")
+        except Exception:
+            pass
+
+
+def run_config_app(base_path: Path | None = None) -> None:
+    """Run the ConfigApp TUI."""
+    app = ConfigApp(base_path)
+    app.run()
 
 
 def run_tui():
