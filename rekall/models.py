@@ -353,6 +353,15 @@ ROLE_BONUS = {
 # Seed bonus for migrated sources (Feature 010)
 SEED_BONUS = 1.2  # 20% bonus for seed sources
 
+# AI Enrichment types for v12 (Feature 021/023 - AI Source Enrichment)
+EnrichmentStatus = Literal["none", "proposed", "validated"]
+SourceAIType = Literal["documentation", "blog", "research", "tool", "reference", "tutorial"]
+ValidatedBy = Literal["auto", "human"]
+
+VALID_ENRICHMENT_STATUSES = ("none", "proposed", "validated")
+VALID_SOURCE_AI_TYPES = ("documentation", "blog", "research", "tool", "reference", "tutorial")
+VALID_VALIDATED_BY = ("auto", "human")
+
 
 @dataclass
 class Source:
@@ -366,6 +375,13 @@ class Source:
     - is_promoted: True if automatically promoted based on usage
     - role: hub/authority/unclassified (HITS-inspired classification)
     - citation_quality_factor: PR-Index inspired quality score
+
+    Feature 021/023 adds AI enrichment fields:
+    - ai_type: Classification of the source (documentation, blog, etc.)
+    - ai_tags: AI-suggested tags for categorization
+    - ai_summary: AI-generated summary (max 500 chars)
+    - ai_confidence: Confidence score for the enrichment (0.0-1.0)
+    - enrichment_status: Workflow status (none, proposed, validated)
     """
 
     id: str = ""
@@ -386,6 +402,14 @@ class Source:
     role: SourceRole = "unclassified"  # hub/authority/unclassified
     seed_origin: str | None = None  # Path to speckit file (if seed)
     citation_quality_factor: float = 0.0  # PR-Index inspired quality (0.0-1.0)
+    # Feature 021/023 - AI Source Enrichment fields
+    ai_type: SourceAIType | None = None  # documentation, blog, research, tool, reference, tutorial
+    ai_tags: list[str] | None = None  # AI-suggested tags
+    ai_summary: str | None = None  # AI-generated summary (max 500 chars)
+    ai_confidence: float | None = None  # Confidence score 0.0-1.0
+    enrichment_status: EnrichmentStatus = "none"  # none, proposed, validated
+    enrichment_validated_at: datetime | None = None  # Timestamp of validation
+    enrichment_validated_by: ValidatedBy | None = None  # 'auto' or 'human'
 
     def __post_init__(self):
         """Validate source fields after initialization."""
@@ -417,6 +441,26 @@ class Source:
         if not 0.0 <= self.citation_quality_factor <= 1.0:
             raise ValueError(
                 f"citation_quality_factor must be 0.0-1.0, got: {self.citation_quality_factor}"
+            )
+        # Feature 021/023 validations - AI enrichment fields
+        if self.ai_type is not None and self.ai_type not in VALID_SOURCE_AI_TYPES:
+            raise ValueError(
+                f"invalid ai_type: {self.ai_type}. "
+                f"Valid: {', '.join(VALID_SOURCE_AI_TYPES)}"
+            )
+        if self.ai_confidence is not None and not 0.0 <= self.ai_confidence <= 1.0:
+            raise ValueError(
+                f"ai_confidence must be 0.0-1.0, got: {self.ai_confidence}"
+            )
+        if self.enrichment_status not in VALID_ENRICHMENT_STATUSES:
+            raise ValueError(
+                f"invalid enrichment_status: {self.enrichment_status}. "
+                f"Valid: {', '.join(VALID_ENRICHMENT_STATUSES)}"
+            )
+        if self.enrichment_validated_by is not None and self.enrichment_validated_by not in VALID_VALIDATED_BY:
+            raise ValueError(
+                f"invalid enrichment_validated_by: {self.enrichment_validated_by}. "
+                f"Valid: {', '.join(VALID_VALIDATED_BY)}"
             )
 
 
