@@ -1426,9 +1426,10 @@ class BrowseApp(SortableTableMixin, App):
 
     def on_data_table_cell_highlighted(self, event: DataTable.CellHighlighted) -> None:
         """Update detail panel when cell changes (for cell cursor mode)."""
-        if event.row_key is not None:
+        row_key = event.cell_key.row_key
+        if row_key is not None:
             try:
-                idx = int(event.row_key.value)
+                idx = int(row_key.value)
                 if 0 <= idx < len(self.entries):
                     self.selected_entry = self.entries[idx]
                     self._update_detail_panel(self.selected_entry)
