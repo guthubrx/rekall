@@ -9903,9 +9903,10 @@ class ConfigApp(App):
 
             # Get installation status
             try:
-                status = get_ide_status(ide.id, self.base_path)
-                global_status = "✓" if status.get("global_installed") else "-"
-                local_status = "✓" if status.get("local_installed") else "-"
+                all_status = get_ide_status(self.base_path)
+                ide_status = all_status.get(ide.id, {})
+                global_status = "✓" if ide_status.get("global") else "-"
+                local_status = "✓" if ide_status.get("local") else "-"
             except Exception:
                 global_status = "-"
                 local_status = "-"
