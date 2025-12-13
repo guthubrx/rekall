@@ -7,6 +7,7 @@ import zlib
 from datetime import date, datetime
 from pathlib import Path
 
+from rekall.cache import get_embedding_cache
 from rekall.models import (
     Embedding,
     Entry,
@@ -761,6 +762,9 @@ class Database:
         self._refresh_fts(entry.id)
         self.conn.commit()
 
+        # Invalidate embedding cache for modified entry (Feature 020)
+        get_embedding_cache().invalidate(entry.id)
+
     def delete(self, entry_id: str) -> None:
         """Delete an entry.
 
@@ -770,6 +774,9 @@ class Database:
         # Tags deleted by CASCADE, FTS by trigger
         self.conn.execute("DELETE FROM entries WHERE id = ?", (entry_id,))
         self.conn.commit()
+
+        # Invalidate embedding cache for deleted entry (Feature 020)
+        get_embedding_cache().invalidate(entry_id)
 
     def search(
         self,
@@ -1634,6 +1641,44 @@ class Database:
                 )
             )
         return embeddings
+
+    def get_all_vectors_batch(
+        self, embedding_type: str = "summary"
+    ) -> tuple[list[str], "ndarray"] | None:  # ndarray from numpy
+        """Get all embedding vectors as a numpy matrix for batch operations.
+
+        This method is optimized for vectorized similarity computation.
+        Returns entry_ids and vectors as a single numpy array.
+
+        Args:
+            embedding_type: Filter by type (default: 'summary')
+
+        Returns:
+            Tuple of (entry_ids list, vectors ndarray) or None if no embeddings
+            The vectors array has shape (N, D) where N is count, D is dimensions.
+        """
+        import numpy as np
+
+        cursor = self.conn.execute(
+            "SELECT entry_id, vector FROM embeddings WHERE embedding_type = ?",
+            (embedding_type,),
+        )
+
+        entry_ids: list[str] = []
+        vectors: list[np.ndarray] = []
+
+        for row in cursor.fetchall():
+            entry_ids.append(row["entry_id"])
+            # Deserialize blob to numpy array
+            vec = np.frombuffer(row["vector"], dtype=np.float32)
+            vectors.append(vec)
+
+        if not entry_ids:
+            return None
+
+        # Stack into (N, D) matrix
+        vectors_matrix = np.vstack(vectors)
+        return entry_ids, vectors_matrix
 
     def count_embeddings(self) -> int:
         """Count total embeddings in database.

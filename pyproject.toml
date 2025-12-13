@@ -8,7 +8,7 @@ version = "0.3.0"
 description = "Rekall - Developer Knowledge Management. Capture and retrieve bugs, patterns, decisions."
 readme = "README.md"
 license = {text = "MIT"}
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 authors = [
     {name = "Rekall Contributors"}
 ]
@@ -20,7 +20,6 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -32,6 +31,7 @@ dependencies = [
     "typer>=0.12.0,<1",
     "rich>=13.0.0,<14",
     "textual>=0.89.0,<1",
+    "tree-sitter-languages>=1.10.0,<2; python_version < '3.13'",
     "prompt_toolkit>=3.0.0,<4",
     "platformdirs>=4.0,<5",
     "tomli>=2.0,<3; python_version < '3.11'",
@@ -39,6 +39,7 @@ dependencies = [
     "pydantic>=2.0.0,<3",
     "httpx>=0.25.0,<1",
     "beautifulsoup4>=4.12.0,<5",
+    "mcp>=1.0.0,<2",
 ]
 
 [project.optional-dependencies]
@@ -54,6 +55,9 @@ dev = [
 embeddings = [
     "sentence-transformers>=2.2.0,<3",
     "numpy>=1.24.0,<2",
+]
+performance = [
+    "sqlite-vec>=0.1.1,<1",
 ]
 
 [project.scripts]
@@ -79,7 +83,7 @@ python_functions = ["test_*"]
 addopts = "-v --tb=short"
 
 [tool.ruff]
-target-version = "py39"
+target-version = "py310"
 line-length = 100
 
 [tool.ruff.lint]

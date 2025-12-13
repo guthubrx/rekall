@@ -73,6 +73,12 @@ class Config:
     autoscan_interval_hours: float = 5.0  # Hours between auto-scans
     autoscan_connectors: str = "cursor"  # Comma-separated list of connectors to scan
 
+    # Performance settings (Feature 020)
+    perf_cache_max_size: int = 1000  # Max entries in embedding cache
+    perf_cache_ttl_seconds: int = 600  # Cache TTL (10 min default)
+    perf_model_idle_timeout_minutes: int = 10  # Unload model after N minutes idle
+    perf_vector_backend: str = "auto"  # "auto", "sqlite-vec", "numpy"
+
     @property
     def db_path(self) -> Path:
         """Get the database path (backward compatibility)."""
@@ -263,6 +269,19 @@ def apply_toml_config(config: Config) -> Config:
         config.autoscan_interval_hours = float(autoscan["interval_hours"])
     if "connectors" in autoscan:
         config.autoscan_connectors = str(autoscan["connectors"])
+
+    # Apply performance settings if present (Feature 020)
+    perf = toml_data.get("performance", {})
+    if "cache_max_size" in perf:
+        config.perf_cache_max_size = int(perf["cache_max_size"])
+    if "cache_ttl_seconds" in perf:
+        config.perf_cache_ttl_seconds = int(perf["cache_ttl_seconds"])
+    if "model_idle_timeout_minutes" in perf:
+        config.perf_model_idle_timeout_minutes = int(perf["model_idle_timeout_minutes"])
+    if "vector_backend" in perf:
+        backend = perf["vector_backend"]
+        if backend in ("auto", "sqlite-vec", "numpy"):
+            config.perf_vector_backend = backend
 
     return config
 
