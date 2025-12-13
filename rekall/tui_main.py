@@ -1594,7 +1594,10 @@ class BrowseApp(SortableTableMixin, App):
         self._save_column_widths()
 
     def _save_column_widths(self) -> None:
-        """Save column widths to config file."""
+        """Save column widths to config file and memory."""
+        # Update in-memory config (for same-session navigation)
+        self.config.ui_column_widths = dict(self.column_widths)
+        # Persist to file (for next launch)
         save_config_to_toml(
             self.config.config_dir,
             {"ui": {"column_widths": self.column_widths}}
