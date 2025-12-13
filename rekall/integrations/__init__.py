@@ -992,6 +992,7 @@ def _install_claude_hooks(base_path: Path, global_install: bool) -> None:
 
     Installs:
     - rekall-webfetch.sh (PostToolUse hook for URL capture)
+    - rekall-reminder.sh (Stop hook for save reminder)
 
     Also updates settings.json with hook configuration.
 
@@ -1016,12 +1017,20 @@ def _install_claude_hooks(base_path: Path, global_install: bool) -> None:
     source_dir = Path(__file__).parent.parent / "data" / "hooks"
 
     # Install webfetch hook
-    source = source_dir / "rekall-webfetch.sh"
-    dest = hooks_dir / "rekall-webfetch.sh"
+    webfetch_source = source_dir / "rekall-webfetch.sh"
+    webfetch_dest = hooks_dir / "rekall-webfetch.sh"
 
-    if source.exists():
-        shutil.copy2(source, dest)
-        dest.chmod(0o755)
+    if webfetch_source.exists():
+        shutil.copy2(webfetch_source, webfetch_dest)
+        webfetch_dest.chmod(0o755)
+
+    # Install reminder hook (Stop hook)
+    reminder_source = source_dir / "rekall-reminder.sh"
+    reminder_dest = hooks_dir / "rekall-reminder.sh"
+
+    if reminder_source.exists():
+        shutil.copy2(reminder_source, reminder_dest)
+        reminder_dest.chmod(0o755)
 
     # Update settings.json with hook configuration
     settings = {}
@@ -1044,9 +1053,22 @@ def _install_claude_hooks(base_path: Path, global_install: bool) -> None:
     if not webfetch_hook_exists:
         post_tool_use.append({
             "matcher": "WebFetch",
-            "hooks": [{"type": "command", "command": str(dest)}]
+            "hooks": [{"type": "command", "command": str(webfetch_dest)}]
         })
         hooks_config["PostToolUse"] = post_tool_use
+
+    # Configure Stop hook (reminder)
+    stop_hooks = hooks_config.get("Stop", [])
+    reminder_hook_exists = any(
+        any("rekall-reminder" in hh.get("command", "") for hh in h.get("hooks", []))
+        for h in stop_hooks
+    )
+    if not reminder_hook_exists:
+        stop_hooks.append({
+            "matcher": "",
+            "hooks": [{"type": "command", "command": str(reminder_dest)}]
+        })
+        hooks_config["Stop"] = stop_hooks
 
     settings["hooks"] = hooks_config
 

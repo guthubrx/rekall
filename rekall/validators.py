@@ -7,7 +7,7 @@ using Pydantic v2 for type-safe data handling and clear error messages.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -53,7 +53,7 @@ class EntryValidator(BaseModel):
         le=5,
         description="Confidence level (0-5)",
     )
-    project: str | None = Field(
+    project: Optional[str] = Field(
         default=None,
         max_length=100,
         description="Associated project name",
@@ -88,7 +88,7 @@ class EntryValidator(BaseModel):
 class ConfigValidator(BaseModel):
     """Validation model for Rekall configuration."""
 
-    db_path: str | None = Field(
+    db_path: Optional[str] = Field(
         default=None,
         description="Path to the SQLite database",
     )
@@ -97,7 +97,7 @@ class ConfigValidator(BaseModel):
         max_length=MAX_INTEGRATIONS,
         description="List of active IDE integrations",
     )
-    embeddings_provider: str | None = Field(
+    embeddings_provider: Optional[str] = Field(
         default=None,
         max_length=50,
         description="Embeddings provider (if enabled)",
@@ -124,7 +124,7 @@ class ArchiveMetadataValidator(BaseModel):
         le=MAX_ENTRIES_COUNT,
         description="Number of entries in the archive",
     )
-    checksum: str | None = Field(
+    checksum: Optional[str] = Field(
         default=None,
         max_length=64,
         description="SHA-256 checksum of the data",
@@ -161,14 +161,14 @@ class ArchiveEntryValidator(BaseModel):
         le=5,
         description="Confidence level",
     )
-    project: str | None = Field(
+    project: Optional[str] = Field(
         default=None,
         description="Associated project",
     )
     created_at: str = Field(
         description="Creation timestamp (ISO format)",
     )
-    updated_at: str | None = Field(
+    updated_at: Optional[str] = Field(
         default=None,
         description="Last update timestamp",
     )

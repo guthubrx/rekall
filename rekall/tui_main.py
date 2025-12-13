@@ -1571,8 +1571,8 @@ class BrowseApp(SortableTableMixin, App):
             return
 
         # Count links for warning
-        from rekall.db import get_db
-        db = get_db()
+        from rekall.db import Database
+        db = Database()
         link_count = db.count_links(self.selected_entry.id)
 
         # Show confirmation overlay
@@ -1676,8 +1676,6 @@ class BrowseApp(SortableTableMixin, App):
         self, message: DeleteConfirmOverlay.DeleteConfirmed
     ) -> None:
         """Handle deletion confirmation from overlay."""
-        from rekall.db import get_db
-
         # Remove overlay first
         overlay = self.query_one(DeleteConfirmOverlay)
         overlay.remove()
@@ -9672,6 +9670,57 @@ def get_menu_items():
 # =============================================================================
 
 
+class ClickableRow(Static):
+    """A clickable row widget that emits an event when clicked."""
+
+    def __init__(
+        self,
+        content: str,
+        row_index: int,
+        section: str,
+        *args,
+        **kwargs
+    ):
+        super().__init__(content, *args, **kwargs)
+        self.row_index = row_index
+        self.section = section  # "integrations" or "speckit"
+
+    def on_click(self) -> None:
+        """Handle click event."""
+        self.post_message(ClickableRow.Selected(self.row_index, self.section))
+
+    class Selected(Message):
+        """Message emitted when a row is clicked."""
+
+        def __init__(self, row_index: int, section: str) -> None:
+            self.row_index = row_index
+            self.section = section
+            super().__init__()
+
+
+class SyncedScroll(VerticalScroll):
+    """VerticalScroll that syncs with a partner scroll container."""
+
+    def __init__(self, *children, partner_id: str = "", **kwargs):
+        super().__init__(*children, **kwargs)
+        self.partner_id = partner_id
+        self._syncing = False  # Prevent recursive sync
+
+    def watch_scroll_y(self, old_value: float, new_value: float) -> None:
+        """Called when scroll_y changes - sync to partner."""
+        if self._syncing or not self.partner_id:
+            return
+
+        try:
+            partner = self.app.query_one(f"#{self.partner_id}", SyncedScroll)
+            if partner and partner.scroll_y != new_value:
+                partner._syncing = True
+                partner.scroll_y = new_value
+                partner._syncing = False
+        except Exception:
+            pass
+
+
 class ConfigApp(App):
     """Textual app for IDE integrations configuration.
 
@@ -9683,6 +9732,14 @@ class ConfigApp(App):
     CSS = """
     Screen {
         background: $surface;
+        layers: base notification modal;
+    }
+
+    /* Compact banner */
+    #compact-banner {
+        height: 1;
+        padding: 0 1;
+        color: #4367CD;
     }
 
     #main-container {
@@ -9691,9 +9748,8 @@ class ConfigApp(App):
     }
 
     #detected-ide-header {
-        height: auto;
-        margin-bottom: 1;
-        padding: 0 1;
+        height: 1;
+        padding: 0;
         color: $success;
     }
 
@@ -9702,25 +9758,24 @@ class ConfigApp(App):
         height: auto;
         max-height: 14;
         layout: horizontal;
-        margin-bottom: 1;
     }
 
     #integrations-section {
         width: 1fr;
         height: auto;
-        border: solid $primary;
-        padding: 1;
+        border: solid #4367CD;
+        padding: 0 1;
         margin-right: 1;
     }
 
     #integrations-section.active {
-        border: double $warning;
+        border: double #93B5F7;
     }
 
     #integrations-title {
         text-style: bold;
-        color: $primary;
-        margin-bottom: 1;
+        color: #4367CD;
+        height: 1;
     }
 
     #column-headers {
@@ -9731,58 +9786,222 @@ class ConfigApp(App):
     #speckit-section {
         width: 1fr;
         height: auto;
-        border: solid $secondary;
-        padding: 1;
+        border: solid #4367CD;
+        padding: 0 1;
     }
 
     #speckit-section.active {
-        border: double $warning;
+        border: double #93B5F7;
     }
 
     #speckit-title {
         text-style: bold;
-        color: $secondary;
-        margin-bottom: 1;
+        color: #4367CD;
+        height: 1;
     }
 
     #article99-selector {
         height: auto;
+        padding: 0;
+    }
+
+    #mcp-section {
+        width: 1fr;
+        height: auto;
+        border: solid #4367CD;
         padding: 0 1;
+        margin-left: 1;
+    }
+
+    #mcp-section.active {
+        border: double #93B5F7;
+    }
+
+    #mcp-title {
+        text-style: bold;
+        color: #4367CD;
+        height: 1;
+    }
+
+    #mcp-list-container {
+        height: auto;
+    }
+
+    #mcp-list-container ClickableRow {
+        height: 1;
+    }
+
+    #ide-list-container {
+        height: auto;
+    }
+
+    #ide-list-container ClickableRow {
+        height: 1;
+    }
+
+    #article99-list-container {
+        height: auto;
+    }
+
+    #article99-list-container ClickableRow {
+        height: 1;
+    }
+
+    #article99-reason {
+        height: 1;
     }
 
     /* Bottom: Preview section with collapsibles */
     #preview-section {
         height: 1fr;
-        border: solid $surface-lighten-2;
-        padding: 1;
+        min-height: 10;
+        border: solid #4367CD;
+        padding: 0 1;
+        overflow: hidden;
+    }
+
+    #preview-section.active {
+        border: double #93B5F7;
     }
 
     #preview-title {
         text-style: bold;
-        color: $text;
-        margin-bottom: 1;
+        color: #4367CD;
+        height: 1;
     }
 
     #preview-scroll {
         height: 100%;
+        scrollbar-gutter: stable;
     }
 
-    #preview-content {
+    /* Category collapsibles (Skills, Hooks, Speckit) */
+    .category-collapsible {
+        margin: 0;
+        padding: 0;
+        border: none;
+    }
+
+    .category-collapsible:focus-within {
+        border-left: thick #93B5F7;
+    }
+
+    .category-collapsible > CollapsibleTitle {
+        background: #4367CD;
+        color: white;
+        padding: 0 1;
+        height: 1;
+        text-style: bold;
+    }
+
+    .category-collapsible > CollapsibleTitle:focus {
+        background: #93B5F7;
+        color: #1a1a2e;
+        text-style: bold reverse;
+    }
+
+    .category-collapsible > Contents {
+        padding: 0;
+        margin: 0;
         height: auto;
+        background: $surface;
     }
 
+    /* File collapsibles (nested inside categories) */
     .file-collapsible {
-        margin-bottom: 1;
+        margin: 0;
+        padding: 0;
+        border: none;
+    }
+
+    .file-collapsible:focus-within {
+        border-left: thick #93B5F7;
     }
 
     .file-collapsible > CollapsibleTitle {
         background: $surface-darken-1;
         padding: 0 1;
+        height: 1;
+    }
+
+    .file-collapsible > CollapsibleTitle:focus {
+        background: #93B5F7;
+        color: #1a1a2e;
+        text-style: bold reverse;
     }
 
     .file-collapsible > Contents {
+        padding: 0;
+        margin: 0;
+        height: auto;
+    }
+
+    /* Side-by-side diff layout */
+    .diff-row {
+        height: 12;
+        layout: horizontal;
+        margin-bottom: 1;
+    }
+
+    .diff-container-left {
+        width: 1fr;
+        height: 100%;
+        border: solid #4367CD;
+        margin-right: 1;
+    }
+
+    .diff-container-right {
+        width: 1fr;
+        height: 100%;
+        border: solid #4367CD;
+    }
+
+    .diff-scroll {
+        height: 100%;
+        scrollbar-gutter: stable;
+    }
+
+    .diff-panel-left, .diff-panel-right {
+        height: auto;
         padding: 0 1;
         background: $surface-darken-2;
+    }
+
+    .file-buttons-row {
+        height: auto;
+        width: 100%;
+        margin-top: 1;
+    }
+
+    .save-file-btn, .reset-file-btn {
+        margin: 0 1 0 0;
+        width: auto;
+        min-width: 14;
+        height: 3;
+        min-height: 3;
+    }
+
+    .reset-file-btn {
+        background: $surface-darken-1;
+        color: $text-muted;
+    }
+
+    .reset-file-btn:hover {
+        background: $warning-darken-1;
+        color: $text;
+    }
+
+    .file-textarea {
+        height: 15;
+        min-height: 8;
+        max-height: 20;
+        border: solid #4367CD;
+        background: $surface-darken-2;
+        scrollbar-gutter: stable;
+    }
+
+    .file-textarea:focus {
+        border: solid #93B5F7;
     }
 
     .file-path {
@@ -9826,17 +10045,63 @@ class ConfigApp(App):
     #notification.visible {
         display: block;
     }
+
+    /* Confirm modal (unsaved changes) */
+    #confirm-modal {
+        display: none;
+        layer: modal;
+        width: 100%;
+        height: 100%;
+        align: center middle;
+        background: rgba(0, 0, 0, 0.7);
+    }
+
+    #confirm-modal.visible {
+        display: block;
+    }
+
+    #confirm-box {
+        width: 50;
+        height: auto;
+        padding: 1 2;
+        background: #1e2a4a;
+        border: thick #4367CD;
+    }
+
+    #confirm-title {
+        text-style: bold;
+        color: $warning;
+        margin-bottom: 1;
+    }
+
+    #confirm-message {
+        margin-bottom: 1;
+    }
+
+    #confirm-buttons {
+        height: auto;
+        align: center middle;
+    }
+
+    #confirm-buttons Button {
+        margin: 0 1;
+        min-width: 12;
+    }
     """ + BANNER_CSS
 
     BINDINGS = [
-        Binding("escape", "quit", "Quitter", show=True),
+        Binding("escape", "quit_or_back", "Quitter/Retour", show=True),
         Binding("q", "quit", "Quitter", show=False),
         Binding("up,k", "move_up", "↑", show=True),
         Binding("down,j", "move_down", "↓", show=True),
         Binding("g", "install_global", "Global", show=True),
         Binding("l", "install_local", "Local", show=True),
         Binding("r", "remove", "Désinstaller", show=True),
-        Binding("s", "switch_section", "Section", show=True),
+        Binding("R", "remove_all", "Désinstaller tout", show=False),
+        Binding("tab", "switch_section", "Section →", show=True, priority=True),
+        Binding("shift+tab", "switch_section_reverse", "← Section", show=False, priority=True),
+        Binding("enter", "enter_files", "Fichiers", show=True),
+        Binding("ctrl+s", "save_file", "Sauver", show=True),
     ]
 
     def __init__(self, base_path: Path | None = None):
@@ -9846,6 +10111,37 @@ class ConfigApp(App):
         self._selected_article99_idx = 0
         self._active_section = "integrations"  # or "speckit"
         self._notification_timer = None
+        self._editable_files: dict[str, Path] = {}  # textarea_id -> file_path
+
+        # Category collapsed states (preserved across refreshes)
+        self._category_collapsed: dict[str, bool] = {
+            "skills": False,  # Start expanded
+            "hooks": False,
+            "speckit": False,
+        }
+
+        # Modified content tracking (textarea_id -> modified content)
+        # If user edits a file, store the edited version here
+        self._modified_content: dict[str, str] = {}
+
+        # Existing file content tracking (textarea_id -> original file content)
+        # Used to regenerate diff when user edits
+        self._existing_content: dict[str, str] = {}
+
+        # Distribution content tracking (textarea_id -> distribution version)
+        # Used for reset functionality
+        self._distribution_content: dict[str, str] = {}
+
+        # Unique counter for widget IDs (to avoid ID conflicts on refresh)
+        self._widget_counter = 0
+
+        # Track last displayed state to avoid unnecessary refreshes
+        self._last_displayed_ide_idx: int | None = None
+        self._last_displayed_article99_idx: int | None = None
+
+        # Pending action after confirmation (for unsaved changes)
+        # Stores callable to execute if user confirms discard
+        self._pending_action: callable | None = None
 
         # Load data
         from rekall.integrations import (
@@ -9860,49 +10156,124 @@ class ConfigApp(App):
         self._article99_recommendation = get_article99_recommendation(self.base_path)
         self._speckit_exists = (Path.home() / ".speckit").exists()
 
+        # MCP data
+        self._mcp_configs = MCP_CLI_CONFIGS
+        self._mcp_keys = list(MCP_CLI_CONFIGS.keys())
+        self._selected_mcp_idx = 0
+
+        # Set initial Article 99 selection based on detected IDE
+        self._update_article99_for_ide()
+
+    def _create_compact_banner(self) -> Static:
+        """Create a compact single-line banner with gradient."""
+        deep_blue = (67, 103, 205)
+        light_blue = (147, 181, 247)
+
+        # Compact banner: ══════ REKALL ══════ Config
+        text = "REKALL"
+        result = "══════ "
+
+        for i, char in enumerate(text):
+            t_val = i / max(len(text) - 1, 1)
+            r = int(deep_blue[0] + (light_blue[0] - deep_blue[0]) * t_val)
+            g = int(deep_blue[1] + (light_blue[1] - deep_blue[1]) * t_val)
+            b = int(deep_blue[2] + (light_blue[2] - deep_blue[2]) * t_val)
+            result += f"[bold rgb({r},{g},{b})]{char}[/]"
+
+        result += " ══════ [dim]Configuration des intégrations[/dim]"
+        return Static(result, id="compact-banner", markup=True)
+
     def compose(self) -> ComposeResult:
         from textual.widgets import Collapsible
         from textual.containers import Horizontal, VerticalScroll
 
-        yield create_banner_container()
+        yield self._create_compact_banner()
 
         with Container(id="main-container"):
             # Detected IDE header
             yield Static(self._build_detected_header(), id="detected-ide-header", markup=True)
 
-            # Top row: horizontal layout for IDE + SPECKIT
+            # Top row: horizontal layout for IDE + MCP + SPECKIT
             with Horizontal(id="top-row"):
                 # Section 1: INTÉGRATIONS
                 with Container(id="integrations-section"):
                     yield Static("[bold]INTÉGRATIONS[/bold]", id="integrations-title")
                     yield Static(self._build_column_headers(), id="column-headers", markup=True)
-                    yield Static(self._build_ide_list(), id="ide-list", markup=True)
+                    # IDE list as individual clickable rows
+                    with Container(id="ide-list-container"):
+                        for idx, row_content in enumerate(self._build_ide_rows()):
+                            yield ClickableRow(
+                                row_content,
+                                row_index=idx,
+                                section="integrations",
+                                id=f"ide-row-{idx}",
+                                markup=True,
+                            )
 
-                # Section 2: SPECKIT
+                # Section 2: MCP
+                with Container(id="mcp-section"):
+                    yield Static("[bold]MCP[/bold]", id="mcp-title")
+                    # MCP CLI list as individual clickable rows
+                    with Container(id="mcp-list-container"):
+                        for idx, row_content in enumerate(self._build_mcp_rows()):
+                            yield ClickableRow(
+                                row_content,
+                                row_index=idx,
+                                section="mcp",
+                                id=f"mcp-row-{idx}",
+                                markup=True,
+                            )
+
+                # Section 3: SPECKIT
                 with Container(id="speckit-section"):
                     yield Static("[bold]SPECKIT[/bold]", id="speckit-title")
-                    yield Static(self._build_article99_selector(), id="article99-selector", markup=True)
+                    # Article99 list as individual clickable rows
+                    with Container(id="article99-list-container"):
+                        for idx, row_content in enumerate(self._build_article99_rows()):
+                            yield ClickableRow(
+                                row_content,
+                                row_index=idx,
+                                section="speckit",
+                                id=f"article99-row-{idx}",
+                                markup=True,
+                            )
+                    # Recommendation reason (not clickable)
+                    yield Static(
+                        f"[dim]{self._article99_recommendation.reason}[/dim]" if self._article99_recommendation.reason else "",
+                        id="article99-reason",
+                        markup=True
+                    )
 
             # Bottom: Preview section with collapsible files
+            # Note: containers don't need focus, but TextArea children must be focusable
             with Container(id="preview-section"):
-                yield Static("[bold]FICHIERS À INSTALLER[/bold]", id="preview-title")
-                with VerticalScroll(id="preview-scroll"):
-                    with Container(id="preview-content"):
-                        # Collapsibles will be populated dynamically
-                        yield Static("[dim]Sélectionnez un IDE pour voir les fichiers[/dim]", id="preview-placeholder")
+                yield Static("[bold]FICHIERS[/bold]", id="preview-title")
+                with VerticalScroll(id="preview-scroll", can_focus=True):
+                    # Collapsibles will be populated dynamically
+                    yield Static("[dim]Sélectionnez un IDE pour voir les fichiers[/dim]", id="preview-placeholder")
 
         yield Static(
-            "[dim]↑↓/jk naviguer • g global • l local • r désinstaller • s section • Esc quitter[/dim]",
+            "[dim]↑↓/clic naviguer • Tab section • g global • l local • r désinstaller • Ctrl+S sauver • Esc quitter[/dim]",
             id="footer-hint"
         )
         yield Static("", id="notification")
+
+        # Confirmation modal for unsaved changes
+        from textual.widgets import Button
+        with Container(id="confirm-modal"):
+            with Container(id="confirm-box"):
+                yield Static("⚠ Modifications non sauvegardées", id="confirm-title")
+                yield Static("Voulez-vous quitter sans sauvegarder ?", id="confirm-message")
+                with Horizontal(id="confirm-buttons"):
+                    yield Button("Quitter", id="confirm-quit", variant="error")
+                    yield Button("Annuler", id="confirm-cancel", variant="primary")
 
     def on_mount(self) -> None:
         """Initialize UI state on mount."""
         # Set initial active section style
         self._update_section_styles()
-        # Show preview for initial selection
-        self._refresh_preview()
+        # Show preview for initial selection (force first render)
+        self._refresh_preview(force=True)
 
     def _build_detected_header(self) -> str:
         """Build the detected IDE header."""
@@ -9911,31 +10282,123 @@ class ConfigApp(App):
             return f"[green]► IDE détecté: {self._detected.ide.name} ({scope_str})[/green]"
         return "[dim]Aucun IDE détecté[/dim]"
 
-    def _build_column_headers(self) -> str:
-        """Build column headers for IDE list."""
-        return f"{'IDE':<20} {'Global':^12} {'Local':^12}"
+    def _detect_language(self, path: str) -> str | None:
+        """Detect syntax highlighting language from file path extension.
 
-    def _build_ide_list(self) -> str:
-        """Build the IDE list with Global/Local columns."""
+        Returns None if tree-sitter is not available (Python 3.13+) or language unsupported.
+        """
+        # Check if tree-sitter is available (not on Python 3.13+)
+        try:
+            from tree_sitter_languages import get_language  # noqa: F401
+        except ImportError:
+            return None  # Graceful degradation - no syntax highlighting
+
+        ext_to_lang = {
+            ".md": "markdown",
+            ".json": "json",
+            ".sh": "bash",
+            ".bash": "bash",
+            ".zsh": "bash",
+            ".toml": "toml",
+            ".yaml": "yaml",
+            ".yml": "yaml",
+            ".py": "python",
+            ".js": "javascript",
+            ".ts": "typescript",
+            ".css": "css",
+            ".html": "html",
+            ".xml": "xml",
+            ".sql": "sql",
+            ".go": "go",
+            ".rs": "rust",
+            ".rb": "ruby",
+            ".java": "java",
+            ".c": "c",
+            ".cpp": "cpp",
+            ".h": "c",
+            ".hpp": "cpp",
+        }
+        from pathlib import Path
+        ext = Path(path).suffix.lower()
+        return ext_to_lang.get(ext)
+
+    def _get_recommended_article99_for_ide(self, ide_idx: int) -> tuple[int, str]:
+        """Get recommended Article 99 version index based on IDE capabilities.
+
+        Logic:
+        - Claude Code: MICRO (has skill + hooks, full /rekall access)
+        - IDEs with MCP support: SHORT (rekall_* tools available)
+        - IDEs without MCP: EXTENSIVE (CLI instructions needed)
+
+        Args:
+            ide_idx: Index of the selected IDE
+
+        Returns:
+            Tuple of (version_index, reason)
+        """
+        from rekall.integrations import Article99Version
+
+        ide = self._ides[ide_idx]
+
+        # Claude Code has full skill integration
+        if ide.id == "claude":
+            return (
+                self._article99_versions.index(Article99Version.MICRO),
+                "Claude Code: skill /rekall installée"
+            )
+
+        # IDEs with MCP support can use rekall_* tools
+        if ide.supports_mcp:
+            return (
+                self._article99_versions.index(Article99Version.SHORT),
+                f"{ide.name}: MCP supporté, outils rekall_*"
+            )
+
+        # IDEs without MCP need full CLI instructions
+        return (
+            self._article99_versions.index(Article99Version.EXTENSIVE),
+            f"{ide.name}: CLI seulement, instructions complètes"
+        )
+
+    def _update_article99_for_ide(self) -> None:
+        """Update Article 99 selection and recommendation based on selected IDE."""
+        from rekall.integrations import Article99Config
+
+        idx, reason = self._get_recommended_article99_for_ide(self._selected_ide_idx)
+        self._selected_article99_idx = idx
+        self._article99_recommendation = Article99Config(
+            recommended=self._article99_versions[idx],
+            reason=reason
+        )
+
+    def _build_column_headers(self) -> str:
+        """Build column headers for IDE list.
+
+        Header aligns with: [▶] Name (1 marker + space + 18 char name = 20 total)
+        """
+        return f"  {'IDE':<18} {'Global':^12} {'Local':^12}"
+
+    def _build_ide_rows(self) -> list[str]:
+        """Build individual IDE rows for clickable widgets."""
         from rekall.integrations import get_ide_status
 
-        lines = []
+        rows = []
         for idx, ide in enumerate(self._ides):
-            # Check if this is the detected IDE
-            is_detected = self._detected.ide and self._detected.ide.id == ide.id
-            marker = "►" if is_detected else " "
+            # Selection indicator: triangle stays visible even when section inactive
+            is_selected = idx == self._selected_ide_idx
+            selection_marker = "▶" if is_selected else " "
 
-            # Selection highlight
-            selected = idx == self._selected_ide_idx and self._active_section == "integrations"
-            prefix = "[reverse]" if selected else ""
-            suffix = "[/reverse]" if selected else ""
+            # Highlight only when section is active
+            active_highlight = is_selected and self._active_section == "integrations"
+            prefix = "[reverse]" if active_highlight else ""
+            suffix = "[/reverse]" if active_highlight else ""
 
             # Get installation status
             try:
                 all_status = get_ide_status(self.base_path)
                 ide_status = all_status.get(ide.id, {})
-                global_status = "✓" if ide_status.get("global") else "-"
-                local_status = "✓" if ide_status.get("local") else "-"
+                global_status = "[green]✓[/green]" if ide_status.get("global") else "-"
+                local_status = "[green]✓[/green]" if ide_status.get("local") else "-"
             except Exception:
                 global_status = "-"
                 local_status = "-"
@@ -9948,13 +10411,14 @@ class ConfigApp(App):
 
             local_col = f"{local_status:^12}"
 
-            line = f"{prefix}{marker} {ide.name:<18} {global_col} {local_col}{suffix}"
-            lines.append(line)
+            # Format: [▶] Name    Global    Local
+            row = f"{prefix}{selection_marker} {ide.name:<18} {global_col} {local_col}{suffix}"
+            rows.append(row)
 
-        return "\n".join(lines)
+        return rows
 
-    def _build_article99_selector(self) -> str:
-        """Build Article 99 version selector."""
+    def _build_article99_rows(self) -> list[str]:
+        """Build individual Article 99 rows for clickable widgets."""
         from rekall.integrations import Article99Version
 
         version_labels = {
@@ -9963,86 +10427,384 @@ class ConfigApp(App):
             Article99Version.EXTENSIVE: ("Extensif", "~1000 tokens"),
         }
 
-        lines = []
+        rows = []
         for idx, version in enumerate(self._article99_versions):
             label, tokens = version_labels[version]
 
-            # Check if recommended
+            # Check if recommended based on selected IDE
             is_recommended = version == self._article99_recommendation.recommended
             rec_marker = "★ recommandé" if is_recommended else ""
 
-            # Selection highlight
-            selected = idx == self._selected_article99_idx and self._active_section == "speckit"
-            prefix = "[reverse]" if selected else ""
-            suffix = "[/reverse]" if selected else ""
+            # Selection indicator: triangle stays visible even when section inactive
+            is_selected = idx == self._selected_article99_idx
+            selection_marker = "▶" if is_selected else " "
 
-            # Radio button style
-            checked = "◉" if idx == self._selected_article99_idx else "○"
+            # Highlight only when section is active
+            active_highlight = is_selected and self._active_section == "speckit"
+            prefix = "[reverse]" if active_highlight else ""
+            suffix = "[/reverse]" if active_highlight else ""
 
-            line = f"{prefix}{checked} {label} ({tokens}) {rec_marker}{suffix}"
-            lines.append(line)
+            # Format: [▶] Label (tokens) [★ recommandé]
+            row = f"{prefix}{selection_marker} {label} ({tokens}) {rec_marker}{suffix}"
+            rows.append(row)
 
-        # Add recommendation reason
-        if self._article99_recommendation.reason:
-            lines.append("")
-            lines.append(f"[dim]{self._article99_recommendation.reason}[/dim]")
+        return rows
 
-        return "\n".join(lines)
+    def _build_mcp_rows(self) -> list[str]:
+        """Build individual MCP CLI rows for clickable widgets."""
+        rows = []
+        for idx, key in enumerate(self._mcp_keys):
+            config = self._mcp_configs[key]
+            name = config["name"]
+
+            # Check if installed
+            is_installed = self._check_mcp_installed(key)
+            status = "[green]✓[/green]" if is_installed else "[dim]○[/dim]"
+
+            # Selection indicator
+            is_selected = idx == self._selected_mcp_idx
+            selection_marker = "▶" if is_selected else " "
+
+            # Highlight only when section is active
+            active_highlight = is_selected and self._active_section == "mcp"
+            prefix = "[reverse]" if active_highlight else ""
+            suffix = "[/reverse]" if active_highlight else ""
+
+            # Format: [▶] Status Name
+            row = f"{prefix}{selection_marker} {status} {name}{suffix}"
+            rows.append(row)
+
+        return rows
+
+    def _check_mcp_installed(self, key: str) -> bool:
+        """Check if Rekall MCP is configured for a specific CLI."""
+        import json
+
+        config = self._mcp_configs[key]
+        file_path_str = config["file"]
+
+        if file_path_str.startswith("~"):
+            file_path = Path(file_path_str).expanduser()
+        elif file_path_str.startswith("."):
+            file_path = Path.home() / file_path_str
+        else:
+            file_path = Path(file_path_str)
+
+        if not file_path.exists():
+            return False
+
+        try:
+            with open(file_path, encoding="utf-8") as f:
+                content = f.read().strip()
+                if not content:
+                    return False
+                data = json.loads(content)
+
+            # Check various formats
+            if "mcpServers" in data:
+                servers = data["mcpServers"]
+                if isinstance(servers, dict) and "rekall" in servers:
+                    return True
+                if isinstance(servers, list):
+                    for server in servers:
+                        if isinstance(server, dict) and server.get("name") == "rekall":
+                            return True
+            if "context_servers" in data and "rekall" in data["context_servers"]:
+                return True
+            if "mcp" in data and "rekall" in str(data["mcp"]):
+                return True
+
+            return False
+        except Exception:
+            return False
+
+    def _refresh_mcp(self) -> None:
+        """Refresh the MCP list display by updating each ClickableRow."""
+        try:
+            rows = self._build_mcp_rows()
+            for idx, row_content in enumerate(rows):
+                try:
+                    row_widget = self.query_one(f"#mcp-row-{idx}", ClickableRow)
+                    row_widget.update(row_content)
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def action_quit(self) -> None:
-        """Quit the application."""
-        self.exit()
+        """Quit the application (with confirmation if unsaved changes)."""
+        self._try_quit()
+
+    def _has_unsaved_changes(self) -> bool:
+        """Check if there are unsaved changes in any TextArea."""
+        from textual.widgets import TextArea
+
+        for textarea_id, file_path in self._editable_files.items():
+            try:
+                textarea = self.query_one(f"#{textarea_id}", TextArea)
+                current_content = textarea.text
+
+                # Check if file exists and compare
+                if file_path.exists():
+                    existing_content = file_path.read_text()
+                    if current_content != existing_content:
+                        return True
+                else:
+                    # New file - check if content differs from distribution
+                    if textarea_id in self._distribution_content:
+                        if current_content != self._distribution_content[textarea_id]:
+                            return True
+            except Exception:
+                pass
+
+        return False
+
+    def _try_quit(self) -> None:
+        """Try to quit, showing confirmation if unsaved changes."""
+        if self._has_unsaved_changes():
+            self._pending_action = lambda: self.exit()
+            self._show_confirm_modal()
+        else:
+            self.exit()
+
+    def _try_action_with_confirm(self, action: callable) -> None:
+        """Try to execute an action, showing confirmation if unsaved changes.
+
+        Args:
+            action: Callable to execute (directly or after user confirms)
+        """
+        if self._has_unsaved_changes():
+            self._pending_action = action
+            self._show_confirm_modal()
+        else:
+            action()
+
+    def _show_confirm_modal(self) -> None:
+        """Show the confirmation modal for unsaved changes."""
+        modal = self.query_one("#confirm-modal", Container)
+        modal.add_class("visible")
+
+    def _hide_confirm_modal(self) -> None:
+        """Hide the confirmation modal."""
+        modal = self.query_one("#confirm-modal", Container)
+        modal.remove_class("visible")
 
     def action_move_up(self) -> None:
         """Move selection up."""
-        if self._active_section == "integrations":
-            self._selected_ide_idx = max(0, self._selected_ide_idx - 1)
-            self._refresh_ide_list()
-            self._refresh_preview()
-        else:
-            self._selected_article99_idx = max(0, self._selected_article99_idx - 1)
-            self._refresh_article99()
-            self._refresh_preview()
+        if self._active_section == "files":
+            self._navigate_collapsibles(-1)
+        elif self._active_section == "integrations":
+            new_idx = max(0, self._selected_ide_idx - 1)
+            if new_idx != self._selected_ide_idx:
+                self._try_action_with_confirm(lambda idx=new_idx: self._select_ide(idx))
+        elif self._active_section == "speckit":
+            new_idx = max(0, self._selected_article99_idx - 1)
+            if new_idx != self._selected_article99_idx:
+                self._try_action_with_confirm(lambda idx=new_idx: self._select_article99(idx))
+        elif self._active_section == "mcp":
+            new_idx = max(0, self._selected_mcp_idx - 1)
+            if new_idx != self._selected_mcp_idx:
+                self._selected_mcp_idx = new_idx
+                self._refresh_mcp()
 
     def action_move_down(self) -> None:
         """Move selection down."""
-        if self._active_section == "integrations":
-            self._selected_ide_idx = min(len(self._ides) - 1, self._selected_ide_idx + 1)
-            self._refresh_ide_list()
-            self._refresh_preview()
-        else:
-            self._selected_article99_idx = min(len(self._article99_versions) - 1, self._selected_article99_idx + 1)
-            self._refresh_article99()
-            self._refresh_preview()
+        if self._active_section == "files":
+            self._navigate_collapsibles(1)
+        elif self._active_section == "integrations":
+            new_idx = min(len(self._ides) - 1, self._selected_ide_idx + 1)
+            if new_idx != self._selected_ide_idx:
+                self._try_action_with_confirm(lambda idx=new_idx: self._select_ide(idx))
+        elif self._active_section == "speckit":
+            new_idx = min(len(self._article99_versions) - 1, self._selected_article99_idx + 1)
+            if new_idx != self._selected_article99_idx:
+                self._try_action_with_confirm(lambda idx=new_idx: self._select_article99(idx))
+        elif self._active_section == "mcp":
+            new_idx = min(len(self._mcp_keys) - 1, self._selected_mcp_idx + 1)
+            if new_idx != self._selected_mcp_idx:
+                self._selected_mcp_idx = new_idx
+                self._refresh_mcp()
 
-    def action_switch_section(self) -> None:
-        """Switch between sections."""
-        if not self._speckit_exists:
-            return  # Can't switch if speckit doesn't exist
-
-        if self._active_section == "integrations":
-            self._active_section = "speckit"
-        else:
-            self._active_section = "integrations"
-
-        # Update visual indicators
-        self._update_section_styles()
+    def _select_ide(self, idx: int) -> None:
+        """Select an IDE by index and refresh display."""
+        self._selected_ide_idx = idx
+        self._update_article99_for_ide()
         self._refresh_ide_list()
         self._refresh_article99()
         self._refresh_preview()
+
+    def _select_article99(self, idx: int) -> None:
+        """Select an Article 99 version by index and refresh display."""
+        self._selected_article99_idx = idx
+        self._refresh_article99()
+        self._refresh_preview()
+
+    def _navigate_collapsibles(self, direction: int) -> None:
+        """Navigate between collapsible titles in the files section.
+
+        Args:
+            direction: -1 for up, 1 for down
+        """
+        try:
+            from textual.widgets._collapsible import CollapsibleTitle
+
+            # Get all collapsible titles (the focusable part)
+            titles = list(self.query("CollapsibleTitle"))
+            if not titles:
+                return
+
+            # Find currently focused title
+            focused = self.focused
+            current_idx = -1
+
+            for i, title in enumerate(titles):
+                if title == focused:
+                    current_idx = i
+                    break
+
+            # Calculate new index
+            if current_idx == -1:
+                # No title focused, focus first or last
+                new_idx = 0 if direction > 0 else len(titles) - 1
+            else:
+                new_idx = current_idx + direction
+                new_idx = max(0, min(len(titles) - 1, new_idx))
+
+            # Focus the new title
+            titles[new_idx].focus()
+        except Exception:
+            pass
+
+    def action_switch_section(self) -> None:
+        """Switch between sections (integrations -> mcp -> speckit -> files -> integrations)."""
+        if self._active_section == "integrations":
+            self._active_section = "mcp"
+        elif self._active_section == "mcp":
+            if self._speckit_exists:
+                self._active_section = "speckit"
+            else:
+                self._active_section = "files"
+        elif self._active_section == "speckit":
+            self._active_section = "files"
+        else:  # files
+            self._active_section = "integrations"
+
+        self._after_section_switch()
+
+    def action_switch_section_reverse(self) -> None:
+        """Switch between sections in reverse order (Shift+Tab)."""
+        if self._active_section == "integrations":
+            self._active_section = "files"
+        elif self._active_section == "files":
+            if self._speckit_exists:
+                self._active_section = "speckit"
+            else:
+                self._active_section = "mcp"
+        elif self._active_section == "speckit":
+            self._active_section = "mcp"
+        else:  # mcp
+            self._active_section = "integrations"
+
+        self._after_section_switch()
+
+    def _after_section_switch(self) -> None:
+        """Common update after switching sections."""
+        # Update visual indicators and focus
+        self._update_section_styles()
+        self._refresh_ide_list()
+        self._refresh_article99()
+        self._refresh_mcp()
+        self._refresh_preview()
+
+        # Focus preview section when entering files mode
+        if self._active_section == "files":
+            self._focus_first_collapsible()
+
+    def action_enter_files(self) -> None:
+        """Enter the files section or toggle focused collapsible."""
+        if self._active_section == "files":
+            # Already in files section - toggle the focused collapsible
+            self._toggle_focused_collapsible()
+        else:
+            self._active_section = "files"
+            self._update_section_styles()
+            self._refresh_ide_list()
+            self._refresh_article99()
+            self._refresh_preview()
+            self._focus_first_collapsible()
+
+    def _toggle_focused_collapsible(self) -> None:
+        """Toggle the currently focused collapsible."""
+        try:
+            from textual.widgets._collapsible import CollapsibleTitle
+
+            focused = self.focused
+            # CollapsibleTitle has a reference to its parent Collapsible
+            if isinstance(focused, CollapsibleTitle):
+                # The parent of CollapsibleTitle is the Collapsible
+                collapsible = focused.parent
+                if collapsible and hasattr(collapsible, 'collapsed'):
+                    collapsible.collapsed = not collapsible.collapsed
+        except Exception:
+            pass
+
+    def action_quit_or_back(self) -> None:
+        """Go back to selection sections or quit (with confirmation if unsaved)."""
+        # Check if confirm modal is visible - if so, hide it and cancel pending action
+        try:
+            modal = self.query_one("#confirm-modal", Container)
+            if modal.has_class("visible"):
+                self._pending_action = None
+                self._hide_confirm_modal()
+                return
+        except Exception:
+            pass
+
+        if self._active_section == "files":
+            self._active_section = "integrations"
+            self._update_section_styles()
+            self._refresh_ide_list()
+            self._refresh_article99()
+            self._refresh_preview()
+        else:
+            self._try_quit()
+
+    def _focus_first_collapsible(self) -> None:
+        """Focus the first collapsible title in the preview section."""
+        def do_focus():
+            try:
+                # Focus the first CollapsibleTitle (the focusable part)
+                titles = list(self.query("CollapsibleTitle"))
+                if titles:
+                    titles[0].focus()
+            except Exception:
+                pass
+        # Delay focus to ensure widgets are mounted
+        self.call_after_refresh(do_focus)
 
     def _update_section_styles(self) -> None:
         """Update section border styles based on active section."""
         try:
             integrations = self.query_one("#integrations-section")
             speckit = self.query_one("#speckit-section")
+            mcp = self.query_one("#mcp-section")
+            preview = self.query_one("#preview-section")
 
+            # Remove active from all
+            integrations.remove_class("active")
+            speckit.remove_class("active")
+            mcp.remove_class("active")
+            preview.remove_class("active")
+
+            # Add active to current section
             if self._active_section == "integrations":
                 integrations.add_class("active")
-                speckit.remove_class("active")
-            else:
-                integrations.remove_class("active")
+            elif self._active_section == "speckit":
                 speckit.add_class("active")
+            elif self._active_section == "mcp":
+                mcp.add_class("active")
+            else:  # files
+                preview.add_class("active")
         except Exception:
             pass
 
@@ -10059,20 +10821,26 @@ class ConfigApp(App):
         """Install selected integration globally."""
         if self._active_section == "integrations":
             self._install_ide(global_install=True)
-        else:
+        elif self._active_section == "speckit":
             self._install_article99()
+        elif self._active_section == "mcp":
+            self._install_mcp()
 
     def action_install_local(self) -> None:
         """Install selected integration locally."""
         if self._active_section == "integrations":
             self._install_ide(global_install=False)
-        else:
+        elif self._active_section == "speckit":
             self._install_article99()
+        elif self._active_section == "mcp":
+            self._install_mcp()  # MCP only has one mode
 
     def action_remove(self) -> None:
         """Remove selected integration."""
         if self._active_section == "integrations":
             self._uninstall_ide()
+        elif self._active_section == "mcp":
+            self._uninstall_mcp()
 
     def _install_ide(self, global_install: bool = True) -> None:
         """Install the selected IDE integration.
@@ -10099,17 +10867,57 @@ class ConfigApp(App):
             self._show_notification(f"✗ Erreur: {e}")
 
     def _uninstall_ide(self) -> None:
-        """Uninstall the selected IDE integration."""
+        """Uninstall the selected IDE integration (both global and local)."""
         from rekall.integrations import uninstall_ide
 
         ide = self._ides[self._selected_ide_idx]
+        errors = []
 
-        try:
-            uninstall_ide(ide.id, self.base_path)
-            self._show_notification(f"✓ {ide.name} désinstallé")
-            self._refresh_ide_list()
-        except Exception as e:
-            self._show_notification(f"✗ Erreur: {e}")
+        # Uninstall both global and local installations
+        for global_install in [True, False]:
+            try:
+                uninstall_ide(ide.id, self.base_path, global_install=global_install)
+            except Exception as e:
+                # Only track real errors, not "not installed" cases
+                if "not installed" not in str(e).lower():
+                    errors.append(f"{'global' if global_install else 'local'}: {e}")
+
+        if errors:
+            self._show_notification(f"✗ {ide.name}: {'; '.join(errors)}")
+        else:
+            self._show_notification(f"✓ {ide.name} désinstallé (global+local)")
+
+        self._refresh_ide_list()
+        self._refresh_preview(force=True)
+
+    def action_remove_all(self) -> None:
+        """Remove all IDE integrations (both global and local)."""
+        if self._active_section == "integrations":
+            self._uninstall_all_ides()
+
+    def _uninstall_all_ides(self) -> None:
+        """Uninstall all IDE integrations (both global and local)."""
+        from rekall.integrations import uninstall_ide
+
+        success_count = 0
+        error_count = 0
+
+        for ide in self._ides:
+            for global_install in [True, False]:
+                try:
+                    uninstall_ide(ide.id, self.base_path, global_install=global_install)
+                    success_count += 1
+                except Exception:
+                    # Silently ignore errors (not installed, etc.)
+                    pass
+
+        if success_count > 0:
+            self._show_notification(f"✓ Tous les IDEs désinstallés ({success_count} opérations)")
+        else:
+            self._show_notification("ℹ Aucune intégration installée")
+
+        self._refresh_ide_list()
+        self._refresh_preview(force=True)
 
     def _install_article99(self) -> None:
         """Install selected Article 99 version."""
@@ -10126,65 +10934,378 @@ class ConfigApp(App):
         except Exception as e:
             self._show_notification(f"✗ Erreur: {e}")
 
+    def _install_mcp(self) -> None:
+        """Install MCP config for selected CLI."""
+        key = self._mcp_keys[self._selected_mcp_idx]
+        cli_config = self._mcp_configs[key]
+        result = _install_mcp_config(cli_config)
+        self._show_notification(result)
+        self._refresh_mcp()
+
+    def _uninstall_mcp(self) -> None:
+        """Uninstall MCP config for selected CLI."""
+        key = self._mcp_keys[self._selected_mcp_idx]
+        cli_config = self._mcp_configs[key]
+        result = _uninstall_mcp_config(cli_config)
+        self._show_notification(result)
+        self._refresh_mcp()
+
     def _refresh_ide_list(self) -> None:
-        """Refresh the IDE list display."""
+        """Refresh the IDE list display by updating each ClickableRow."""
         try:
-            ide_list = self.query_one("#ide-list", Static)
-            ide_list.update(self._build_ide_list())
+            rows = self._build_ide_rows()
+            for idx, row_content in enumerate(rows):
+                try:
+                    row_widget = self.query_one(f"#ide-row-{idx}", ClickableRow)
+                    row_widget.update(row_content)
+                except Exception:
+                    pass
         except Exception:
             pass
 
     def _refresh_article99(self) -> None:
-        """Refresh the Article 99 selector display."""
+        """Refresh the Article 99 selector display by updating each ClickableRow."""
         try:
-            selector = self.query_one("#article99-selector", Static)
-            selector.update(self._build_article99_selector())
+            rows = self._build_article99_rows()
+            for idx, row_content in enumerate(rows):
+                try:
+                    row_widget = self.query_one(f"#article99-row-{idx}", ClickableRow)
+                    row_widget.update(row_content)
+                except Exception:
+                    pass
+            # Update recommendation reason
+            try:
+                reason_widget = self.query_one("#article99-reason", Static)
+                reason_text = f"[dim]{self._article99_recommendation.reason}[/dim]" if self._article99_recommendation.reason else ""
+                reason_widget.update(reason_text)
+            except Exception:
+                pass
         except Exception:
             pass
 
-    def _refresh_preview(self) -> None:
-        """Refresh the preview section with files for selected item."""
-        from textual.widgets import Collapsible
+    def on_clickable_row_selected(self, event: ClickableRow.Selected) -> None:
+        """Handle click on a row in IDE or SPECKIT section."""
+        if event.section == "integrations":
+            new_idx = event.row_index
+            if new_idx != self._selected_ide_idx:
+                self._try_action_with_confirm(
+                    lambda idx=new_idx: self._select_ide_with_section(idx, "integrations")
+                )
+            else:
+                # Same row - just update section
+                self._active_section = "integrations"
+                self._update_section_styles()
+        elif event.section == "speckit":
+            new_idx = event.row_index
+            if new_idx != self._selected_article99_idx:
+                self._try_action_with_confirm(
+                    lambda idx=new_idx: self._select_article99_with_section(idx, "speckit")
+                )
+            else:
+                # Same row - just update section
+                self._active_section = "speckit"
+                self._update_section_styles()
+        elif event.section == "mcp":
+            new_idx = event.row_index
+            self._selected_mcp_idx = new_idx
+            self._active_section = "mcp"
+            self._update_section_styles()
+            self._refresh_mcp()
+
+    def _select_ide_with_section(self, idx: int, section: str) -> None:
+        """Select an IDE and update section."""
+        self._selected_ide_idx = idx
+        self._active_section = section
+        self._update_article99_for_ide()
+        self._update_section_styles()
+        self._refresh_ide_list()
+        self._refresh_article99()
+        self._refresh_preview()
+
+    def _select_article99_with_section(self, idx: int, section: str) -> None:
+        """Select an Article 99 and update section."""
+        self._selected_article99_idx = idx
+        self._active_section = section
+        self._update_section_styles()
+        self._refresh_ide_list()
+        self._refresh_article99()
+        self._refresh_preview()
+
+    def _categorize_file(self, path: str, desc: str) -> str:
+        """Categorize a file into Skills, Hooks, or Speckit.
+
+        Returns:
+            Category name: "skills", "hooks", or "speckit"
+        """
+        path_lower = path.lower()
+        desc_lower = desc.lower()
+
+        # Hooks: files in hooks/ directory or hook-related
+        if "/hooks/" in path_lower or "hook" in desc_lower:
+            return "hooks"
+
+        # Speckit: settings.json (contains hook config) or constitution
+        if "settings.json" in path_lower or "constitution" in path_lower:
+            return "speckit"
+
+        # Skills: commands/, .md files, skill-related
+        if "/commands/" in path_lower or "skill" in desc_lower or "rekall/" in path_lower:
+            return "skills"
+
+        # Default to skills for unknown files
+        return "skills"
+
+    def _generate_diff_view(self, old_content: str, new_content: str) -> tuple[str, str]:
+        """Generate side-by-side diff views with highlighting.
+
+        Returns tuple of (old_view, new_view) with Rich markup.
+        """
+        import difflib
+
+        old_lines = old_content.splitlines()
+        new_lines = new_content.splitlines()
+
+        # Use SequenceMatcher for side-by-side diff
+        matcher = difflib.SequenceMatcher(None, old_lines, new_lines)
+
+        old_result = []
+        new_result = []
+
+        for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+            if tag == 'equal':
+                # Same lines - dim
+                for line in old_lines[i1:i2]:
+                    old_result.append(f"[dim]  {line}[/]")
+                for line in new_lines[j1:j2]:
+                    new_result.append(f"[dim]  {line}[/]")
+            elif tag == 'delete':
+                # Removed lines - red
+                for line in old_lines[i1:i2]:
+                    old_result.append(f"[red]- {line}[/]")
+            elif tag == 'insert':
+                # Added lines - green
+                for line in new_lines[j1:j2]:
+                    new_result.append(f"[green]+ {line}[/]")
+            elif tag == 'replace':
+                # Changed lines
+                for line in old_lines[i1:i2]:
+                    old_result.append(f"[red]- {line}[/]")
+                for line in new_lines[j1:j2]:
+                    new_result.append(f"[green]+ {line}[/]")
+
+        return "\n".join(old_result) if old_result else "[dim]Fichier vide[/]", \
+               "\n".join(new_result) if new_result else "[dim]Fichier vide[/]"
+
+    def _create_file_collapsible(
+        self,
+        file_info: dict,
+        file_idx: int,
+    ) -> tuple["Collapsible", str]:
+        """Create a collapsible widget for a file with diff view and save button.
+
+        Returns:
+            Tuple of (Collapsible widget, textarea_id)
+        """
+        from textual.widgets import Collapsible, TextArea, Button
+        from textual.containers import Vertical, Horizontal
+
+        path = file_info.get("path", "")
+        desc = file_info.get("description", "")
+        new_content = file_info.get("content", "")
+        exists = file_info.get("exists", False)
+        file_path = file_info.get("file_path")
+
+        # Use unique IDs with counter to avoid conflicts
+        wc = self._widget_counter
+        textarea_id = f"file-textarea-{wc}-{file_idx}"
+
+        # Check if we have modified content for this file (try both old and new format)
+        old_textarea_id = f"file-textarea-{file_idx}"
+        if textarea_id in self._modified_content:
+            new_content = self._modified_content[textarea_id]
+        elif old_textarea_id in self._modified_content:
+            # Migrate old ID to new ID
+            new_content = self._modified_content[old_textarea_id]
+            self._modified_content[textarea_id] = new_content
+
+        # Store distribution content for reset functionality (before any modifications)
+        distribution_content = file_info.get("content", "")
+        self._distribution_content[textarea_id] = distribution_content
+
+        # Read existing file content if it exists
+        existing_content = ""
+        if exists and file_path:
+            try:
+                existing_content = Path(file_path).read_text()
+            except Exception:
+                existing_content = ""
+
+        # Store existing content for diff regeneration
+        if existing_content:
+            self._existing_content[textarea_id] = existing_content
+
+        # Status indicator (compare existing with distribution)
+        if exists:
+            if existing_content == distribution_content:
+                status_text = "= identique"
+                status_color = "dim"
+            else:
+                status_text = "~ modifier"
+                status_color = "yellow"
+        else:
+            status_text = "+ nouveau"
+            status_color = "green"
+
+        # Determine which content to display:
+        # - If file exists, show existing (user-modified) content by default
+        # - Otherwise show distribution content
+        display_content = existing_content if exists and existing_content else distribution_content
+
+        # Detect language from file extension for syntax highlighting
+        language = self._detect_language(path)
+
+        # Create editable TextArea with appropriate content
+        textarea = TextArea(
+            display_content,
+            id=textarea_id,
+            classes="file-textarea",
+            show_line_numbers=True,
+            language=language,
+        )
+
+        # Track file path for saving
+        if file_path:
+            self._editable_files[textarea_id] = Path(file_path)
+
+        # Build container content
+        from textual.containers import Horizontal, VerticalScroll
+
+        children = []
+
+        # If file exists and different, show side-by-side diff view
+        if exists and existing_content != new_content:
+            old_view, new_view = self._generate_diff_view(existing_content, new_content)
+
+            # IDs for diff panels (for sync scroll and live update)
+            diff_left_id = f"diff-left-{wc}-{file_idx}"
+            diff_right_id = f"diff-right-{wc}-{file_idx}"
+            diff_row_id = f"diff-row-{wc}-{file_idx}"
+
+            # Side-by-side diff panels with synchronized scrollable containers
+            diff_row = Horizontal(
+                Vertical(
+                    Static("[bold #4367CD]Existant[/]", markup=True),
+                    SyncedScroll(
+                        Static(old_view, markup=True, id=f"diff-content-left-{wc}-{file_idx}"),
+                        id=diff_left_id,
+                        partner_id=diff_right_id,
+                        classes="diff-scroll",
+                    ),
+                    classes="diff-container-left",
+                ),
+                Vertical(
+                    Static("[bold #4367CD]Nouveau[/]", markup=True),
+                    SyncedScroll(
+                        Static(new_view, markup=True, id=f"diff-content-right-{wc}-{file_idx}"),
+                        id=diff_right_id,
+                        partner_id=diff_left_id,
+                        classes="diff-scroll",
+                    ),
+                    classes="diff-container-right",
+                ),
+                classes="diff-row",
+                id=diff_row_id,
+            )
+            children.append(diff_row)
+
+        # Path and editable area
+        children.append(Static(f"[dim]{path}[/dim]", markup=True))
+        children.append(textarea)
+
+        # Buttons row: Reset (to distribution) and Install
+        reset_btn = Button(
+            "↺ Reset",
+            id=f"reset-btn-{wc}-{file_idx}",
+            classes="reset-file-btn",
+        )
+        save_btn = Button(
+            "💾 Installer",
+            id=f"save-btn-{wc}-{file_idx}",
+            classes="save-file-btn",
+        )
+        buttons_row = Horizontal(reset_btn, save_btn, classes="file-buttons-row")
+        children.append(buttons_row)
+
+        container = Vertical(*children)
+
+        # Create collapsible
+        title = f"[{status_color}]{status_text}[/{status_color}] {desc}"
+        collapsible = Collapsible(
+            container,
+            title=title,
+            collapsed=True,
+            classes="file-collapsible",
+        )
+
+        return collapsible, textarea_id
+
+    def _refresh_preview(self, force: bool = False) -> None:
+        """Refresh the preview section with files organized in 3 categories.
+
+        Structure:
+        - Skills (commands, .md files)
+        - Hooks (hook scripts)
+        - Speckit (constitution, settings.json)
+
+        Args:
+            force: If True, refresh even if selection hasn't changed
+        """
+        # Skip refresh if nothing changed (avoid flicker)
+        if not force:
+            if (self._last_displayed_ide_idx == self._selected_ide_idx and
+                self._last_displayed_article99_idx == self._selected_article99_idx):
+                return
+
+        from textual.widgets import Collapsible, TextArea
+        from textual.containers import Vertical
         from rekall.integrations import get_integration_files, ARTICLE_99_MICRO, ARTICLE_99_SHORT, ARTICLE_99_EXTENSIVE, Article99Version
 
         try:
-            preview_content = self.query_one("#preview-content")
-            # Remove old content
-            preview_content.remove_children()
+            # Update tracking
+            self._last_displayed_ide_idx = self._selected_ide_idx
+            self._last_displayed_article99_idx = self._selected_article99_idx
 
-            if self._active_section == "integrations":
-                # Show files for selected IDE
-                ide = self._ides[self._selected_ide_idx]
-                files = get_integration_files(ide.id, self.base_path, global_install=False)
+            preview_scroll = self.query_one("#preview-scroll")
+            self._editable_files.clear()
+            self._existing_content.clear()  # Clear to recalculate file status
+            self._distribution_content.clear()  # Clear for reset functionality
 
-                if not files:
-                    preview_content.mount(Static(f"[dim]Pas de fichiers pour {ide.name}[/dim]"))
-                    return
+            # Get files for selected IDE (show global files for preview)
+            ide = self._ides[self._selected_ide_idx]
+            # Use global=True for Claude Code since that's where files are typically installed
+            files = get_integration_files(ide.id, self.base_path, global_install=True)
 
-                for file_info in files:
-                    path = file_info.get("path", "")
-                    desc = file_info.get("description", "")
-                    content = file_info.get("content", "")
-                    exists = file_info.get("exists", False)
+            # Categorize files
+            skills_files = []
+            hooks_files = []
+            speckit_files = []
 
-                    # Status indicator
-                    status = "[green]✓ existant[/green]" if exists else "[yellow]+ nouveau[/yellow]"
+            file_idx = 0
+            for file_info in (files or []):
+                path = file_info.get("path", "")
+                desc = file_info.get("description", "")
+                category = self._categorize_file(path, desc)
 
-                    # Truncate content for preview
-                    preview = content[:500] + "..." if len(content) > 500 else content
+                if category == "skills":
+                    skills_files.append((file_info, file_idx))
+                elif category == "hooks":
+                    hooks_files.append((file_info, file_idx))
+                else:  # speckit
+                    speckit_files.append((file_info, file_idx))
+                file_idx += 1
 
-                    # Create collapsible
-                    title = f"{desc} {status}"
-                    collapsible = Collapsible(
-                        Static(f"[dim]{path}[/dim]\n\n{preview}", markup=True),
-                        title=title,
-                        collapsed=True,
-                        classes="file-collapsible"
-                    )
-                    preview_content.mount(collapsible)
-
-            else:
-                # Show Article 99 preview
+            # Add Article 99 to speckit category if speckit exists
+            if self._speckit_exists:
                 version = self._article99_versions[self._selected_article99_idx]
                 version_content = {
                     Article99Version.MICRO: ARTICLE_99_MICRO,
@@ -10192,21 +11313,100 @@ class ConfigApp(App):
                     Article99Version.EXTENSIVE: ARTICLE_99_EXTENSIVE,
                 }.get(version, "")
 
-                path = "~/.speckit/constitution.md"
-                exists = (Path.home() / ".speckit" / "constitution.md").exists()
-                status = "[yellow]modifier[/yellow]" if exists else "[green]+ nouveau[/green]"
+                constitution_path = Path.home() / ".speckit" / "constitution.md"
+                exists = constitution_path.exists()
 
-                collapsible = Collapsible(
-                    Static(f"[dim]{path}[/dim]\n\n{version_content}", markup=True),
-                    title=f"Article 99 ({version.value}) {status}",
-                    collapsed=True,
-                    classes="file-collapsible"
+                speckit_files.append(({
+                    "path": "~/.speckit/constitution.md",
+                    "description": f"Article 99 ({version.value})",
+                    "content": version_content,
+                    "exists": exists,
+                    "file_path": constitution_path,
+                }, file_idx))
+
+            # Save current collapsed states before recreating
+            for cat_id, cat_name in [("skills", "skills"), ("hooks", "hooks"), ("speckit", "speckit")]:
+                try:
+                    # Find by class since ID changes each refresh
+                    for coll in self.query(".category-collapsible"):
+                        title = str(coll.title) if hasattr(coll, 'title') else ""
+                        if cat_name in title.lower() or (cat_name == "skills" and "commandes" in title.lower()):
+                            self._category_collapsed[cat_name] = coll.collapsed
+                            break
+                except Exception:
+                    pass
+
+            # Increment counter for unique IDs
+            self._widget_counter += 1
+            wc = self._widget_counter
+
+            # Build all widgets BEFORE mounting (avoid visual glitches)
+            widgets_to_mount = []
+
+            # Skills section (renamed to "Commandes et skills")
+            if skills_files:
+                skills_children = []
+                for file_info, idx in skills_files:
+                    collapsible, _ = self._create_file_collapsible(file_info, idx)
+                    skills_children.append(collapsible)
+
+                skills_collapsible = Collapsible(
+                    *skills_children,
+                    title=f"[bold]Commandes et skills[/] ({len(skills_files)} fichiers)",
+                    collapsed=self._category_collapsed["skills"],
+                    id=f"category-skills-{wc}",
+                    classes="category-collapsible",
                 )
-                preview_content.mount(collapsible)
+                widgets_to_mount.append(skills_collapsible)
+
+            # Hooks section
+            if hooks_files:
+                hooks_children = []
+                for file_info, idx in hooks_files:
+                    collapsible, _ = self._create_file_collapsible(file_info, idx)
+                    hooks_children.append(collapsible)
+
+                hooks_collapsible = Collapsible(
+                    *hooks_children,
+                    title=f"[bold]Hooks[/] ({len(hooks_files)} fichiers)",
+                    collapsed=self._category_collapsed["hooks"],
+                    id=f"category-hooks-{wc}",
+                    classes="category-collapsible",
+                )
+                widgets_to_mount.append(hooks_collapsible)
+
+            # Speckit section
+            if speckit_files:
+                speckit_children = []
+                for file_info, idx in speckit_files:
+                    collapsible, _ = self._create_file_collapsible(file_info, idx)
+                    speckit_children.append(collapsible)
+
+                speckit_collapsible = Collapsible(
+                    *speckit_children,
+                    title=f"[bold]Speckit[/] ({len(speckit_files)} fichiers)",
+                    collapsed=self._category_collapsed["speckit"],
+                    id=f"category-speckit-{wc}",
+                    classes="category-collapsible",
+                )
+                widgets_to_mount.append(speckit_collapsible)
+
+            # Show message if nothing to display
+            if not widgets_to_mount:
+                widgets_to_mount.append(Static(f"[dim]Pas de fichiers pour {ide.name}[/dim]"))
+
+            # Remove old content and mount new in single batch to avoid flicker
+            with self.batch_update():
+                preview_scroll.remove_children()
+                preview_scroll.mount_all(widgets_to_mount)
 
         except Exception as e:
-            # Silently fail - preview is not critical
-            pass
+            # Show error for debugging
+            try:
+                preview_scroll = self.query_one("#preview-scroll")
+                preview_scroll.mount(Static(f"[red]Erreur: {e}[/red]", markup=True))
+            except Exception:
+                pass
 
     def _show_notification(self, message: str) -> None:
         """Show a notification message."""
@@ -10230,6 +11430,177 @@ class ConfigApp(App):
             notif.remove_class("visible")
         except Exception:
             pass
+
+    def on_click(self, event) -> None:
+        """Handle mouse clicks to switch sections."""
+        # Check if click is in integrations or speckit section
+        try:
+            integrations = self.query_one("#integrations-section")
+            speckit = self.query_one("#speckit-section")
+
+            # Get click coordinates
+            x, y = event.screen_x, event.screen_y
+
+            # Check if click is within integrations section
+            int_region = integrations.region
+            if int_region.contains(x, y):
+                if self._active_section != "integrations":
+                    self._active_section = "integrations"
+                    self._update_section_styles()
+                    self._refresh_ide_list()
+                    self._refresh_article99()
+                    self._refresh_preview()
+                return
+
+            # Check if click is within speckit section
+            spec_region = speckit.region
+            if spec_region.contains(x, y) and self._speckit_exists:
+                if self._active_section != "speckit":
+                    self._active_section = "speckit"
+                    self._update_section_styles()
+                    self._refresh_ide_list()
+                    self._refresh_article99()
+                    self._refresh_preview()
+                return
+        except Exception:
+            pass
+
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        """Track changes to TextArea content and update diff in real-time."""
+        textarea_id = event.text_area.id
+        if not textarea_id:
+            return
+
+        # Store modified content
+        new_content = event.text_area.text
+        self._modified_content[textarea_id] = new_content
+
+        # Update diff view in real-time if we have existing content
+        if textarea_id in self._existing_content:
+            existing_content = self._existing_content[textarea_id]
+
+            # Extract wc-idx from textarea_id (format: file-textarea-{wc}-{idx})
+            parts = textarea_id.replace("file-textarea-", "").split("-")
+            if len(parts) == 2:
+                wc, file_idx = parts[0], parts[1]
+
+                # Generate new diff
+                old_view, new_view = self._generate_diff_view(existing_content, new_content)
+
+                # Update diff content widgets
+                try:
+                    left_content = self.query_one(f"#diff-content-left-{wc}-{file_idx}", Static)
+                    right_content = self.query_one(f"#diff-content-right-{wc}-{file_idx}", Static)
+                    left_content.update(old_view)
+                    right_content.update(new_view)
+                except Exception:
+                    pass  # Diff widgets may not exist (file identical or new)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle button presses (save, reset, and confirm modal buttons)."""
+        button_id = event.button.id
+        if button_id and button_id.startswith("save-btn-"):
+            # Extract wc-idx from button id (format: save-btn-{wc}-{idx})
+            suffix = button_id.replace("save-btn-", "")
+            textarea_id = f"file-textarea-{suffix}"
+            self._save_file_by_textarea_id(textarea_id)
+        elif button_id and button_id.startswith("reset-btn-"):
+            # Extract wc-idx from button id (format: reset-btn-{wc}-{idx})
+            suffix = button_id.replace("reset-btn-", "")
+            textarea_id = f"file-textarea-{suffix}"
+            self._reset_file_to_distribution(textarea_id)
+        elif button_id == "confirm-quit":
+            # User confirmed - execute pending action or exit
+            self._hide_confirm_modal()
+            if self._pending_action:
+                action = self._pending_action
+                self._pending_action = None
+                action()
+            else:
+                self.exit()
+        elif button_id == "confirm-cancel":
+            # User cancelled - hide modal and clear pending action
+            self._pending_action = None
+            self._hide_confirm_modal()
+
+    def _save_file_by_textarea_id(self, textarea_id: str) -> None:
+        """Save file content by textarea ID."""
+        from textual.widgets import TextArea
+
+        try:
+            if textarea_id not in self._editable_files:
+                self._show_notification("Fichier non sauvegardable")
+                return
+
+            file_path = self._editable_files[textarea_id]
+
+            # Get content from TextArea or modified content cache
+            try:
+                textarea = self.query_one(f"#{textarea_id}", TextArea)
+                content = textarea.text
+            except Exception:
+                # Fallback to cached modified content
+                content = self._modified_content.get(textarea_id, "")
+                if not content:
+                    self._show_notification("Contenu non disponible")
+                    return
+
+            # Ensure parent directory exists
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Write file
+            file_path.write_text(content)
+            self._show_notification(f"✓ Installé: {file_path.name}")
+
+            # Force refresh to update status (nouveau -> identique)
+            self._refresh_preview(force=True)
+        except Exception as e:
+            self._show_notification(f"✗ Erreur: {e}")
+
+    def _reset_file_to_distribution(self, textarea_id: str) -> None:
+        """Reset a file's TextArea content to the distribution version."""
+        from textual.widgets import TextArea
+
+        try:
+            # Get distribution content
+            if textarea_id not in self._distribution_content:
+                self._show_notification("Version distribution non disponible")
+                return
+
+            distribution_content = self._distribution_content[textarea_id]
+
+            # Update TextArea
+            try:
+                textarea = self.query_one(f"#{textarea_id}", TextArea)
+                textarea.load_text(distribution_content)
+                # Clear modified content cache
+                if textarea_id in self._modified_content:
+                    del self._modified_content[textarea_id]
+                self._show_notification("↺ Reset à la version distribution")
+            except Exception:
+                self._show_notification("TextArea non trouvé")
+        except Exception as e:
+            self._show_notification(f"✗ Erreur: {e}")
+
+    def action_save_file(self) -> None:
+        """Save the currently focused TextArea content to file."""
+        from textual.widgets import TextArea
+
+        try:
+            # Find the focused TextArea
+            focused = self.focused
+            if not isinstance(focused, TextArea):
+                self._show_notification("Aucun fichier sélectionné")
+                return
+
+            textarea_id = focused.id
+            if not textarea_id:
+                self._show_notification("Fichier non sauvegardable")
+                return
+
+            self._save_file_by_textarea_id(textarea_id)
+        except Exception as e:
+            self._show_notification(f"✗ Erreur: {e}")
 
 
 def run_config_app(base_path: Path | None = None) -> None:

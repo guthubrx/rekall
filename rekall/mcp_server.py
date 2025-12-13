@@ -576,6 +576,47 @@ rekall_add(
                     },
                 },
             ),
+            # ===== Entry lifecycle management =====
+            Tool(
+                name="rekall_deprecate",
+                description="Mark an entry as obsolete/superseded. The entry remains in the database but is hidden from search results. Use when knowledge becomes outdated but should be preserved for history.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "id": {
+                            "type": "string",
+                            "description": "Entry ID to deprecate",
+                        },
+                        "replaced_by": {
+                            "type": "string",
+                            "description": "Optional: ID of the entry that supersedes this one",
+                        },
+                        "reason": {
+                            "type": "string",
+                            "description": "Reason for deprecation (e.g., 'outdated', 'merged into pattern', 'incorrect')",
+                        },
+                    },
+                    "required": ["id"],
+                },
+            ),
+            Tool(
+                name="rekall_delete",
+                description="Permanently delete an entry from the knowledge base. WARNING: This action is irreversible. Use rekall_deprecate instead if you want to preserve history. Only delete entries that are duplicates, test data, or contain errors.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "id": {
+                            "type": "string",
+                            "description": "Entry ID to delete permanently",
+                        },
+                        "confirm": {
+                            "type": "boolean",
+                            "description": "Must be true to confirm deletion. Safety measure to prevent accidental deletions.",
+                        },
+                    },
+                    "required": ["id", "confirm"],
+                },
+            ),
         ]
 
     @server.call_tool()
@@ -627,6 +668,13 @@ rekall_add(
 
             elif name == "rekall_sources_verify":
                 return await _handle_sources_verify(arguments)
+
+            # ===== Entry lifecycle management =====
+            elif name == "rekall_deprecate":
+                return await _handle_deprecate(arguments)
+
+            elif name == "rekall_delete":
+                return await _handle_delete(arguments)
 
             else:
                 return [TextContent(type="text", text=f"Unknown tool: {name}")]
@@ -1922,6 +1970,105 @@ async def _handle_sources_verify(args: dict) -> list:
     except Exception as e:
         db.close()
         return [TextContent(type="text", text=f"Error verifying sources: {e}")]
+
+
+async def _handle_deprecate(args: dict) -> list:
+    """Handle rekall_deprecate tool call.
+
+    Marks an entry as obsolete/superseded. The entry remains in the database
+    but is hidden from search results by setting status='deprecated'.
+    """
+    from mcp.types import TextContent
+
+    db = get_db()
+    entry_id = args["id"]
+    replaced_by = args.get("replaced_by")
+    reason = args.get("reason", "Deprecated via MCP")
+
+    try:
+        # Check entry exists
+        entry = db.get(entry_id, update_access=False)
+        if entry is None:
+            db.close()
+            return [TextContent(type="text", text=f"Entry not found: {entry_id}")]
+
+        # Deprecate the entry
+        db.deprecate(entry_id, replaced_by=replaced_by, reason=reason)
+        db.close()
+
+        output = f"✓ Entry deprecated: {entry_id}\n"
+        output += f"  Title: {entry.title}\n"
+        if replaced_by:
+            output += f"  Superseded by: {replaced_by}\n"
+        if reason:
+            output += f"  Reason: {reason}\n"
+        output += "\nThe entry is now hidden from search results but preserved in history."
+
+        return [TextContent(type="text", text=output)]
+
+    except Exception as e:
+        db.close()
+        return [TextContent(type="text", text=f"Error deprecating entry: {e}")]
+
+
+async def _handle_delete(args: dict) -> list:
+    """Handle rekall_delete tool call.
+
+    Permanently deletes an entry from the knowledge base.
+    Requires explicit confirmation to prevent accidental deletions.
+    """
+    from mcp.types import TextContent
+
+    db = get_db()
+    entry_id = args["id"]
+    confirm = args.get("confirm", False)
+
+    try:
+        # Safety check: require explicit confirmation
+        if not confirm:
+            db.close()
+            return [TextContent(
+                type="text",
+                text="⚠️ Deletion not confirmed.\n\n"
+                     "To permanently delete an entry, set confirm=true.\n"
+                     "This action is IRREVERSIBLE.\n\n"
+                     "Consider using rekall_deprecate instead to preserve history."
+            )]
+
+        # Check entry exists
+        entry = db.get(entry_id, update_access=False)
+        if entry is None:
+            db.close()
+            return [TextContent(type="text", text=f"Entry not found: {entry_id}")]
+
+        # Store info before deletion
+        title = entry.title
+        entry_type = entry.type
+
+        # Delete associated data first
+        # - Links (both directions)
+        db.conn.execute("DELETE FROM links WHERE source_id = ? OR target_id = ?", (entry_id, entry_id))
+        # - Embeddings
+        db.conn.execute("DELETE FROM embeddings WHERE entry_id = ?", (entry_id,))
+        # - Tags
+        db.conn.execute("DELETE FROM tags WHERE entry_id = ?", (entry_id,))
+        # - Context keywords
+        db.conn.execute("DELETE FROM context_keywords WHERE entry_id = ?", (entry_id,))
+        # - Entry itself
+        db.conn.execute("DELETE FROM entries WHERE id = ?", (entry_id,))
+        db.conn.commit()
+        db.close()
+
+        output = f"✓ Entry permanently deleted: {entry_id}\n"
+        output += f"  Title: {title}\n"
+        output += f"  Type: {entry_type}\n"
+        output += "\n⚠️ This action cannot be undone."
+
+        return [TextContent(type="text", text=output)]
+
+    except Exception as e:
+        db.close()
+        return [TextContent(type="text", text=f"Error deleting entry: {e}")]
 
 
 async def run_server() -> None:
