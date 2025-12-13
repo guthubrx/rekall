@@ -12,7 +12,7 @@
   <img src="https://img.shields.io/badge/100%25-Lokal-blue?style=flat-square" alt="100% Lokal">
   <img src="https://img.shields.io/badge/Keine_API_Keys-green?style=flat-square" alt="Keine API Keys">
   <img src="https://img.shields.io/badge/MCP-Kompatibel-purple?style=flat-square" alt="MCP Kompatibel">
-  <img src="https://img.shields.io/badge/Python-3.9+-yellow?style=flat-square" alt="Python 3.9+">
+  <img src="https://img.shields.io/badge/Python-3.10+-yellow?style=flat-square" alt="Python 3.10+">
 </p>
 
 *"Get your ass to Mars. Quaid... crush those bugs"*
@@ -726,7 +726,7 @@ Einträge, die du oft und kürzlich aufrufst, haben hohe Konsolidierung (stabile
 
 ## Anforderungen
 
-- Python 3.9+
+- Python 3.10+
 - Das war's. Keine Cloud-Services. Keine API-Keys. Keine Accounts.
 
 ---

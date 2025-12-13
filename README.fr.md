@@ -12,7 +12,7 @@
   <img src="https://img.shields.io/badge/100%25-Local-blue?style=flat-square" alt="100% Local">
   <img src="https://img.shields.io/badge/Pas_de_clé_API-green?style=flat-square" alt="Pas de clé API">
   <img src="https://img.shields.io/badge/MCP-Compatible-purple?style=flat-square" alt="Compatible MCP">
-  <img src="https://img.shields.io/badge/Python-3.9+-yellow?style=flat-square" alt="Python 3.9+">
+  <img src="https://img.shields.io/badge/Python-3.10+-yellow?style=flat-square" alt="Python 3.10+">
 </p>
 
 *« Get your ass to Mars. Quaid... crush those bugs »*
@@ -725,7 +725,7 @@ Les entrées que tu accèdes souvent et récemment ont une haute consolidation (
 
 ## Prérequis
 
-- Python 3.9+
+- Python 3.10+
 - C'est tout. Pas de services cloud. Pas de clés API. Pas de compte.
 
 ---

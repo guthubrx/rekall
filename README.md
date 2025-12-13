@@ -12,7 +12,7 @@
   <img src="https://img.shields.io/badge/100%25-Local-blue?style=flat-square" alt="100% Local">
   <img src="https://img.shields.io/badge/No_API_Keys-green?style=flat-square" alt="No API Keys">
   <img src="https://img.shields.io/badge/MCP-Compatible-purple?style=flat-square" alt="MCP Compatible">
-  <img src="https://img.shields.io/badge/Python-3.9+-yellow?style=flat-square" alt="Python 3.9+">
+  <img src="https://img.shields.io/badge/Python-3.10+-yellow?style=flat-square" alt="Python 3.10+">
 </p>
 
 *"Get your ass to Mars. Quaid... crush those bugs"*
@@ -724,7 +724,7 @@ Entries you access often and recently have high consolidation (stable knowledge)
 
 ## Requirements
 
-- Python 3.9+
+- Python 3.10+
 - That's it. No cloud services. No API keys. No accounts.
 
 ---

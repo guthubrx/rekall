@@ -12,7 +12,7 @@
   <img src="https://img.shields.io/badge/100%25-本地-blue?style=flat-square" alt="100% 本地">
   <img src="https://img.shields.io/badge/无需_API_密钥-green?style=flat-square" alt="无需 API 密钥">
   <img src="https://img.shields.io/badge/MCP-兼容-purple?style=flat-square" alt="MCP 兼容">
-  <img src="https://img.shields.io/badge/Python-3.9+-yellow?style=flat-square" alt="Python 3.9+">
+  <img src="https://img.shields.io/badge/Python-3.10+-yellow?style=flat-square" alt="Python 3.10+">
 </p>
 
 *"Get your ass to Mars. Quaid... crush those bugs"*
@@ -724,7 +724,7 @@ score = 0.6 × frequency_factor + 0.4 × freshness_factor
 
 ## 要求
 
-- Python 3.9+
+- Python 3.10+
 - 就这些。没有云服务。没有 API 密钥。没有账户。
 
 ---
