@@ -10126,10 +10126,15 @@ def run_tui():
         else:
             show_info("[red]✗ Échec de la migration. Vérifiez les logs.[/red]")
 
+    # Action for unified ConfigApp
+    def action_config():
+        """Launch the unified ConfigApp for IDE integrations."""
+        run_config_app(Path.cwd())
+
     # Map action keys to functions
     actions = {
         "language": action_language,
-        "config": action_install_ide,  # Unified config & maintenance menu
+        "config": action_config,  # New unified ConfigApp (Feature 019)
         "research": action_research,
         "browse": action_browse,
         "sources": action_sources,  # Feature 009 - Sources Dashboard
