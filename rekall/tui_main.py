@@ -9687,7 +9687,7 @@ class ConfigApp(App):
 
     #main-container {
         height: 1fr;
-        padding: 0 2;
+        padding: 0 1;
     }
 
     #detected-ide-header {
@@ -9697,12 +9697,20 @@ class ConfigApp(App):
         color: $success;
     }
 
-    #integrations-section {
+    /* Top row: horizontal layout for IDE + SPECKIT */
+    #top-row {
         height: auto;
-        min-height: 10;
+        max-height: 14;
+        layout: horizontal;
+        margin-bottom: 1;
+    }
+
+    #integrations-section {
+        width: 1fr;
+        height: auto;
         border: solid $primary;
         padding: 1;
-        margin-bottom: 1;
+        margin-right: 1;
     }
 
     #integrations-section.active {
@@ -9717,44 +9725,12 @@ class ConfigApp(App):
 
     #column-headers {
         height: 1;
-        margin-bottom: 1;
-        color: $text-muted;
-    }
-
-    .ide-row {
-        height: 1;
-        padding: 0 1;
-    }
-
-    .ide-row:hover {
-        background: $surface-lighten-1;
-    }
-
-    .ide-row.selected {
-        background: $primary-darken-2;
-    }
-
-    .ide-name {
-        width: 20;
-    }
-
-    .global-toggle {
-        width: 12;
-        text-align: center;
-    }
-
-    .local-toggle {
-        width: 12;
-        text-align: center;
-    }
-
-    .global-toggle.disabled {
         color: $text-muted;
     }
 
     #speckit-section {
+        width: 1fr;
         height: auto;
-        min-height: 8;
         border: solid $secondary;
         padding: 1;
     }
@@ -9774,17 +9750,55 @@ class ConfigApp(App):
         padding: 0 1;
     }
 
-    .article99-option {
-        height: 1;
+    /* Bottom: Preview section with collapsibles */
+    #preview-section {
+        height: 1fr;
+        border: solid $surface-lighten-2;
+        padding: 1;
+    }
+
+    #preview-title {
+        text-style: bold;
+        color: $text;
+        margin-bottom: 1;
+    }
+
+    #preview-scroll {
+        height: 100%;
+    }
+
+    #preview-content {
+        height: auto;
+    }
+
+    .file-collapsible {
+        margin-bottom: 1;
+    }
+
+    .file-collapsible > CollapsibleTitle {
+        background: $surface-darken-1;
         padding: 0 1;
     }
 
-    .article99-option.selected {
-        background: $secondary-darken-2;
+    .file-collapsible > Contents {
+        padding: 0 1;
+        background: $surface-darken-2;
     }
 
-    .article99-option .recommended {
+    .file-path {
+        color: $primary;
+    }
+
+    .file-status-new {
+        color: $success;
+    }
+
+    .file-status-modify {
         color: $warning;
+    }
+
+    .file-status-exists {
+        color: $text-muted;
     }
 
     #footer-hint {
@@ -9847,22 +9861,35 @@ class ConfigApp(App):
         self._speckit_exists = (Path.home() / ".speckit").exists()
 
     def compose(self) -> ComposeResult:
+        from textual.widgets import Collapsible
+        from textual.containers import Horizontal, VerticalScroll
+
         yield create_banner_container()
 
         with Container(id="main-container"):
             # Detected IDE header
             yield Static(self._build_detected_header(), id="detected-ide-header", markup=True)
 
-            # Section 1: INTÉGRATIONS
-            with Container(id="integrations-section"):
-                yield Static("[bold]INTÉGRATIONS[/bold]", id="integrations-title")
-                yield Static(self._build_column_headers(), id="column-headers", markup=True)
-                yield Static(self._build_ide_list(), id="ide-list", markup=True)
+            # Top row: horizontal layout for IDE + SPECKIT
+            with Horizontal(id="top-row"):
+                # Section 1: INTÉGRATIONS
+                with Container(id="integrations-section"):
+                    yield Static("[bold]INTÉGRATIONS[/bold]", id="integrations-title")
+                    yield Static(self._build_column_headers(), id="column-headers", markup=True)
+                    yield Static(self._build_ide_list(), id="ide-list", markup=True)
 
-            # Section 2: SPECKIT (always rendered, visibility controlled by CSS)
-            with Container(id="speckit-section"):
-                yield Static("[bold]SPECKIT - Article 99[/bold]", id="speckit-title")
-                yield Static(self._build_article99_selector(), id="article99-selector", markup=True)
+                # Section 2: SPECKIT
+                with Container(id="speckit-section"):
+                    yield Static("[bold]SPECKIT[/bold]", id="speckit-title")
+                    yield Static(self._build_article99_selector(), id="article99-selector", markup=True)
+
+            # Bottom: Preview section with collapsible files
+            with Container(id="preview-section"):
+                yield Static("[bold]FICHIERS À INSTALLER[/bold]", id="preview-title")
+                with VerticalScroll(id="preview-scroll"):
+                    with Container(id="preview-content"):
+                        # Collapsibles will be populated dynamically
+                        yield Static("[dim]Sélectionnez un IDE pour voir les fichiers[/dim]", id="preview-placeholder")
 
         yield Static(
             "[dim]↑↓/jk naviguer • g global • l local • r désinstaller • s section • Esc quitter[/dim]",
@@ -9874,6 +9901,8 @@ class ConfigApp(App):
         """Initialize UI state on mount."""
         # Set initial active section style
         self._update_section_styles()
+        # Show preview for initial selection
+        self._refresh_preview()
 
     def _build_detected_header(self) -> str:
         """Build the detected IDE header."""
@@ -9969,18 +9998,22 @@ class ConfigApp(App):
         if self._active_section == "integrations":
             self._selected_ide_idx = max(0, self._selected_ide_idx - 1)
             self._refresh_ide_list()
+            self._refresh_preview()
         else:
             self._selected_article99_idx = max(0, self._selected_article99_idx - 1)
             self._refresh_article99()
+            self._refresh_preview()
 
     def action_move_down(self) -> None:
         """Move selection down."""
         if self._active_section == "integrations":
             self._selected_ide_idx = min(len(self._ides) - 1, self._selected_ide_idx + 1)
             self._refresh_ide_list()
+            self._refresh_preview()
         else:
             self._selected_article99_idx = min(len(self._article99_versions) - 1, self._selected_article99_idx + 1)
             self._refresh_article99()
+            self._refresh_preview()
 
     def action_switch_section(self) -> None:
         """Switch between sections."""
@@ -9996,6 +10029,7 @@ class ConfigApp(App):
         self._update_section_styles()
         self._refresh_ide_list()
         self._refresh_article99()
+        self._refresh_preview()
 
     def _update_section_styles(self) -> None:
         """Update section border styles based on active section."""
@@ -10106,6 +10140,72 @@ class ConfigApp(App):
             selector = self.query_one("#article99-selector", Static)
             selector.update(self._build_article99_selector())
         except Exception:
+            pass
+
+    def _refresh_preview(self) -> None:
+        """Refresh the preview section with files for selected item."""
+        from textual.widgets import Collapsible
+        from rekall.integrations import get_integration_files, ARTICLE_99_MICRO, ARTICLE_99_SHORT, ARTICLE_99_EXTENSIVE, Article99Version
+
+        try:
+            preview_content = self.query_one("#preview-content")
+            # Remove old content
+            preview_content.remove_children()
+
+            if self._active_section == "integrations":
+                # Show files for selected IDE
+                ide = self._ides[self._selected_ide_idx]
+                files = get_integration_files(ide.id, self.base_path, global_install=False)
+
+                if not files:
+                    preview_content.mount(Static(f"[dim]Pas de fichiers pour {ide.name}[/dim]"))
+                    return
+
+                for file_info in files:
+                    path = file_info.get("path", "")
+                    desc = file_info.get("description", "")
+                    content = file_info.get("content", "")
+                    exists = file_info.get("exists", False)
+
+                    # Status indicator
+                    status = "[green]✓ existant[/green]" if exists else "[yellow]+ nouveau[/yellow]"
+
+                    # Truncate content for preview
+                    preview = content[:500] + "..." if len(content) > 500 else content
+
+                    # Create collapsible
+                    title = f"{desc} {status}"
+                    collapsible = Collapsible(
+                        Static(f"[dim]{path}[/dim]\n\n{preview}", markup=True),
+                        title=title,
+                        collapsed=True,
+                        classes="file-collapsible"
+                    )
+                    preview_content.mount(collapsible)
+
+            else:
+                # Show Article 99 preview
+                version = self._article99_versions[self._selected_article99_idx]
+                version_content = {
+                    Article99Version.MICRO: ARTICLE_99_MICRO,
+                    Article99Version.SHORT: ARTICLE_99_SHORT,
+                    Article99Version.EXTENSIVE: ARTICLE_99_EXTENSIVE,
+                }.get(version, "")
+
+                path = "~/.speckit/constitution.md"
+                exists = (Path.home() / ".speckit" / "constitution.md").exists()
+                status = "[yellow]modifier[/yellow]" if exists else "[green]+ nouveau[/green]"
+
+                collapsible = Collapsible(
+                    Static(f"[dim]{path}[/dim]\n\n{version_content}", markup=True),
+                    title=f"Article 99 ({version.value}) {status}",
+                    collapsed=True,
+                    classes="file-collapsible"
+                )
+                preview_content.mount(collapsible)
+
+        except Exception as e:
+            # Silently fail - preview is not critical
             pass
 
     def _show_notification(self, message: str) -> None:
