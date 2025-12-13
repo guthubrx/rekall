@@ -19,7 +19,7 @@
 
 [Documentación](#contenido) · [Instalación](#empezando) · [Integración MCP](#servidor-mcp-funciona-con-cualquier-asistente-ia)
 
-**Traducciones:** [English](README.md) | [Français](README.fr.md) | [Deutsch](README.de.md) | [中文](README.zh-CN.md)
+**Traducciones:** [🇬🇧 English](README.md) | [🇫🇷 Français](README.fr.md) | [🇩🇪 Deutsch](README.de.md) | [🇨🇳 中文](README.zh-CN.md)
 
 </div>
 

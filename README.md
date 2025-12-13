@@ -19,7 +19,7 @@
 
 [Documentation](#contents) · [Install](#getting-started) · [MCP Integration](#mcp-server-works-with-any-ai-assistant)
 
-**Translations:** [Français](README.fr.md) | [Español](README.es.md) | [Deutsch](README.de.md) | [中文](README.zh-CN.md)
+**Translations:** [🇫🇷 Français](README.fr.md) | [🇪🇸 Español](README.es.md) | [🇩🇪 Deutsch](README.de.md) | [🇨🇳 中文](README.zh-CN.md)
 
 </div>
 

@@ -19,7 +19,7 @@
 
 [Dokumentation](#inhalt) · [Installation](#erste-schritte) · [MCP-Integration](#mcp-server-funktioniert-mit-jedem-ki-assistenten)
 
-**Übersetzungen:** [English](README.md) | [Français](README.fr.md) | [Español](README.es.md) | [中文](README.zh-CN.md)
+**Übersetzungen:** [🇬🇧 English](README.md) | [🇫🇷 Français](README.fr.md) | [🇪🇸 Español](README.es.md) | [🇨🇳 中文](README.zh-CN.md)
 
 </div>
 

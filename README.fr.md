@@ -19,7 +19,7 @@
 
 [Documentation](#sommaire) · [Installation](#pour-commencer) · [Intégration MCP](#serveur-mcp--compatible-avec-tous-les-assistants-ia)
 
-**Traductions :** [English](README.md) | [Español](README.es.md) | [Deutsch](README.de.md) | [中文](README.zh-CN.md)
+**Traductions :** [🇬🇧 English](README.md) | [🇪🇸 Español](README.es.md) | [🇩🇪 Deutsch](README.de.md) | [🇨🇳 中文](README.zh-CN.md)
 
 </div>
 

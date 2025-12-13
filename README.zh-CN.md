@@ -19,7 +19,7 @@
 
 [文档](#目录) · [安装](#开始使用) · [MCP 集成](#mcp-服务器适用于任何-ai-助手)
 
-**翻译：** [English](README.md) | [Français](README.fr.md) | [Español](README.es.md) | [Deutsch](README.de.md)
+**翻译：** [🇬🇧 English](README.md) | [🇫🇷 Français](README.fr.md) | [🇪🇸 Español](README.es.md) | [🇩🇪 Deutsch](README.de.md)
 
 </div>
 
