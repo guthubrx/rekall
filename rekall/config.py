@@ -57,6 +57,7 @@ class Config:
 
     # UI settings
     ui_detail_panel_ratio: float = 1.0  # Detail panel height ratio (0.5 to 4.0)
+    ui_column_widths: dict = field(default_factory=dict)  # Custom column widths
 
     # Promotion settings (Feature 013)
     promotion_threshold: float = 70.0  # Score needed for auto-promotion
@@ -244,6 +245,8 @@ def apply_toml_config(config: Config) -> Config:
         ratio = float(ui["detail_panel_ratio"])
         if 0.5 <= ratio <= 4.0:
             config.ui_detail_panel_ratio = ratio
+    if "column_widths" in ui:
+        config.ui_column_widths = dict(ui["column_widths"])
 
     # Apply promotion settings if present (Feature 013)
     promo = toml_data.get("promotion", {})

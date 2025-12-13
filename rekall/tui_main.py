@@ -1077,8 +1077,8 @@ class BrowseApp(SortableTableMixin, App):
         self.init_sorting()  # Initialize sorting from SortableTableMixin
         self.all_entries = entries  # Keep original list
         self.entries = list(entries)  # Current filtered list (copy for sorting)
-        # Custom column widths (key -> width)
-        self.column_widths: dict[str, int] = {}
+        # Custom column widths (key -> width) - load from config
+        self.column_widths: dict[str, int] = dict(get_config().ui_column_widths)
         self.graph_nav_ids: list[str] = []  # IDs navigable from graph modal
         self.context_sizes: dict[str, int] = {}  # Context compressed sizes
         self.preview_mode = "content"  # "content" or "context"
@@ -1592,6 +1592,16 @@ class BrowseApp(SortableTableMixin, App):
 
         # Restore cursor position
         table.cursor_coordinate = (cursor_row, cursor_col)
+
+        # Persist to config
+        self._save_column_widths()
+
+    def _save_column_widths(self) -> None:
+        """Save column widths to config file."""
+        save_config_to_toml(
+            self.config.config_dir,
+            {"ui": {"column_widths": self.column_widths}}
+        )
 
     def _apply_panel_height(self) -> None:
         """Apply the current panel height fraction."""
