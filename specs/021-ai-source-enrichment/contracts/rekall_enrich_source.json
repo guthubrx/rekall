@@ -1,0 +1,78 @@
+{
+  "name": "rekall_enrich_source",
+  "description": "Store AI-generated enrichment for a source. The agent analyzes the source and provides classification, tags, summary. Status becomes 'proposed' pending human validation.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "source_id": {
+        "type": "string",
+        "description": "Source ID (ULID) to enrich"
+      },
+      "ai_tags": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "Suggested tags (3-7 recommended)",
+        "minItems": 1,
+        "maxItems": 10
+      },
+      "ai_summary": {
+        "type": "string",
+        "description": "Summary of the source content (2-3 sentences, max 500 chars)",
+        "maxLength": 500
+      },
+      "ai_type": {
+        "type": "string",
+        "enum": ["documentation", "blog", "research", "tool", "reference", "tutorial"],
+        "description": "Classification of the source type"
+      },
+      "ai_confidence": {
+        "type": "number",
+        "minimum": 0.0,
+        "maximum": 1.0,
+        "description": "Confidence score (0.0-1.0). Above 0.90 may trigger auto-validation."
+      },
+      "auto_validate": {
+        "type": "boolean",
+        "default": false,
+        "description": "If true and confidence >= 0.90, auto-validate without human review"
+      }
+    },
+    "required": ["source_id", "ai_tags", "ai_summary", "ai_type", "ai_confidence"]
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "success": {
+        "type": "boolean"
+      },
+      "source_id": {
+        "type": "string"
+      },
+      "enrichment_status": {
+        "type": "string",
+        "enum": ["proposed", "validated"],
+        "description": "'validated' if auto_validate=true and confidence >= 0.90"
+      },
+      "message": {
+        "type": "string"
+      }
+    }
+  },
+  "examples": [
+    {
+      "input": {
+        "source_id": "01KCABCD",
+        "ai_tags": ["python", "testing", "pytest", "fixtures"],
+        "ai_summary": "Guide complet sur les fixtures pytest avec exemples de scope et paramétrisation. Couvre les patterns avancés comme conftest.py.",
+        "ai_type": "documentation",
+        "ai_confidence": 0.85
+      },
+      "output": {
+        "success": true,
+        "source_id": "01KCABCD",
+        "enrichment_status": "proposed",
+        "message": "Enrichment stored. Awaiting human validation (confidence: 85%)"
+      }
+    }
+  ]
+}

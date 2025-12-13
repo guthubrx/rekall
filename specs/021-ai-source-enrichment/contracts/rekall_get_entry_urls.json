@@ -1,0 +1,84 @@
+{
+  "name": "rekall_get_entry_urls",
+  "description": "Get individual URLs stored for a knowledge entry. Returns all source references (URLs, files, themes) linked to the entry.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "entry_id": {
+        "type": "string",
+        "description": "Entry ID (ULID or prefix)"
+      }
+    },
+    "required": ["entry_id"]
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "entry_id": {
+        "type": "string",
+        "description": "Resolved full entry ID"
+      },
+      "entry_title": {
+        "type": "string",
+        "description": "Entry title for context"
+      },
+      "sources": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "Entry-source link ID"
+            },
+            "source_type": {
+              "type": "string",
+              "enum": ["url", "theme", "file"],
+              "description": "Type of source reference"
+            },
+            "source_ref": {
+              "type": "string",
+              "description": "The actual URL, theme name, or file path"
+            },
+            "domain": {
+              "type": "string",
+              "description": "Domain extracted from URL (if url type)"
+            },
+            "source_id": {
+              "type": "string",
+              "description": "Linked curated Source ID (if exists)"
+            },
+            "note": {
+              "type": "string",
+              "description": "Optional note about this source"
+            }
+          }
+        }
+      },
+      "total_count": {
+        "type": "integer",
+        "description": "Total number of sources for this entry"
+      }
+    }
+  },
+  "examples": [
+    {
+      "input": {"entry_id": "01KC"},
+      "output": {
+        "entry_id": "01KCABCD1234",
+        "entry_title": "Fix 504 timeout with nginx proxy",
+        "sources": [
+          {
+            "id": "01KCXYZ",
+            "source_type": "url",
+            "source_ref": "https://nginx.org/en/docs/http/ngx_http_proxy_module.html",
+            "domain": "nginx.org",
+            "source_id": null,
+            "note": "Official nginx docs"
+          }
+        ],
+        "total_count": 1
+      }
+    }
+  ]
+}

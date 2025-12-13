@@ -1,0 +1,94 @@
+{
+  "name": "rekall_list_unenriched",
+  "description": "List sources that haven't been enriched yet (enrichment_status = 'none'). Useful for batch processing.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "limit": {
+        "type": "integer",
+        "default": 10,
+        "minimum": 1,
+        "maximum": 50,
+        "description": "Maximum number of sources to return"
+      },
+      "domain_filter": {
+        "type": "string",
+        "description": "Optional: filter by domain (e.g., 'github.com')"
+      },
+      "include_pending": {
+        "type": "boolean",
+        "default": false,
+        "description": "If true, also include 'proposed' status (pending validation)"
+      }
+    }
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "sources": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "Source ULID"
+            },
+            "title": {
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            },
+            "domain": {
+              "type": "string"
+            },
+            "enrichment_status": {
+              "type": "string",
+              "enum": ["none", "proposed"]
+            },
+            "backlinks_count": {
+              "type": "integer",
+              "description": "Number of entries citing this source"
+            }
+          }
+        }
+      },
+      "total_unenriched": {
+        "type": "integer",
+        "description": "Total count of unenriched sources in database"
+      },
+      "returned": {
+        "type": "integer",
+        "description": "Number of sources in this response"
+      }
+    }
+  },
+  "examples": [
+    {
+      "input": {"limit": 5},
+      "output": {
+        "sources": [
+          {
+            "id": "01KCABC1",
+            "title": "pytest fixtures documentation",
+            "url": "https://docs.pytest.org/en/stable/fixture.html",
+            "domain": "docs.pytest.org",
+            "enrichment_status": "none",
+            "backlinks_count": 3
+          },
+          {
+            "id": "01KCABC2",
+            "title": "Python typing module",
+            "url": "https://docs.python.org/3/library/typing.html",
+            "domain": "docs.python.org",
+            "enrichment_status": "none",
+            "backlinks_count": 7
+          }
+        ],
+        "total_unenriched": 42,
+        "returned": 2
+      }
+    }
+  ]
+}

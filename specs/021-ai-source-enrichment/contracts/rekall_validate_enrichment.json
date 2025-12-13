@@ -1,0 +1,107 @@
+{
+  "name": "rekall_validate_enrichment",
+  "description": "Human-in-the-loop validation of AI-proposed enrichment. Accept, reject, or modify the enrichment.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "source_id": {
+        "type": "string",
+        "description": "Source ID with pending enrichment"
+      },
+      "action": {
+        "type": "string",
+        "enum": ["validate", "reject", "modify"],
+        "description": "validate=accept as-is, reject=discard, modify=accept with changes"
+      },
+      "modifications": {
+        "type": "object",
+        "description": "Required if action='modify'. Fields to override.",
+        "properties": {
+          "ai_tags": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Corrected tags"
+          },
+          "ai_summary": {
+            "type": "string",
+            "description": "Corrected summary"
+          },
+          "ai_type": {
+            "type": "string",
+            "enum": ["documentation", "blog", "research", "tool", "reference", "tutorial"],
+            "description": "Corrected type"
+          }
+        }
+      },
+      "rejection_reason": {
+        "type": "string",
+        "description": "Optional reason for rejection (helps improve future enrichments)"
+      }
+    },
+    "required": ["source_id", "action"]
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "success": {
+        "type": "boolean"
+      },
+      "source_id": {
+        "type": "string"
+      },
+      "new_status": {
+        "type": "string",
+        "enum": ["validated", "rejected", "none"],
+        "description": "'none' if rejected and discarded"
+      },
+      "message": {
+        "type": "string"
+      }
+    }
+  },
+  "examples": [
+    {
+      "description": "Accept enrichment as-is",
+      "input": {
+        "source_id": "01KCABCD",
+        "action": "validate"
+      },
+      "output": {
+        "success": true,
+        "source_id": "01KCABCD",
+        "new_status": "validated",
+        "message": "Enrichment validated by human"
+      }
+    },
+    {
+      "description": "Modify and accept",
+      "input": {
+        "source_id": "01KCABCD",
+        "action": "modify",
+        "modifications": {
+          "ai_tags": ["python", "pytest", "testing", "unit-testing"]
+        }
+      },
+      "output": {
+        "success": true,
+        "source_id": "01KCABCD",
+        "new_status": "validated",
+        "message": "Enrichment modified and validated by human"
+      }
+    },
+    {
+      "description": "Reject enrichment",
+      "input": {
+        "source_id": "01KCABCD",
+        "action": "reject",
+        "rejection_reason": "Source is outdated, content no longer relevant"
+      },
+      "output": {
+        "success": true,
+        "source_id": "01KCABCD",
+        "new_status": "rejected",
+        "message": "Enrichment rejected. Reason recorded for future improvement."
+      }
+    }
+  ]
+}
