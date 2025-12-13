@@ -1285,9 +1285,13 @@ class BrowseApp(SortableTableMixin, App):
         """Populate table rows with current entries."""
         table = self.query_one("#entries-table", DataTable)
 
+        # Get dynamic column widths for truncation
+        title_width = self.column_widths.get("title", 50) - 2  # -2 for padding
+        project_width = self.column_widths.get("project", 12) - 2
+
         for i, entry in enumerate(self.entries):
             project = entry.project or "—"
-            title = entry.title[:48] + "…" if len(entry.title) > 48 else entry.title
+            title = entry.title[:title_width] + "…" if len(entry.title) > title_width else entry.title
 
             # Highlight search term in title
             title = self._highlight_text(title)
@@ -1309,7 +1313,7 @@ class BrowseApp(SortableTableMixin, App):
 
             table.add_row(
                 entry.type,
-                project[:10] + "…" if len(project) > 10 else project,
+                project[:project_width] + "…" if len(project) > project_width else project,
                 Text.from_markup(title),
                 entry.created_at.strftime("%Y-%m-%d %H:%M"),
                 entry.updated_at.strftime("%Y-%m-%d %H:%M"),
