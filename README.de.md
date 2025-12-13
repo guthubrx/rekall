@@ -211,6 +211,12 @@ Jetzt konsultiert deine KI dein Wissen vor jedem Fix. Sie zitiert deine frühere
 
 ## Das Interface
 
+> **Warum Terminal-First?** Rekalls Interface ist eine vollwertige Terminal UI (TUI) — und das ist Absicht. Moderne Entwicklung findet überall statt: auf deinem Laptop, auf Remote-Servern, in Containern, über SSH. Ein Terminal-Interface bedeutet, dass du von überall auf deine Wissensdatenbank zugreifen kannst, ohne einen Browser zu öffnen oder Ports weiterzuleiten.
+>
+> Ob du um 2 Uhr nachts einen Produktionsserver über SSH debuggst, in einer headless VM arbeitest, oder einfach die Geschwindigkeit und Tastatur-Effizienz von Terminal-Apps bevorzugst — Rekall ist direkt bei dir. Keine GUI-Abhängigkeiten. Kein Kontextwechsel. Nur dein Wissen, einen Befehl entfernt.
+>
+> *Ein Web-Interface steht auf der Roadmap für Teams, die Browser-basierte Workflows bevorzugen.*
+
 ### Terminal UI
 ```bash
 rekall  # Startet das visuelle Interface

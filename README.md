@@ -211,6 +211,12 @@ Now your AI consults your knowledge before every fix. It cites your past solutio
 
 ## The interface
 
+> **Why Terminal-First?** Rekall's interface is a full-featured Terminal UI (TUI) — and that's by design. Modern development happens everywhere: on your laptop, on remote servers, inside containers, over SSH. A terminal interface means you can access your knowledge base from anywhere without opening a browser or forwarding ports.
+>
+> Whether you're debugging a production server at 2 AM via SSH, working in a headless VM, or simply prefer the speed and keyboard-driven efficiency of terminal apps — Rekall is right there with you. No GUI dependencies. No context switching. Just your knowledge, one command away.
+>
+> *A web interface is on the roadmap for teams who prefer browser-based workflows.*
+
 ### Terminal UI
 ```bash
 rekall  # Launch the visual interface

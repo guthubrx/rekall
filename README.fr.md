@@ -211,6 +211,12 @@ Maintenant ton IA consulte tes connaissances avant chaque correction. Il cite te
 
 ## L'interface
 
+> **Pourquoi le terminal d'abord ?** L'interface de Rekall est une TUI (Terminal User Interface) complète — et c'est un choix délibéré. Le développement moderne se fait partout : sur ton laptop, sur des serveurs distants, dans des containers, via SSH. Une interface terminal te permet d'accéder à ta base de connaissances de n'importe où sans ouvrir de navigateur ni faire de redirection de ports.
+>
+> Que tu sois en train de débugger un serveur de production à 2h du matin en SSH, de travailler dans une VM headless, ou que tu préfères simplement la rapidité et l'efficacité clavier des apps terminal — Rekall est là avec toi. Pas de dépendances GUI. Pas de changement de contexte. Juste tes connaissances, à une commande de distance.
+>
+> *Une interface web est prévue dans la roadmap pour les équipes qui préfèrent les workflows navigateur.*
+
 ### Interface terminal
 ```bash
 rekall  # Lance l'interface visuelle

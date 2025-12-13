@@ -211,6 +211,12 @@ Ahora tu IA consulta tu conocimiento antes de cada corrección. Cita tus solucio
 
 ## La interfaz
 
+> **¿Por qué Terminal primero?** La interfaz de Rekall es una TUI (Terminal User Interface) completa — y es por diseño. El desarrollo moderno ocurre en todas partes: en tu laptop, en servidores remotos, dentro de contenedores, vía SSH. Una interfaz de terminal significa que puedes acceder a tu base de conocimiento desde cualquier lugar sin abrir un navegador ni hacer redirección de puertos.
+>
+> Ya sea que estés depurando un servidor de producción a las 2 AM vía SSH, trabajando en una VM sin interfaz gráfica, o simplemente prefieras la velocidad y eficiencia del teclado de las apps de terminal — Rekall está ahí contigo. Sin dependencias de GUI. Sin cambio de contexto. Solo tu conocimiento, a un comando de distancia.
+>
+> *Una interfaz web está en el roadmap para equipos que prefieren flujos de trabajo basados en navegador.*
+
 ### Interfaz de Terminal
 ```bash
 rekall  # Lanzar la interfaz visual
