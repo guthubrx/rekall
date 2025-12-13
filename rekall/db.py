@@ -39,7 +39,7 @@ from rekall.utils import secure_file_permissions
 #   9 = Sources autonomes (seed/promoted/role, source_themes, known_domains tables)
 #  10 = Saved filters (saved_filters table for persistent filter views)
 
-CURRENT_SCHEMA_VERSION = 11
+CURRENT_SCHEMA_VERSION = 12
 
 # Migrations dict: version -> list of SQL statements
 # Each migration upgrades from version N-1 to version N
@@ -313,6 +313,11 @@ MIGRATIONS: dict[int, list[str]] = {
             errors_count INTEGER DEFAULT 0
         )""",
     ],
+    12: [
+        # Centrality score for knowledge graph hub detection
+        "ALTER TABLE entries ADD COLUMN centrality_score REAL DEFAULT 0.0",
+        "CREATE INDEX IF NOT EXISTS idx_entries_centrality ON entries(centrality_score DESC)",
+    ],
 }
 
 # Expected columns for schema verification (Option C - hybrid)
@@ -323,6 +328,7 @@ EXPECTED_ENTRY_COLUMNS = {
     "next_review", "review_interval", "ease_factor", "context_compressed",
     "context_structured",  # Feature 006: Structured context JSON
     "context_blob",  # Feature 007: Compressed structured context
+    "centrality_score",  # Knowledge graph hub score
 }
 
 EXPECTED_TABLES = {"entries", "tags", "links", "entries_fts", "embeddings", "suggestions", "metadata", "context_keywords", "sources", "entry_sources", "source_themes", "known_domains", "sources_inbox", "sources_staging", "connector_imports"}
@@ -680,6 +686,7 @@ class Database:
             ),
             review_interval=row["review_interval"] or 1,
             ease_factor=row["ease_factor"] or 2.5,
+            centrality_score=row["centrality_score"] or 0.0,
         )
 
     def get(self, entry_id: str, update_access: bool = True) -> Entry | None:
@@ -1163,6 +1170,98 @@ class Database:
         outgoing = cursor.fetchone()[0]
 
         return (incoming, outgoing)
+
+    def calculate_centrality_score(self, entry_id: str) -> float:
+        """Calculate centrality score for an entry based on link connectivity.
+
+        Score formula:
+            score = direct_links * 2 + depth2_links * 1 + depth3_links * 0.5
+
+        Normalized to 0-100 range.
+
+        Args:
+            entry_id: Entry ULID
+
+        Returns:
+            Centrality score (0.0 to 100.0)
+        """
+        # Count direct links (depth 1)
+        incoming, outgoing = self.count_links_by_direction(entry_id)
+        direct_links = incoming + outgoing
+
+        # Count depth 2 links (links of links)
+        depth2_links = 0
+        cursor = self.conn.execute(
+            """
+            SELECT DISTINCT l2.source_id, l2.target_id
+            FROM links l1
+            JOIN links l2 ON (l1.source_id = l2.target_id OR l1.target_id = l2.source_id)
+            WHERE (l1.source_id = ? OR l1.target_id = ?)
+              AND l2.source_id != ? AND l2.target_id != ?
+            """,
+            (entry_id, entry_id, entry_id, entry_id),
+        )
+        depth2_links = len(cursor.fetchall())
+
+        # Count depth 3 links
+        depth3_links = 0
+        cursor = self.conn.execute(
+            """
+            SELECT COUNT(DISTINCT l3.id)
+            FROM links l1
+            JOIN links l2 ON (l1.source_id = l2.target_id OR l1.target_id = l2.source_id)
+            JOIN links l3 ON (l2.source_id = l3.target_id OR l2.target_id = l3.source_id)
+            WHERE (l1.source_id = ? OR l1.target_id = ?)
+              AND l3.source_id != ? AND l3.target_id != ?
+              AND l2.source_id != ? AND l2.target_id != ?
+            """,
+            (entry_id, entry_id, entry_id, entry_id, entry_id, entry_id),
+        )
+        depth3_links = cursor.fetchone()[0]
+
+        # Calculate raw score
+        raw_score = direct_links * 2.0 + depth2_links * 1.0 + depth3_links * 0.5
+
+        # Normalize to 0-100 (cap at 50 raw points = 100 score)
+        normalized_score = min(100.0, raw_score * 2.0)
+
+        return round(normalized_score, 1)
+
+    def update_centrality_score(self, entry_id: str) -> float:
+        """Calculate and store centrality score for a single entry.
+
+        Args:
+            entry_id: Entry ULID
+
+        Returns:
+            The calculated centrality score
+        """
+        score = self.calculate_centrality_score(entry_id)
+        self.conn.execute(
+            "UPDATE entries SET centrality_score = ? WHERE id = ?",
+            (score, entry_id),
+        )
+        self.conn.commit()
+        return score
+
+    def update_all_centrality_scores(self) -> int:
+        """Recalculate centrality scores for all entries.
+
+        Returns:
+            Number of entries updated
+        """
+        cursor = self.conn.execute("SELECT id FROM entries WHERE status = 'active'")
+        entry_ids = [row[0] for row in cursor.fetchall()]
+
+        for entry_id in entry_ids:
+            score = self.calculate_centrality_score(entry_id)
+            self.conn.execute(
+                "UPDATE entries SET centrality_score = ? WHERE id = ?",
+                (score, entry_id),
+            )
+
+        self.conn.commit()
+        return len(entry_ids)
 
     def render_graph_ascii(
         self,

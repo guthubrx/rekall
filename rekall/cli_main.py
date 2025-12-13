@@ -1790,6 +1790,64 @@ def graph(
 
 
 # ============================================================================
+# Centrality Command (Knowledge Graph Hub Detection)
+# ============================================================================
+
+
+@app.command()
+def centrality(
+    entry_id: str = typer.Argument(
+        None,
+        help="Entry ID to calculate (omit to update all)",
+    ),
+):
+    """Calculate centrality scores for knowledge graph entries.
+
+    Centrality measures how "central" an entry is in the knowledge graph.
+    Higher scores indicate hub entries with many connections.
+
+    Score formula:
+        direct_links × 2 + depth2_links × 1 + depth3_links × 0.5
+
+    Examples:
+        rekall centrality              # Update all entries
+        rekall centrality 01HXYZ       # Update single entry
+    """
+    db = get_db()
+
+    if entry_id:
+        # Single entry
+        score = db.update_centrality_score(entry_id)
+        entry = db.get(entry_id, update_access=False)
+        if entry:
+            console.print(f"[green]✓[/green] {entry.title}: [cyan]{score}[/cyan]")
+        else:
+            console.print(f"[red]Entry not found: {entry_id}[/red]")
+            raise typer.Exit(1)
+    else:
+        # All entries
+        with console.status("[cyan]Calculating centrality scores...[/cyan]"):
+            count = db.update_all_centrality_scores()
+        console.print(f"[green]✓[/green] Updated {count} entries")
+
+        # Show top 10 hubs
+        cursor = db.conn.execute(
+            """
+            SELECT id, title, centrality_score
+            FROM entries
+            WHERE status = 'active' AND centrality_score > 0
+            ORDER BY centrality_score DESC
+            LIMIT 10
+            """
+        )
+        rows = cursor.fetchall()
+        if rows:
+            console.print("\n[bold]Top hubs:[/bold]")
+            for row in rows:
+                console.print(f"  [cyan]{row[2]:5.1f}[/cyan]  {row[1][:50]}")
+
+
+# ============================================================================
 # Stale Command (US5 - Access Tracking)
 # ============================================================================
 
