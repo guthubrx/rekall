@@ -1564,16 +1564,25 @@ class BrowseApp(SortableTableMixin, App):
         if cursor_col < 0 or cursor_col >= len(self.COLUMNS):
             return
 
-        key, _, default_width = self.COLUMNS[cursor_col]
+        key, label_key, default_width = self.COLUMNS[cursor_col]
         current_width = self.column_widths.get(key, default_width)
         new_width = max(3, current_width + delta)  # Min width of 3
         self.column_widths[key] = new_width
+
+        # Get column display name for notification
+        if label_key and "." in label_key:
+            col_name = t(label_key)
+        else:
+            col_name = label_key or key.capitalize()
 
         # Refresh table to apply new width
         self.refresh_table()
 
         # Restore cursor position
         table.cursor_coordinate = (table.cursor_row, cursor_col)
+
+        # Show feedback
+        self.show_left_notify(f"[{col_name}] → {new_width}", 1.0)
 
     def _apply_panel_height(self) -> None:
         """Apply the current panel height fraction."""
