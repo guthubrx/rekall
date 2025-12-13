@@ -1576,7 +1576,8 @@ class BrowseApp(SortableTableMixin, App):
     def _resize_current_column(self, delta: int) -> None:
         """Resize the currently focused column."""
         table = self.query_one("#entries-table", DataTable)
-        # Get current cursor column
+        # Save current cursor position BEFORE refresh
+        cursor_row = table.cursor_row
         cursor_col = table.cursor_column
         if cursor_col < 0 or cursor_col >= len(self.COLUMNS):
             return
@@ -1590,7 +1591,7 @@ class BrowseApp(SortableTableMixin, App):
         self.refresh_table()
 
         # Restore cursor position
-        table.cursor_coordinate = (table.cursor_row, cursor_col)
+        table.cursor_coordinate = (cursor_row, cursor_col)
 
     def _apply_panel_height(self) -> None:
         """Apply the current panel height fraction."""
