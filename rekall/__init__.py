@@ -26,3 +26,24 @@ __author__ = "Rekall Contributors"
 def get_version_string() -> str:
     """Get full version string with optional dev info."""
     return f"Rekall v{__version__} ({__release_date__})"
+
+
+# =============================================================================
+# Open Core: Auto-register default backends
+# =============================================================================
+# This ensures that importing rekall automatically sets up the default
+# database and cache backends. Custom backends can override these by
+# calling register_backend() after import.
+
+def _init_backends() -> None:
+    """Initialize default backends (called once on import)."""
+    try:
+        from rekall.infra.defaults import register_defaults
+
+        register_defaults()
+    except ImportError:
+        # Infra module not available (partial install)
+        pass
+
+
+_init_backends()

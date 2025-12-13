@@ -79,6 +79,9 @@ class Config:
     perf_model_idle_timeout_minutes: int = 10  # Unload model after N minutes idle
     perf_vector_backend: str = "auto"  # "auto", "sqlite-vec", "numpy"
 
+    # Debug settings (Feature 022 - Open Core)
+    debug_backends: bool = False  # Enable verbose logging for backend operations
+
     @property
     def db_path(self) -> Path:
         """Get the database path (backward compatibility)."""
