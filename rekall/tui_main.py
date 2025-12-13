@@ -6280,15 +6280,9 @@ MCP_CLI_CONFIGS = {
     },
     "claude-code": {
         "name": "Claude Code",
-        "file": "~/.claude/settings.json",
-        "config": '''{
-  "mcpServers": {
-    "rekall": {
-      "command": "rekall",
-      "args": ["mcp-server"]
-    }
-  }
-}''',
+        "file": "~/.claude/settings.json",  # Not used - Claude Code uses CLI
+        "config": "{}",  # Not used - managed via `claude mcp add/remove`
+        "uses_cli": True,  # Flag: use `claude mcp` commands instead of file
     },
     "cursor": {
         "name": "Cursor",
@@ -6403,6 +6397,8 @@ def _install_mcp_config(cli_config: dict) -> str:
     6. Validate JSON syntax
     7. If error: rollback from backup + create .error file
 
+    Special case: Claude Code uses `claude mcp add` command instead of file editing.
+
     Args:
         cli_config: Dict with 'name', 'file', 'config' keys
 
@@ -6411,8 +6407,57 @@ def _install_mcp_config(cli_config: dict) -> str:
     """
     import json
     import shutil
+    import subprocess
     from datetime import datetime
     from pathlib import Path
+
+    # Special case: CLIs that use command-line tools (e.g., Claude Code)
+    if cli_config.get("uses_cli"):
+        try:
+            # Find project directory (where pyproject.toml is)
+            # This works for both installed and local development
+            import rekall
+
+            rekall_module_path = Path(rekall.__file__).parent
+            project_dir = rekall_module_path.parent  # Go up from rekall/ to project root
+
+            # Verify it's a valid project directory
+            if not (project_dir / "pyproject.toml").exists():
+                return "✗ Répertoire projet non trouvé (pyproject.toml manquant)"
+
+            # Use uv run with project directory for local development
+            # This ensures we use the local venv and code, not PyPI
+            result = subprocess.run(
+                [
+                    "claude",
+                    "mcp",
+                    "add",
+                    "rekall",
+                    "-s",
+                    "user",  # Global scope
+                    "--",
+                    "uv",
+                    "run",
+                    "--directory",
+                    str(project_dir),
+                    "rekall",
+                    "mcp-server",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if result.returncode == 0:
+                return f"✓ MCP rekall ajouté (uv run @ {project_dir.name})"
+            else:
+                error_msg = result.stderr.strip() or result.stdout.strip()
+                return f"✗ Erreur: {error_msg}"
+        except FileNotFoundError:
+            return "✗ Commande 'claude' ou 'uv' non trouvée"
+        except subprocess.TimeoutExpired:
+            return "✗ Timeout lors de l'exécution"
+        except Exception as e:
+            return f"✗ Erreur: {e}"
 
     file_path_str = cli_config["file"]
     new_config = json.loads(cli_config["config"])
@@ -6550,6 +6595,7 @@ def _uninstall_mcp_config(cli_config: dict) -> str:
     """Remove MCP config from the CLI's config file.
 
     Removes the 'rekall' entry from mcpServers, context_servers, or mcp section.
+    Special case: Claude Code uses `claude mcp remove` command.
 
     Args:
         cli_config: Dict with 'name', 'file', 'config' keys
@@ -6558,7 +6604,31 @@ def _uninstall_mcp_config(cli_config: dict) -> str:
         Status message for notification
     """
     import json
+    import subprocess
     from pathlib import Path
+
+    # Special case: CLIs that use command-line tools (e.g., Claude Code)
+    if cli_config.get("uses_cli"):
+        try:
+            result = subprocess.run(
+                ["claude", "mcp", "remove", "rekall"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if result.returncode == 0:
+                return "✓ MCP rekall supprimé"
+            else:
+                error_msg = result.stderr.strip() or result.stdout.strip()
+                if "not found" in error_msg.lower():
+                    return "⚠ MCP rekall non installé"
+                return f"✗ Erreur: {error_msg}"
+        except FileNotFoundError:
+            return "✗ Commande 'claude' non trouvée"
+        except subprocess.TimeoutExpired:
+            return "✗ Timeout lors de l'exécution"
+        except Exception as e:
+            return f"✗ Erreur: {e}"
 
     file_path_str = cli_config["file"]
 
@@ -10404,12 +10474,13 @@ class ConfigApp(App):
                 local_status = "-"
 
             # Global column (disabled if not supported)
+            # Note: Rich markup breaks f-string centering, use manual padding
             if ide.global_marker:
-                global_col = f"{global_status:^12}"
+                global_col = f"     {global_status}      "  # 5 + symbol + 6 = 12
             else:
-                global_col = f"[dim]{'n/a':^12}[/dim]"
+                global_col = f"[dim]    n/a     [/dim]"  # 4 + 3 + 5 = 12
 
-            local_col = f"{local_status:^12}"
+            local_col = f"     {local_status}      "  # 5 + symbol + 6 = 12
 
             # Format: [▶] Name    Global    Local
             row = f"{prefix}{selection_marker} {ide.name:<18} {global_col} {local_col}{suffix}"
@@ -10479,8 +10550,24 @@ class ConfigApp(App):
     def _check_mcp_installed(self, key: str) -> bool:
         """Check if Rekall MCP is configured for a specific CLI."""
         import json
+        import subprocess
 
         config = self._mcp_configs[key]
+
+        # Special case: CLIs that use command-line tools (e.g., Claude Code)
+        if config.get("uses_cli"):
+            try:
+                result = subprocess.run(
+                    ["claude", "mcp", "list"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                # Check if rekall is in the output
+                return "rekall" in result.stdout.lower()
+            except Exception:
+                return False
+
         file_path_str = config["file"]
 
         if file_path_str.startswith("~"):
