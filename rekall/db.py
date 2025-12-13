@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import zlib
 from datetime import date, datetime
@@ -38,6 +39,8 @@ from rekall.utils import secure_file_permissions
 #   8 = Sources integration (sources, entry_sources tables for bidirectional linking)
 #   9 = Sources autonomes (seed/promoted/role, source_themes, known_domains tables)
 #  10 = Saved filters (saved_filters table for persistent filter views)
+#  11 = Sources Medallion (inbox/staging tables for URL processing pipeline)
+#  12 = AI Source Enrichment (ai_* fields for enrichment metadata on sources)
 
 CURRENT_SCHEMA_VERSION = 12
 
@@ -317,6 +320,17 @@ MIGRATIONS: dict[int, list[str]] = {
         # Centrality score for knowledge graph hub detection
         "ALTER TABLE entries ADD COLUMN centrality_score REAL DEFAULT 0.0",
         "CREATE INDEX IF NOT EXISTS idx_entries_centrality ON entries(centrality_score DESC)",
+        # Feature 021/023 - AI Source Enrichment: Add enrichment metadata to sources
+        "ALTER TABLE sources ADD COLUMN ai_type TEXT",  # documentation, blog, research, tool, reference, tutorial
+        "ALTER TABLE sources ADD COLUMN ai_tags TEXT",  # JSON array of tags
+        "ALTER TABLE sources ADD COLUMN ai_summary TEXT",  # AI-generated summary (max 500 chars)
+        "ALTER TABLE sources ADD COLUMN ai_confidence REAL",  # Confidence score 0.0-1.0
+        "ALTER TABLE sources ADD COLUMN enrichment_status TEXT DEFAULT 'none'",  # none, proposed, validated
+        "ALTER TABLE sources ADD COLUMN enrichment_validated_at TEXT",  # Timestamp of validation
+        "ALTER TABLE sources ADD COLUMN enrichment_validated_by TEXT",  # 'auto' or 'human'
+        # Indexes for enrichment queries
+        "CREATE INDEX IF NOT EXISTS idx_sources_enrichment_status ON sources(enrichment_status)",
+        "CREATE INDEX IF NOT EXISTS idx_sources_ai_confidence ON sources(ai_confidence)",
     ],
 }
 
@@ -2432,8 +2446,10 @@ class Database:
                 INSERT INTO sources
                 (id, domain, url_pattern, usage_count, last_used, personal_score,
                  reliability, decay_rate, last_verified, status, created_at,
-                 is_seed, is_promoted, promoted_at, role, seed_origin, citation_quality_factor)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 is_seed, is_promoted, promoted_at, role, seed_origin, citation_quality_factor,
+                 ai_type, ai_tags, ai_summary, ai_confidence, enrichment_status,
+                 enrichment_validated_at, enrichment_validated_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     source.id,
@@ -2453,6 +2469,14 @@ class Database:
                     source.role,
                     source.seed_origin,
                     source.citation_quality_factor,
+                    # Feature 023 - AI Enrichment fields
+                    source.ai_type,
+                    json.dumps(source.ai_tags) if source.ai_tags else None,
+                    source.ai_summary,
+                    source.ai_confidence,
+                    source.enrichment_status,
+                    source.enrichment_validated_at.isoformat() if source.enrichment_validated_at else None,
+                    source.enrichment_validated_by,
                 ),
             )
             self.conn.commit()
@@ -2536,15 +2560,35 @@ class Database:
         Returns:
             Source object
         """
+        row_keys = row.keys()
+
         # Handle v9 fields with defaults for backward compatibility
-        is_seed = bool(row["is_seed"]) if "is_seed" in row.keys() else False
-        is_promoted = bool(row["is_promoted"]) if "is_promoted" in row.keys() else False
+        is_seed = bool(row["is_seed"]) if "is_seed" in row_keys else False
+        is_promoted = bool(row["is_promoted"]) if "is_promoted" in row_keys else False
         promoted_at = None
-        if "promoted_at" in row.keys() and row["promoted_at"]:
+        if "promoted_at" in row_keys and row["promoted_at"]:
             promoted_at = datetime.fromisoformat(row["promoted_at"])
-        role = row["role"] if "role" in row.keys() else "unclassified"
-        seed_origin = row["seed_origin"] if "seed_origin" in row.keys() else None
-        citation_quality = row["citation_quality_factor"] if "citation_quality_factor" in row.keys() else 0.0
+        role = row["role"] if "role" in row_keys else "unclassified"
+        seed_origin = row["seed_origin"] if "seed_origin" in row_keys else None
+        citation_quality = row["citation_quality_factor"] if "citation_quality_factor" in row_keys else 0.0
+
+        # Handle v12 fields (Feature 021/023 - AI Source Enrichment)
+        ai_type = row["ai_type"] if "ai_type" in row_keys else None
+        ai_tags_raw = row["ai_tags"] if "ai_tags" in row_keys else None
+        ai_tags = None
+        if ai_tags_raw:
+            import json
+            try:
+                ai_tags = json.loads(ai_tags_raw)
+            except (json.JSONDecodeError, TypeError):
+                ai_tags = None
+        ai_summary = row["ai_summary"] if "ai_summary" in row_keys else None
+        ai_confidence = row["ai_confidence"] if "ai_confidence" in row_keys else None
+        enrichment_status = row["enrichment_status"] if "enrichment_status" in row_keys else "none"
+        enrichment_validated_at = None
+        if "enrichment_validated_at" in row_keys and row["enrichment_validated_at"]:
+            enrichment_validated_at = datetime.fromisoformat(row["enrichment_validated_at"])
+        enrichment_validated_by = row["enrichment_validated_by"] if "enrichment_validated_by" in row_keys else None
 
         return Source(
             id=row["id"],
@@ -2572,7 +2616,137 @@ class Database:
             role=role or "unclassified",
             seed_origin=seed_origin,
             citation_quality_factor=citation_quality or 0.0,
+            # v12 fields
+            ai_type=ai_type,
+            ai_tags=ai_tags,
+            ai_summary=ai_summary,
+            ai_confidence=ai_confidence,
+            enrichment_status=enrichment_status or "none",
+            enrichment_validated_at=enrichment_validated_at,
+            enrichment_validated_by=enrichment_validated_by,
         )
+
+    # ========== Feature 023 - TUI Enriched Entries Tab ==========
+
+    def get_enriched_sources(
+        self,
+        status: str | None = None,
+        limit: int = 500,
+    ) -> list[Source]:
+        """Get sources with AI enrichment metadata.
+
+        Feature 023 - TUI Enriched Entries Tab (FR-002).
+
+        Args:
+            status: Filter by 'proposed' or 'validated' (None = both)
+            limit: Maximum number of results
+
+        Returns:
+            List of Source objects sorted by status (proposed first) then confidence
+        """
+        if status is not None and status not in ("proposed", "validated"):
+            raise ValueError(f"Invalid status: {status}. Valid: 'proposed', 'validated'")
+
+        if status:
+            query = """
+                SELECT * FROM sources
+                WHERE enrichment_status = ?
+                ORDER BY ai_confidence DESC NULLS LAST
+                LIMIT ?
+            """
+            rows = self.conn.execute(query, (status, limit)).fetchall()
+        else:
+            # Both proposed and validated, sorted by status (proposed first)
+            query = """
+                SELECT * FROM sources
+                WHERE enrichment_status IN ('proposed', 'validated')
+                ORDER BY
+                    CASE enrichment_status
+                        WHEN 'proposed' THEN 0
+                        WHEN 'validated' THEN 1
+                    END,
+                    ai_confidence DESC NULLS LAST
+                LIMIT ?
+            """
+            rows = self.conn.execute(query, (limit,)).fetchall()
+
+        return [self._row_to_source(row) for row in rows]
+
+    def validate_enrichment(self, source_id: str) -> bool:
+        """Validate a proposed enrichment (proposed -> validated).
+
+        Feature 023 - TUI Enriched Entries Tab (FR-005).
+
+        Args:
+            source_id: Source ULID to validate
+
+        Returns:
+            True if validation succeeded, False if source not found or not proposed
+        """
+        cursor = self.conn.execute(
+            """
+            UPDATE sources
+            SET enrichment_status = 'validated',
+                enrichment_validated_at = datetime('now'),
+                enrichment_validated_by = 'human'
+            WHERE id = ? AND enrichment_status = 'proposed'
+            """,
+            (source_id,),
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def reject_enrichment(self, source_id: str) -> bool:
+        """Reject a proposed enrichment (proposed -> none).
+
+        Feature 023 - TUI Enriched Entries Tab (FR-009).
+        Keeps ai_* metadata for potential re-enrichment.
+
+        Args:
+            source_id: Source ULID to reject
+
+        Returns:
+            True if rejection succeeded, False if source not found or not proposed
+        """
+        cursor = self.conn.execute(
+            """
+            UPDATE sources
+            SET enrichment_status = 'none',
+                enrichment_validated_at = NULL,
+                enrichment_validated_by = NULL
+            WHERE id = ? AND enrichment_status = 'proposed'
+            """,
+            (source_id,),
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def count_enriched_sources(self) -> dict[str, int]:
+        """Count enriched sources by status.
+
+        Feature 023 - TUI Enriched Entries Tab (FR-006).
+
+        Returns:
+            Dict with keys: total, proposed, validated
+        """
+        row = self.conn.execute(
+            """
+            SELECT
+                COUNT(*) as total,
+                SUM(CASE WHEN enrichment_status = 'proposed' THEN 1 ELSE 0 END) as proposed,
+                SUM(CASE WHEN enrichment_status = 'validated' THEN 1 ELSE 0 END) as validated
+            FROM sources
+            WHERE enrichment_status IN ('proposed', 'validated')
+            """
+        ).fetchone()
+
+        return {
+            "total": row["total"] or 0,
+            "proposed": row["proposed"] or 0,
+            "validated": row["validated"] or 0,
+        }
+
+    # ========== End Feature 023 ==========
 
     def link_entry_to_source(
         self,

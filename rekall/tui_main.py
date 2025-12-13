@@ -8780,6 +8780,7 @@ class UnifiedSourcesApp(SortableTableMixin, App):
         Binding("escape", "close_or_quit", "Back", show=True),
         Binding("q", "quit", "Quit", show=True),
         Binding("s", "tab_sources", "Sources", show=True),
+        Binding("n", "tab_enriched", "Enrichies", show=True),  # Feature 023
         Binding("i", "tab_inbox", "Inbox", show=True),
         Binding("g", "tab_staging", "Staging", show=True),
         Binding("f", "toggle_filter", "Filter", show=True),
@@ -8789,6 +8790,7 @@ class UnifiedSourcesApp(SortableTableMixin, App):
         Binding("d", "quick_delete", "Delete", show=False),
         Binding("t", "quick_tags", "Tags", show=False),
         Binding("p", "quick_promote", "Promote", show=False),
+        Binding("v", "quick_validate", "Validate", show=False),  # Feature 023
         Binding("r", "refresh", "Refresh", show=True),
     ]
 
@@ -8796,15 +8798,17 @@ class UnifiedSourcesApp(SortableTableMixin, App):
         super().__init__()
         self.init_sorting()
         self.db = db
-        self.current_tab = "sources"  # sources, inbox, staging
+        self.current_tab = "sources"  # sources, enriched, inbox, staging
 
         # Data for each tab
         self.sources: list = []
+        self.enriched_entries: list = []  # Feature 023
         self.inbox_entries: list = []
         self.staging_entries: list = []
 
         # Selected items
         self.selected_source = None
+        self.selected_enriched = None  # Feature 023
         self.selected_inbox = None
         self.selected_staging = None
 
@@ -8829,6 +8833,10 @@ class UnifiedSourcesApp(SortableTableMixin, App):
         with TabbedContent(id="tabs"):
             with TabPane("Sources (0)", id="tab-sources"):
                 yield DataTable(id="sources-table", classes="sources-table")
+
+            # Feature 023 - Enriched sources tab (between Sources and Inbox)
+            with TabPane("Enrichies (0)", id="tab-enriched"):
+                yield DataTable(id="enriched-table", classes="sources-table")
 
             with TabPane("Inbox (0)", id="tab-inbox"):
                 yield DataTable(id="inbox-table", classes="sources-table")
@@ -8909,6 +8917,7 @@ class UnifiedSourcesApp(SortableTableMixin, App):
         """Initialize all tables and load data."""
         self._load_all_data()
         self._setup_sources_table()
+        self._setup_enriched_table()  # Feature 023
         self._setup_inbox_table()
         self._setup_staging_table()
         self._update_stats()
@@ -8922,6 +8931,9 @@ class UnifiedSourcesApp(SortableTableMixin, App):
         self.sources = list(self.db.list_sources(limit=500))
         for source in self.sources:
             self.source_tags[source.id] = self.db.get_source_themes(source.id)
+
+        # Enriched sources (Feature 023)
+        self.enriched_entries = list(self.db.get_enriched_sources(limit=500))
 
         # Inbox
         self.inbox_entries = list(self.db.get_inbox_entries(valid_only=True, limit=500))
@@ -8937,6 +8949,8 @@ class UnifiedSourcesApp(SortableTableMixin, App):
             tab_id = str(tab.id)
             if "tab-sources" in tab_id:
                 tab.label = f"Sources ({len(self.sources)})"
+            elif "tab-enriched" in tab_id:  # Feature 023
+                tab.label = f"Enrichies ({len(self.enriched_entries)})"
             elif "tab-inbox" in tab_id:
                 tab.label = f"Inbox ({len(self.inbox_entries)})"
             elif "tab-staging" in tab_id:
@@ -8998,6 +9012,120 @@ class UnifiedSourcesApp(SortableTableMixin, App):
 
         if self.sources:
             self.selected_source = self.sources[0]
+
+    # =========================================================================
+    # Feature 023 - Enriched Sources Table
+    # =========================================================================
+
+    def _setup_enriched_table(self) -> None:
+        """Setup enriched sources table columns and data."""
+        table = self.query_one("#enriched-table", DataTable)
+        table.cursor_type = "row"
+        table.zebra_stripes = True
+
+        table.add_column("Domain", width=22, key="domain")
+        table.add_column("Type", width=12, key="ai_type")
+        table.add_column("Conf.", width=6, key="confidence")
+        table.add_column("Status", width=10, key="status")
+        table.add_column("Tags", width=25, key="tags")
+        table.add_column("Validated", width=12, key="validated_at")
+
+        self._populate_enriched_table()
+
+    def _populate_enriched_table(self) -> None:
+        """Populate enriched sources table rows."""
+        table = self.query_one("#enriched-table", DataTable)
+        table.clear()
+
+        if not self.enriched_entries:
+            # Empty state - show message in first row
+            table.add_row(
+                "[dim]Aucune source enrichie[/dim]",
+                "—", "—", "—", "—", "—",
+                key="empty",
+            )
+            return
+
+        for i, source in enumerate(self.enriched_entries):
+            # Confidence with color
+            conf_pct = int(source.ai_confidence * 100) if source.ai_confidence else 0
+            if conf_pct >= 90:
+                conf_display = f"[green]{conf_pct}%[/green]"
+            elif conf_pct >= 70:
+                conf_display = f"[yellow]{conf_pct}%[/yellow]"
+            else:
+                conf_display = f"[red]{conf_pct}%[/red]"
+
+            # Status with icon
+            if source.enrichment_status == "proposed":
+                status_display = "[orange1]⏳ proposed[/orange1]"
+            else:  # validated
+                status_display = "[green]✓ validated[/green]"
+
+            # Tags (truncated)
+            tags = source.ai_tags[:3] if source.ai_tags else []
+            extra = len(source.ai_tags) - 3 if source.ai_tags and len(source.ai_tags) > 3 else 0
+            tags_display = ", ".join(tags)
+            if extra > 0:
+                tags_display += f" +{extra}"
+            if not tags_display:
+                tags_display = "—"
+
+            # Validated date
+            validated = source.enrichment_validated_at.strftime("%Y-%m-%d") if source.enrichment_validated_at else "—"
+
+            table.add_row(
+                source.domain[:20] + "…" if len(source.domain) > 20 else source.domain,
+                source.ai_type or "—",
+                Text.from_markup(conf_display),
+                Text.from_markup(status_display),
+                tags_display[:23] + "…" if len(tags_display) > 23 else tags_display,
+                validated,
+                key=str(i),
+            )
+
+        if self.enriched_entries:
+            self.selected_enriched = self.enriched_entries[0]
+
+    def _refresh_enriched(self) -> None:
+        """Refresh enriched sources data and table."""
+        self.enriched_entries = list(self.db.get_enriched_sources(limit=500))
+        self._populate_enriched_table()
+        self._update_stats()
+
+    def _action_validate_enrichment(self) -> None:
+        """Validate the selected enriched source (proposed -> validated)."""
+        if not self.selected_enriched:
+            return
+        if self.selected_enriched.enrichment_status != "proposed":
+            self.show_left_notify("Only proposed entries can be validated")
+            return
+
+        if self.db.validate_enrichment(self.selected_enriched.id):
+            self.show_left_notify(f"✓ Validated: {self.selected_enriched.domain}")
+            self._refresh_enriched()
+        else:
+            self.show_left_notify("✗ Validation failed")
+
+    def _action_reject_enrichment(self) -> None:
+        """Reject the selected enriched source (proposed -> none)."""
+        if not self.selected_enriched:
+            return
+        if self.selected_enriched.enrichment_status != "proposed":
+            self.show_left_notify("Only proposed entries can be rejected")
+            return
+
+        if self.db.reject_enrichment(self.selected_enriched.id):
+            self.show_left_notify(f"✗ Rejected: {self.selected_enriched.domain}")
+            self._refresh_enriched()
+        else:
+            self.show_left_notify("✗ Rejection failed")
+
+    def action_quick_validate(self) -> None:
+        """Quick validate with 'v' key - only works in enriched tab."""
+        if self.current_tab != "enriched":
+            return
+        self._action_validate_enrichment()
 
     # =========================================================================
     # Inbox Table
@@ -9104,12 +9232,21 @@ class UnifiedSourcesApp(SortableTableMixin, App):
         self.current_tab = tab
         tabs = self.query_one("#tabs", TabbedContent)
 
-        tab_map = {"sources": "tab-sources", "inbox": "tab-inbox", "staging": "tab-staging"}
+        tab_map = {
+            "sources": "tab-sources",
+            "enriched": "tab-enriched",  # Feature 023
+            "inbox": "tab-inbox",
+            "staging": "tab-staging",
+        }
         tabs.active = tab_map[tab]
 
         # Update entries reference for sorting
         if tab == "sources":
             self.entries = self.sources
+        elif tab == "enriched":  # Feature 023
+            self.entries = self.enriched_entries
+            if self.enriched_entries and not self.selected_enriched:
+                self.selected_enriched = self.enriched_entries[0]
         elif tab == "inbox":
             self.entries = self.inbox_entries
         else:
@@ -9126,6 +9263,11 @@ class UnifiedSourcesApp(SortableTableMixin, App):
         self._switch_to_tab("sources")
         self.show_left_notify("Sources", 1.0)
 
+    def action_tab_enriched(self) -> None:
+        """Switch to Enriched tab (Feature 023)."""
+        self._switch_to_tab("enriched")
+        self.show_left_notify("Enrichies", 1.0)
+
     def action_tab_inbox(self) -> None:
         """Switch to Inbox tab."""
         self._switch_to_tab("inbox")
@@ -9139,17 +9281,22 @@ class UnifiedSourcesApp(SortableTableMixin, App):
     def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
         """Handle tab activation via click."""
         tab_id = str(event.tab.id)
-        if "sources" in tab_id:
+        if "tab-sources" in tab_id:
             self.current_tab = "sources"
             self.entries = self.sources
             if self.sources and not self.selected_source:
                 self.selected_source = self.sources[0]
-        elif "inbox" in tab_id:
+        elif "tab-enriched" in tab_id:  # Feature 023
+            self.current_tab = "enriched"
+            self.entries = self.enriched_entries
+            if self.enriched_entries and not self.selected_enriched:
+                self.selected_enriched = self.enriched_entries[0]
+        elif "tab-inbox" in tab_id:
             self.current_tab = "inbox"
             self.entries = self.inbox_entries
             if self.inbox_entries and not self.selected_inbox:
                 self.selected_inbox = self.inbox_entries[0]
-        elif "staging" in tab_id:
+        elif "tab-staging" in tab_id:
             self.current_tab = "staging"
             self.entries = self.staging_entries
             if self.staging_entries and not self.selected_staging:
@@ -9198,6 +9345,23 @@ class UnifiedSourcesApp(SortableTableMixin, App):
                 f"Score: {entry.promotion_score:.0f} | "
                 f"Citations: {entry.citation_count}"
             )
+        elif self.current_tab == "enriched" and self.selected_enriched:
+            # Feature 023 - Enriched sources detail panel
+            src = self.selected_enriched
+            title_widget.update(f"[bold cyan]{src.domain}[/bold cyan]")
+            # Build detail lines
+            lines = [
+                f"[cyan]Type:[/cyan] {src.ai_type or 'N/A'}",
+                f"[cyan]Confidence:[/cyan] {int(src.ai_confidence * 100) if src.ai_confidence else 0}%",
+                f"[cyan]Status:[/cyan] {src.enrichment_status}",
+            ]
+            if src.ai_tags:
+                lines.append(f"[cyan]Tags:[/cyan] {', '.join(src.ai_tags)}")
+            if src.ai_summary:
+                # Truncate summary for panel
+                summary = src.ai_summary[:100] + "…" if len(src.ai_summary) > 100 else src.ai_summary
+                lines.append(f"[cyan]Summary:[/cyan] {summary}")
+            meta_widget.update(" | ".join(lines[:3]))  # Keep compact
         else:
             title_widget.update("[dim]No selection[/dim]")
             meta_widget.update("")
@@ -9218,6 +9382,13 @@ class UnifiedSourcesApp(SortableTableMixin, App):
                 idx = int(key)
                 if 0 <= idx < len(self.sources):
                     self.selected_source = self.sources[idx]
+            except ValueError:
+                pass
+        elif table_id == "enriched-table":  # Feature 023
+            try:
+                idx = int(key)
+                if 0 <= idx < len(self.enriched_entries):
+                    self.selected_enriched = self.enriched_entries[idx]
             except ValueError:
                 pass
         elif table_id == "inbox-table":
@@ -9283,6 +9454,15 @@ class UnifiedSourcesApp(SortableTableMixin, App):
                 if query in (e.domain or "").lower() or query in (e.title or "").lower()
             ]
             self._populate_staging_table()
+        # Feature 023 - Enriched tab filter
+        elif self.current_tab == "enriched":
+            self.enriched_entries = [
+                s for s in self.db.get_enriched_sources(limit=500)
+                if query in s.domain.lower() or
+                   query in (s.ai_type or "").lower() or
+                   any(query in tag.lower() for tag in (s.ai_tags or []))
+            ]
+            self._populate_enriched_table()
 
         self._update_stats()
         self.show_left_notify(f"Filtré: {len(self.entries)} résultats", 1.5)
@@ -9293,8 +9473,10 @@ class UnifiedSourcesApp(SortableTableMixin, App):
             self._populate_sources_table()
         elif self.current_tab == "inbox":
             self._populate_inbox_table()
-        else:
+        elif self.current_tab == "staging":
             self._populate_staging_table()
+        elif self.current_tab == "enriched":  # Feature 023
+            self._populate_enriched_table()
         self._update_stats()
 
     # =========================================================================
@@ -9329,6 +9511,14 @@ class UnifiedSourcesApp(SortableTableMixin, App):
             actions_list.append(ListItem(Static("🔄 Refresh score"), id="action-refresh-score"))
             actions_list.append(ListItem(Static("🗑️  Delete"), id="action-delete"))
 
+        # Feature 023 - Enriched sources actions
+        elif self.current_tab == "enriched" and self.selected_enriched:
+            actions_list.append(ListItem(Static("📋 View details"), id="action-view"))
+            # Only show validate/reject for proposed entries
+            if self.selected_enriched.enrichment_status == "proposed":
+                actions_list.append(ListItem(Static("✓  Validate"), id="action-validate"))
+                actions_list.append(ListItem(Static("✗  Reject"), id="action-reject"))
+
         else:
             actions_list.append(ListItem(Static("[dim]No selection[/dim]")))
 
@@ -9360,6 +9550,11 @@ class UnifiedSourcesApp(SortableTableMixin, App):
             self._action_promote()
         elif action_id == "action-refresh-score":
             self._action_refresh_score()
+        # Feature 023 - Enriched actions
+        elif action_id == "action-validate":
+            self._action_validate_enrichment()
+        elif action_id == "action-reject":
+            self._action_reject_enrichment()
 
     # =========================================================================
     # Action Implementations
@@ -9374,6 +9569,11 @@ class UnifiedSourcesApp(SortableTableMixin, App):
             self.show_left_notify(f"URL: {self.selected_inbox.url}", 3.0)
         elif self.current_tab == "staging" and self.selected_staging:
             self.show_left_notify(f"URL: {self.selected_staging.url}", 3.0)
+        elif self.current_tab == "enriched" and self.selected_enriched:
+            # Feature 023 - Show enriched source details
+            src = self.selected_enriched
+            details = f"{src.domain} | {src.ai_type or 'N/A'} | {src.enrichment_status}"
+            self.show_left_notify(details, 3.0)
 
     def _action_edit_tags(self) -> None:
         """Edit tags for selected source."""
