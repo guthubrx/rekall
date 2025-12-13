@@ -9086,12 +9086,13 @@ class UnifiedSourcesApp(SortableTableMixin, App):
         table.cursor_type = "row"
         table.zebra_stripes = True
 
-        table.add_column("Domain", width=22, key="domain")
+        table.add_column("URL", width=40, key="url")
         table.add_column("Type", width=12, key="ai_type")
+        table.add_column("Tags", width=20, key="tags")
         table.add_column("Conf.", width=6, key="confidence")
         table.add_column("Status", width=10, key="status")
-        table.add_column("Tags", width=25, key="tags")
         table.add_column("Validated", width=12, key="validated_at")
+        table.add_column("By", width=6, key="validated_by")
 
         self._populate_enriched_table()
 
@@ -9104,12 +9105,16 @@ class UnifiedSourcesApp(SortableTableMixin, App):
             # Empty state - show message in first row
             table.add_row(
                 "[dim]Aucune source enrichie[/dim]",
-                "—", "—", "—", "—", "—",
+                "—", "—", "—", "—", "—", "—",
                 key="empty",
             )
             return
 
         for i, source in enumerate(self.enriched_entries):
+            # URL pattern (truncated)
+            url = source.url_pattern or source.domain or "—"
+            url_display = url[:38] + "…" if len(url) > 38 else url
+
             # Confidence with color
             conf_pct = int(source.ai_confidence * 100) if source.ai_confidence else 0
             if conf_pct >= 90:
@@ -9134,16 +9139,18 @@ class UnifiedSourcesApp(SortableTableMixin, App):
             if not tags_display:
                 tags_display = "—"
 
-            # Validated date
+            # Validated date and by
             validated = source.enrichment_validated_at.strftime("%Y-%m-%d") if source.enrichment_validated_at else "—"
+            validated_by = source.enrichment_validated_by or "—"
 
             table.add_row(
-                source.domain[:20] + "…" if len(source.domain) > 20 else source.domain,
+                url_display,
                 source.ai_type or "—",
+                tags_display[:18] + "…" if len(tags_display) > 18 else tags_display,
                 Text.from_markup(conf_display),
                 Text.from_markup(status_display),
-                tags_display[:23] + "…" if len(tags_display) > 23 else tags_display,
                 validated,
+                validated_by,
                 key=str(i),
             )
 
