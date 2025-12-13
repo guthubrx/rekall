@@ -1227,8 +1227,7 @@ class BrowseApp(SortableTableMixin, App):
         table.add_column(t("add.confidence"), width=4, key="confidence")
         table.add_column(t("browse.access"), width=6, key="access")
         table.add_column(t("browse.score"), width=5, key="score")
-        table.add_column(t("browse.links_in"), width=3, key="links_in")
-        table.add_column(t("browse.links_out"), width=3, key="links_out")
+        table.add_column("Hub", width=5, key="hub")
         table.add_column("Ctx", width=6, key="context")
 
         # Load context sizes (single query)
@@ -1288,8 +1287,8 @@ class BrowseApp(SortableTableMixin, App):
             # Highlight search term in title
             title = self._highlight_text(title)
 
-            # Get link counts
-            links_in, links_out = self.db.count_links_by_direction(entry.id)
+            # Get centrality score (hub score)
+            hub_score = getattr(entry, 'centrality_score', None) or 0.0
 
             # Format context size (bytes to human readable)
             ctx_size = self.context_sizes.get(entry.id, 0)
@@ -1300,6 +1299,9 @@ class BrowseApp(SortableTableMixin, App):
             else:
                 ctx_str = f"{ctx_size // 1024}K"
 
+            # Format hub score (show — if zero)
+            hub_str = f"{hub_score:.0f}" if hub_score > 0 else "—"
+
             table.add_row(
                 entry.type,
                 project[:10] + "…" if len(project) > 10 else project,
@@ -1309,8 +1311,7 @@ class BrowseApp(SortableTableMixin, App):
                 str(entry.confidence),
                 str(entry.access_count),
                 f"{entry.consolidation_score:.2f}",
-                str(links_in),
-                str(links_out),
+                hub_str,
                 ctx_str,
                 key=str(i),
             )
@@ -1329,8 +1330,7 @@ class BrowseApp(SortableTableMixin, App):
         ("confidence", "add.confidence", 4),
         ("access", "browse.access", 6),
         ("score", "browse.score", 5),
-        ("links_in", "browse.links_in", 3),
-        ("links_out", "browse.links_out", 3),
+        ("hub", None, 5),  # Hub centrality score
         ("context", None, 6),  # "Ctx" label, no translation
     ]
 
@@ -1346,8 +1346,7 @@ class BrowseApp(SortableTableMixin, App):
             "confidence": lambda e: e.confidence,
             "access": lambda e: e.access_count,
             "score": lambda e: e.consolidation_score,
-            "links_in": lambda e: self.db.count_links_by_direction(e.id)[0],
-            "links_out": lambda e: self.db.count_links_by_direction(e.id)[1],
+            "hub": lambda e: getattr(e, 'centrality_score', 0) or 0,
             "context": lambda e: self.context_sizes.get(e.id, 0),
         }
         return key_map.get(column_key, lambda e: "")
@@ -1444,8 +1443,9 @@ class BrowseApp(SortableTableMixin, App):
         created_str = entry.created_at.strftime("%Y-%m-%d %H:%M")
         updated_str = entry.updated_at.strftime("%Y-%m-%d %H:%M")
 
-        # Get link counts
+        # Get link counts and hub score
         links_in, links_out = self.db.count_links_by_direction(entry.id)
+        hub_score = getattr(entry, 'centrality_score', 0) or 0
 
         # Consolidation score color
         score = entry.consolidation_score
@@ -1468,7 +1468,7 @@ class BrowseApp(SortableTableMixin, App):
             f"[dim]{t('add.confidence')}:[/dim] {entry.confidence}/5  "
             f"[dim]{t('browse.access')}:[/dim] {entry.access_count}  "
             f"[dim]{t('browse.score')}:[/dim] [{score_color}]{score:.2f}[/{score_color}]  "
-            f"[dim]Links:[/dim] ←{links_in} →{links_out}",
+            f"[dim]Links:[/dim] ←{links_in} →{links_out}  [dim]Hub:[/dim] [cyan]{hub_score:.0f}[/cyan]",
         ]
         meta_widget.update("\n".join(meta_lines))
 

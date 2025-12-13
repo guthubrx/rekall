@@ -78,6 +78,8 @@ class Entry:
     next_review: date | None = None
     review_interval: int = 1
     ease_factor: float = 2.5
+    # Knowledge graph centrality
+    centrality_score: float = 0.0
 
     def __post_init__(self):
         """Validate entry fields after initialization."""
