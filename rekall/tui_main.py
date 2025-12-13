@@ -1223,17 +1223,14 @@ class BrowseApp(SortableTableMixin, App):
         table.cursor_type = "cell"  # Cell navigation for column resize
         table.zebra_stripes = True
 
-        # Add columns
-        table.add_column(t("browse.type"), width=10, key="type")
-        table.add_column(t("add.project"), width=12, key="project")
-        table.add_column(t("add.title"), width=50, key="title")
-        table.add_column(t("browse.created"), width=18, key="created")
-        table.add_column(t("browse.updated"), width=18, key="updated")
-        table.add_column(t("add.confidence"), width=4, key="confidence")
-        table.add_column(t("browse.access"), width=6, key="access")
-        table.add_column(t("browse.score"), width=5, key="score")
-        table.add_column("Hub", width=5, key="hub")
-        table.add_column("Ctx", width=6, key="context")
+        # Add columns with persisted widths
+        for key, label_key, default_width in self.COLUMNS:
+            if label_key and "." in label_key:
+                label = t(label_key)
+            else:
+                label = label_key or key.capitalize()
+            width = self.column_widths.get(key, default_width)
+            table.add_column(label, width=width, key=key)
 
         # Load context sizes (single query)
         entry_ids = [e.id for e in self.entries]
