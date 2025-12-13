@@ -1424,6 +1424,18 @@ class BrowseApp(SortableTableMixin, App):
             except (ValueError, TypeError):
                 pass
 
+    def on_data_table_cell_highlighted(self, event: DataTable.CellHighlighted) -> None:
+        """Update detail panel when cell changes (for cell cursor mode)."""
+        if event.row_key is not None:
+            try:
+                idx = int(event.row_key.value)
+                if 0 <= idx < len(self.entries):
+                    self.selected_entry = self.entries[idx]
+                    self._update_detail_panel(self.selected_entry)
+                    self._update_graph_if_visible()
+            except (ValueError, TypeError):
+                pass
+
     def _update_graph_if_visible(self) -> None:
         """Update graph modal content if it's currently visible."""
         graph_modal = self.query_one("#graph-modal", Container)
