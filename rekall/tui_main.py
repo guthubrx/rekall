@@ -1220,7 +1220,7 @@ class BrowseApp(SortableTableMixin, App):
     def on_mount(self) -> None:
         """Populate the DataTable with entries."""
         table = self.query_one("#entries-table", DataTable)
-        table.cursor_type = "row"
+        table.cursor_type = "cell"  # Cell navigation for column resize
         table.zebra_stripes = True
 
         # Add columns
@@ -1569,20 +1569,11 @@ class BrowseApp(SortableTableMixin, App):
         new_width = max(3, current_width + delta)  # Min width of 3
         self.column_widths[key] = new_width
 
-        # Get column display name for notification
-        if label_key and "." in label_key:
-            col_name = t(label_key)
-        else:
-            col_name = label_key or key.capitalize()
-
         # Refresh table to apply new width
         self.refresh_table()
 
         # Restore cursor position
         table.cursor_coordinate = (table.cursor_row, cursor_col)
-
-        # Show feedback
-        self.show_left_notify(f"[{col_name}] → {new_width}", 1.0)
 
     def _apply_panel_height(self) -> None:
         """Apply the current panel height fraction."""
