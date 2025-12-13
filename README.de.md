@@ -34,6 +34,7 @@
 - [Das Interface](#das-interface)
 - [Was es automatisiert](#was-rekall-für-dich-tut)
 - [Eintragstypen](#was-kannst-du-erfassen)
+- [Quellen](#verfolge-deine-quellen)
 - [Datenschutz](#100-lokal-100-deins)
 - [Erste Schritte](#erste-schritte)
 - [MCP Server](#mcp-server-funktioniert-mit-jedem-ki-assistenten)
@@ -49,7 +50,7 @@
 
 **Unser Ansatz:** Rekall ist eine persönliche Wissensdatenbank (personal knowledge base), die auf kognitionswissenschaftlicher Forschung basiert. Wir haben untersucht, wie menschliches Gedächtnis tatsächlich funktioniert — episodisches vs. semantisches Gedächtnis (episodic vs semantic memory), verteilte Wiederholung (spaced repetition), Wissensgraphen (knowledge graphs) — und es auf Entwickler-Workflows angewendet.
 
-**Was es tut:** Erfasse Bugs, Patterns, Entscheidungen, Configs während du arbeitest. Suche nach Bedeutung, nicht nur Keywords — Rekall nutzt optionale lokale Embeddings (EmbeddingGemma) kombiniert mit Volltextsuche (full-text search), um relevante Einträge zu finden, selbst wenn deine Wörter nicht exakt übereinstimmen. Speichere reichhaltigen Kontext (Situation, Lösung, was nicht funktioniert hat), um ähnliche Probleme später zu unterscheiden.
+**Was es tut:** Erfasse Bugs, Patterns, Entscheidungen, Configs während du arbeitest. Suche nach Bedeutung, nicht nur Keywords — Rekall nutzt optionale lokale Embeddings (all-MiniLM-L6-v2) kombiniert mit Volltextsuche (full-text search), um relevante Einträge zu finden, selbst wenn deine Wörter nicht exakt übereinstimmen. Speichere reichhaltigen Kontext (Situation, Lösung, was nicht funktioniert hat), um ähnliche Probleme später zu unterscheiden.
 
 **Funktioniert mit deinen Tools:** Rekall stellt einen MCP-Server (Model Context Protocol) bereit, der mit den meisten KI-gestützten Entwicklungstools kompatibel ist — Claude Code, Claude Desktop, Cursor, Windsurf, Continue.dev und jedem MCP-kompatiblen Client. Ein Befehl (`rekall mcp`) und deine KI konsultiert dein Wissen vor jedem Fix.
 
@@ -296,6 +297,89 @@ rekall review  # Spaced-Repetition-Session
 
 ---
 
+## Verfolge deine Quellen
+
+> **Philosophie:** Jedes Wissen kam von irgendwoher. Rekall hilft dir zu verfolgen, *woher* — um Zuverlässigkeit zu bewerten, Originalquellen erneut zu besuchen und zu sehen, welche Quellen für dich am wertvollsten sind.
+
+### Verknüpfe Einträge mit ihren Quellen
+
+Wenn du Wissen erfasst, kannst du Quellen anhängen:
+
+```bash
+# Füge einen Bug mit einer URL-Quelle hinzu
+rekall add bug "Safari CORS fix" -t cors,safari
+# Dann verknüpfe die Quell-URL
+rekall source link 01HX7... --url "https://stackoverflow.com/q/12345"
+
+# Oder nutze das TUI: öffne Eintrag → Quelle hinzufügen
+rekall
+```
+
+### Drei Quellentypen
+
+| Typ | Für | Beispiel |
+|-----|-----|----------|
+| `url` | Webseiten, Dokumentation | Stack Overflow, MDN, Blog-Posts |
+| `theme` | Wiederkehrende Themen oder Mentoren | "Code Reviews mit Alice", "Architektur-Meetings" |
+| `file` | Lokale Dokumente | PDFs, interne Docs, Notizen |
+
+### Zuverlässigkeitsbewertungen (Admiralty-System)
+
+Nicht alle Quellen sind gleich vertrauenswürdig. Rekall nutzt ein vereinfachtes **Admiralty-System**:
+
+| Bewertung | Bedeutung | Beispiele |
+|-----------|-----------|-----------|
+| **A** | Sehr zuverlässig, autoritativ | Offizielle Docs, peer-reviewed, bekannte Experten |
+| **B** | Generell zuverlässig | Renommierte Blogs, akzeptierte SO-Antworten |
+| **C** | Fragwürdig oder unbestätigt | Zufällige Forum-Posts, ungetestete Vorschläge |
+
+### Persönlicher Score: Was *für dich* zählt
+
+Jede Quelle bekommt einen **persönlichen Score** (0-100) basierend auf:
+
+```
+Score = Nutzung × Aktualität × Zuverlässigkeit
+
+- Nutzung: Wie oft du diese Quelle zitierst
+- Aktualität: Wann du sie zuletzt genutzt hast (verfällt mit der Zeit)
+- Zuverlässigkeit: A=1.0, B=0.8, C=0.6
+```
+
+Quellen, die du häufig und kürzlich nutzt, ranken höher — unabhängig davon, wie "autoritativ" sie global sind. Deine persönliche Erfahrung zählt.
+
+### Backlinks: Siehe alle Einträge einer Quelle
+
+Klicke auf eine beliebige Quelle, um alle Einträge zu sehen, die sie referenzieren:
+
+```
+┌─ Quelle: stackoverflow.com/questions/* ─────────────────┐
+│  Zuverlässigkeit: B  │  Score: 85  │  Genutzt: 12 mal   │
+├─────────────────────────────────────────────────────────┤
+│  Einträge, die diese Quelle zitieren:                   │
+│                                                         │
+│  [1] bug: CORS funktioniert nicht in Safari             │
+│  [2] bug: Fetch-Timeout bei langsamen Netzwerken        │
+│  [3] pattern: Fehlerbehandlung für API-Aufrufe          │
+└─────────────────────────────────────────────────────────┘
+```
+
+### Link-Rot-Erkennung
+
+Web-Quellen können offline gehen. Rekall prüft regelmäßig URL-Quellen und markiert unzugängliche:
+
+```bash
+rekall sources --verify  # Alle Quellen prüfen
+rekall sources --status inaccessible  # Defekte Links auflisten
+```
+
+Das Quellen-Dashboard im TUI zeigt:
+- **Top-Quellen** nach persönlichem Score
+- **Aufsteigende Quellen** (kürzlich mehrfach zitiert)
+- **Ruhende Quellen** (nicht genutzt seit 6+ Monaten)
+- **Unzugängliche Quellen** (Link-Rot erkannt)
+
+---
+
 ## 100% lokal. 100% deins.
 
 ```
@@ -495,12 +579,12 @@ Rekall kombiniert drei Such-Strategien:
 
 Semantische Suche ist **optional**. Rekall funktioniert perfekt mit FTS5-Volltextsuche allein — kein Modell erforderlich.
 
-Aber wenn du semantisches Verständnis möchtest, nutzt Rekall **EmbeddingGemma** (308M Parameter), ein hochmodernes Embedding-Modell, das vollständig auf deinem Rechner läuft:
+Aber wenn du semantisches Verständnis möchtest, nutzt Rekall **all-MiniLM-L6-v2** (23M Parameter), ein schnelles und effizientes Embedding-Modell, das vollständig auf deinem Rechner läuft:
 
 - **100% lokal**: Keine Daten verlassen deinen Computer, keine API-Keys, keine Cloud
-- **Mehrsprachig**: Funktioniert in 100+ Sprachen
-- **Schnell**: ~500ms pro Embedding auf einem Standard-Laptop-CPU
-- **Klein**: ~200MB RAM mit int8-Quantisierung
+- **Schnell**: ~50ms pro Embedding auf einem Standard-Laptop-CPU
+- **Klein**: ~100MB Speicherbedarf
+- **Konfigurierbar**: Wechsle zu mehrsprachigen Modellen (z.B. `paraphrase-multilingual-MiniLM-L12-v2`) über die Config
 
 ```bash
 # Nur-FTS-Modus (Standard, kein Modell nötig)
@@ -561,8 +645,8 @@ Kontext kann ausführlich sein. Rekall komprimiert strukturierten Kontext mit zl
 │  context_blob     │  Komprimiertes JSON (zlib) │ ~70% kleiner│
 │  context_keywords │  Indexierte Tabelle für    │ O(1) Lookup │
 │                   │  Suche                     │             │
-│  emb_summary      │  768-dim Vektor (Summary)  │ Semantisch  │
-│  emb_context      │  768-dim Vektor (Kontext)  │ Semantisch  │
+│  emb_summary      │  384-dim Vektor (Summary)  │ Semantisch  │
+│  emb_context      │  384-dim Vektor (Kontext)  │ Semantisch  │
 └─────────────────────────────────────────────────────────────┘
 ```
 

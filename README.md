@@ -50,7 +50,7 @@
 
 **Our approach:** Rekall is a personal knowledge base built on cognitive science research. We studied how human memory actually works — episodic vs semantic memory, spaced repetition, knowledge graphs — and applied it to developer workflows.
 
-**What it does:** Capture bugs, patterns, decisions, configs as you work. Search by meaning, not just keywords — Rekall uses optional local embeddings (EmbeddingGemma) combined with full-text search to find relevant entries even when your words don't match exactly. Store rich context (situation, solution, what failed) to disambiguate similar problems later.
+**What it does:** Capture bugs, patterns, decisions, configs as you work. Search by meaning, not just keywords — Rekall uses optional local embeddings (all-MiniLM-L6-v2) combined with full-text search to find relevant entries even when your words don't match exactly. Store rich context (situation, solution, what failed) to disambiguate similar problems later.
 
 **Works with your tools:** Rekall exposes an MCP server compatible with most AI-powered development tools — Claude Code, Claude Desktop, Cursor, Windsurf, Continue.dev, and any MCP-compatible client. One command (`rekall mcp`) and your AI consults your knowledge before every fix.
 
@@ -578,12 +578,12 @@ Rekall combines three search strategies:
 
 Semantic search is **optional**. Rekall works perfectly with FTS5 full-text search alone — no model required.
 
-But if you want semantic understanding, Rekall uses **EmbeddingGemma** (308M parameters), a state-of-the-art embedding model that runs entirely on your machine:
+But if you want semantic understanding, Rekall uses **all-MiniLM-L6-v2** (23M parameters), a fast and efficient embedding model that runs entirely on your machine:
 
 - **100% local**: No data leaves your computer, no API keys, no cloud
-- **Multilingual**: Works in 100+ languages
-- **Fast**: ~500ms per embedding on a standard laptop CPU
-- **Small**: ~200MB RAM with int8 quantization
+- **Fast**: ~50ms per embedding on a standard laptop CPU
+- **Small**: ~100MB RAM footprint
+- **Configurable**: Switch to multilingual models (e.g., `paraphrase-multilingual-MiniLM-L12-v2`) via config
 
 ```bash
 # FTS-only mode (default, no model needed)
@@ -643,8 +643,8 @@ Context can be verbose. Rekall compresses structured context with zlib and maint
 ├───────────────────────────────────────────────────────────────┤
 │  context_blob     │  Compressed JSON (zlib)    │  ~70% smaller│
 │  context_keywords │  Indexed table for search  │  O(1) lookup │
-│  emb_summary      │  768-dim vector (summary)  │  Semantic    │
-│  emb_context      │  768-dim vector (context)  │  Semantic    │
+│  emb_summary      │  384-dim vector (summary)  │  Semantic    │
+│  emb_context      │  384-dim vector (context)  │  Semantic    │
 └───────────────────────────────────────────────────────────────┘
 ```
 

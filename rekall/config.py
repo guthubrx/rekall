@@ -45,9 +45,9 @@ class Config:
     embeddings_provider: str | None = None  # ollama | openai
     embeddings_model: str | None = None  # e.g., nomic-embed-text
 
-    # Smart embeddings settings (local EmbeddingGemma)
+    # Smart embeddings settings (local all-MiniLM-L6-v2)
     smart_embeddings_enabled: bool = False  # Enable semantic features
-    smart_embeddings_model: str = "EmbeddingGemma-2B-v1"  # sentence-transformers model
+    smart_embeddings_model: str = "all-MiniLM-L6-v2"  # sentence-transformers model
     smart_embeddings_dimensions: int = 384  # Matryoshka: 128, 384, or 768
     smart_embeddings_similarity_threshold: float = 0.75  # Min similarity for suggestions
     smart_embeddings_context_mode: str = "required"  # required | recommended | optional (Feature 007)

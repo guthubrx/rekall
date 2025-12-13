@@ -34,6 +34,7 @@
 - [La Interfaz](#la-interfaz)
 - [Qué Automatiza](#qué-hace-rekall-por-ti)
 - [Tipos de Entradas](#qué-puedes-capturar)
+- [Fuentes](#rastrea-tus-fuentes)
 - [Privacidad](#100-local-100-tuyo)
 - [Empezando](#empezando)
 - [Servidor MCP](#servidor-mcp-funciona-con-cualquier-asistente-ia)
@@ -49,7 +50,7 @@
 
 **Nuestro enfoque:** Rekall es una base de conocimiento personal construida sobre investigación en ciencias cognitivas. Estudiamos cómo funciona realmente la memoria humana — memoria episódica vs semántica, repetición espaciada, grafos de conocimiento — y lo aplicamos a los flujos de trabajo de desarrollo.
 
-**Qué hace:** Captura bugs, patrones, decisiones, configuraciones mientras trabajas. Busca por significado, no solo palabras clave — Rekall usa embeddings locales opcionales (EmbeddingGemma) combinados con búsqueda de texto completo para encontrar entradas relevantes incluso cuando tus palabras no coinciden exactamente. Almacena contexto rico (situación, solución, qué falló) para desambiguar problemas similares después.
+**Qué hace:** Captura bugs, patrones, decisiones, configuraciones mientras trabajas. Busca por significado, no solo palabras clave — Rekall usa embeddings locales opcionales (all-MiniLM-L6-v2) combinados con búsqueda de texto completo para encontrar entradas relevantes incluso cuando tus palabras no coinciden exactamente. Almacena contexto rico (situación, solución, qué falló) para desambiguar problemas similares después.
 
 **Funciona con tus herramientas:** Rekall expone un servidor MCP compatible con la mayoría de herramientas de desarrollo impulsadas por IA — Claude Code, Claude Desktop, Cursor, Windsurf, Continue.dev, y cualquier cliente compatible con MCP. Un comando (`rekall mcp`) y tu IA consulta tu conocimiento antes de cada corrección.
 
@@ -296,6 +297,89 @@ rekall review  # Sesión de repetición espaciada
 
 ---
 
+## Rastrea tus fuentes
+
+> **Filosofía:** Cada pieza de conocimiento vino de algún lugar. Rekall te ayuda a rastrear *de dónde* — para evaluar confiabilidad, revisitar fuentes originales, y ver qué fuentes son más valiosas para ti.
+
+### Vincula entradas a sus fuentes
+
+Cuando capturas conocimiento, puedes adjuntar fuentes:
+
+```bash
+# Agrega un bug con una fuente URL
+rekall add bug "Safari CORS fix" -t cors,safari
+# Luego vincula la fuente URL
+rekall source link 01HX7... --url "https://stackoverflow.com/q/12345"
+
+# O usa el TUI: abre entrada → Agregar fuente
+rekall
+```
+
+### Tres tipos de fuentes
+
+| Tipo | Para | Ejemplo |
+|------|-----|---------|
+| `url` | Páginas web, documentación | Stack Overflow, MDN, posts de blog |
+| `theme` | Temas recurrentes o mentores | "Code reviews con Alice", "Reuniones de arquitectura" |
+| `file` | Documentos locales | PDFs, docs internos, notas |
+
+### Calificaciones de confiabilidad (Sistema Admiralty)
+
+No todas las fuentes son igualmente confiables. Rekall usa un **Sistema Admiralty** simplificado:
+
+| Calificación | Significado | Ejemplos |
+|--------------|-------------|----------|
+| **A** | Altamente confiable, autoritativa | Docs oficiales, peer-reviewed, expertos conocidos |
+| **B** | Generalmente confiable | Blogs reputados, respuestas SO aceptadas |
+| **C** | Cuestionable o no verificada | Posts de foros random, sugerencias no probadas |
+
+### Puntuación personal: Lo que importa *para ti*
+
+Cada fuente tiene una **puntuación personal** (0-100) basada en:
+
+```
+Puntuación = Uso × Recencia × Confiabilidad
+
+- Uso: Con qué frecuencia citas esta fuente
+- Recencia: Cuándo la usaste por última vez (decae con el tiempo)
+- Confiabilidad: A=1.0, B=0.8, C=0.6
+```
+
+Las fuentes que usas frecuentemente y recientemente rankean más alto — sin importar cuán "autoritativas" sean globalmente. Tu experiencia personal importa.
+
+### Backlinks: Ve todas las entradas de una fuente
+
+Haz clic en cualquier fuente para ver todas las entradas que la referencian:
+
+```
+┌─ Fuente: stackoverflow.com/questions/* ─────────────────┐
+│  Confiabilidad: B  │  Puntuación: 85  │  Usada: 12 veces│
+├─────────────────────────────────────────────────────────┤
+│  Entradas citando esta fuente:                          │
+│                                                         │
+│  [1] bug: CORS falla en Safari                          │
+│  [2] bug: Timeout de Fetch en redes lentas              │
+│  [3] pattern: Manejo de errores para llamadas API       │
+└─────────────────────────────────────────────────────────┘
+```
+
+### Detección de link rot
+
+Las fuentes web pueden desaparecer. Rekall verifica periódicamente las fuentes URL y marca las inaccesibles:
+
+```bash
+rekall sources --verify  # Verificar todas las fuentes
+rekall sources --status inaccessible  # Listar enlaces rotos
+```
+
+El dashboard de Fuentes del TUI muestra:
+- **Top fuentes** por puntuación personal
+- **Fuentes emergentes** (citadas múltiples veces recientemente)
+- **Fuentes dormantes** (no usadas en 6+ meses)
+- **Fuentes inaccesibles** (link rot detectado)
+
+---
+
 ## 100% local. 100% tuyo.
 
 ```
@@ -494,12 +578,12 @@ Rekall combina tres estrategias de búsqueda:
 
 La búsqueda semántica es **opcional**. Rekall funciona perfectamente solo con búsqueda de texto completo FTS5 — no se requiere modelo.
 
-Pero si quieres comprensión semántica, Rekall usa **EmbeddingGemma** (308M parámetros), un modelo de embeddings de última generación que se ejecuta completamente en tu máquina:
+Pero si quieres comprensión semántica, Rekall usa **all-MiniLM-L6-v2** (23M parámetros), un modelo de embeddings rápido y eficiente que se ejecuta completamente en tu máquina:
 
 - **100% local**: Ningún dato sale de tu computadora, sin API keys, sin nube
-- **Multilingüe**: Funciona en más de 100 idiomas
-- **Rápido**: ~500ms por embedding en un CPU de laptop estándar
-- **Pequeño**: ~200MB de RAM con cuantización int8
+- **Rápido**: ~50ms por embedding en un CPU de laptop estándar
+- **Pequeño**: ~100MB de huella de memoria
+- **Configurable**: Cambia a modelos multilingües (ej: `paraphrase-multilingual-MiniLM-L12-v2`) via config
 
 ```bash
 # Modo solo FTS (predeterminado, no se necesita modelo)
@@ -559,8 +643,8 @@ El contexto puede ser verboso. Rekall comprime el contexto estructurado con zlib
 ├─────────────────────────────────────────────────────────────┤
 │  context_blob     │  JSON comprimido (zlib)    │  ~70% menor │
 │  context_keywords │  Tabla indexada búsqueda   │  O(1) lookup│
-│  emb_summary      │  Vector 768-dim (resumen)  │  Semántico  │
-│  emb_context      │  Vector 768-dim (contexto) │  Semántico  │
+│  emb_summary      │  Vector 384-dim (resumen)  │  Semántico  │
+│  emb_context      │  Vector 384-dim (contexto) │  Semántico  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
