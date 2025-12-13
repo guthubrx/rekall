@@ -1067,6 +1067,9 @@ class BrowseApp(SortableTableMixin, App):
         # Panel resize
         Binding("plus", "panel_grow", "+", show=False),
         Binding("minus", "panel_shrink", "-", show=False),
+        # Column resize (Shift + arrows)
+        Binding("shift+left", "column_shrink", "Col-", show=False),
+        Binding("shift+right", "column_grow", "Col+", show=False),
     ]
 
     def __init__(self, entries: list, db):
@@ -1074,6 +1077,8 @@ class BrowseApp(SortableTableMixin, App):
         self.init_sorting()  # Initialize sorting from SortableTableMixin
         self.all_entries = entries  # Keep original list
         self.entries = list(entries)  # Current filtered list (copy for sorting)
+        # Custom column widths (key -> width)
+        self.column_widths: dict[str, int] = {}
         self.graph_nav_ids: list[str] = []  # IDs navigable from graph modal
         self.context_sizes: dict[str, int] = {}  # Context compressed sizes
         self.preview_mode = "content"  # "content" or "context"
@@ -1330,8 +1335,8 @@ class BrowseApp(SortableTableMixin, App):
         ("confidence", "add.confidence", 4),
         ("access", "browse.access", 6),
         ("score", "browse.score", 5),
-        ("hub", None, 5),  # Hub centrality score
-        ("context", None, 6),  # "Ctx" label, no translation
+        ("hub", "Hub", 5),  # Hub centrality score (no translation needed)
+        ("context", "Ctx", 6),  # Context size (no translation needed)
     ]
 
     def get_sort_key(self, column_key: str):
@@ -1358,10 +1363,11 @@ class BrowseApp(SortableTableMixin, App):
 
         # Add columns with sort indicators
         for key, label_key, width in self.COLUMNS:
-            if label_key:
+            # label_key can be a translation key (e.g. "browse.type") or a literal string (e.g. "Hub")
+            if label_key and "." in label_key:
                 base_label = t(label_key)
             else:
-                base_label = "Ctx"  # Special case for context column
+                base_label = label_key or key.capitalize()  # Use literal or fallback to key
 
             # Add sort indicator if this column is sorted
             if self.sort_column == key:
@@ -1370,7 +1376,9 @@ class BrowseApp(SortableTableMixin, App):
             else:
                 label = base_label
 
-            table.add_column(label, width=width, key=key)
+            # Use custom width if set, otherwise default
+            col_width = self.column_widths.get(key, width)
+            table.add_column(label, width=col_width, key=key)
 
         # Re-populate rows
         self._populate_table()
@@ -1539,6 +1547,33 @@ class BrowseApp(SortableTableMixin, App):
         self.detail_panel_fr = max(0.5, self.detail_panel_fr - 0.5)
         self._apply_panel_height()
         self._save_panel_ratio()
+
+    def action_column_grow(self) -> None:
+        """Increase current column width (Shift+Right)."""
+        self._resize_current_column(2)
+
+    def action_column_shrink(self) -> None:
+        """Decrease current column width (Shift+Left)."""
+        self._resize_current_column(-2)
+
+    def _resize_current_column(self, delta: int) -> None:
+        """Resize the currently focused column."""
+        table = self.query_one("#entries-table", DataTable)
+        # Get current cursor column
+        cursor_col = table.cursor_column
+        if cursor_col < 0 or cursor_col >= len(self.COLUMNS):
+            return
+
+        key, _, default_width = self.COLUMNS[cursor_col]
+        current_width = self.column_widths.get(key, default_width)
+        new_width = max(3, current_width + delta)  # Min width of 3
+        self.column_widths[key] = new_width
+
+        # Refresh table to apply new width
+        self.refresh_table()
+
+        # Restore cursor position
+        table.cursor_coordinate = (table.cursor_row, cursor_col)
 
     def _apply_panel_height(self) -> None:
         """Apply the current panel height fraction."""
