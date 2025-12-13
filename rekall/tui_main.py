@@ -9705,6 +9705,10 @@ class ConfigApp(App):
         margin-bottom: 1;
     }
 
+    #integrations-section.active {
+        border: double $warning;
+    }
+
     #integrations-title {
         text-style: bold;
         color: $primary;
@@ -9753,11 +9757,10 @@ class ConfigApp(App):
         min-height: 8;
         border: solid $secondary;
         padding: 1;
-        display: none;
     }
 
-    #speckit-section.visible {
-        display: block;
+    #speckit-section.active {
+        border: double $warning;
     }
 
     #speckit-title {
@@ -9857,9 +9860,9 @@ class ConfigApp(App):
                 yield Static(self._build_column_headers(), id="column-headers", markup=True)
                 yield Static(self._build_ide_list(), id="ide-list", markup=True)
 
-            # Section 2: SPECKIT (conditional)
-            with Container(id="speckit-section", classes="visible" if self._speckit_exists else ""):
-                yield Static("[bold]SPECKIT[/bold]", id="speckit-title")
+            # Section 2: SPECKIT (always rendered, visibility controlled by CSS)
+            with Container(id="speckit-section"):
+                yield Static("[bold]SPECKIT - Article 99[/bold]", id="speckit-title")
                 yield Static(self._build_article99_selector(), id="article99-selector", markup=True)
 
         yield Static(
@@ -9867,6 +9870,11 @@ class ConfigApp(App):
             id="footer-hint"
         )
         yield Static("", id="notification")
+
+    def on_mount(self) -> None:
+        """Initialize UI state on mount."""
+        # Set initial active section style
+        self._update_section_styles()
 
     def _build_detected_header(self) -> str:
         """Build the detected IDE header."""
@@ -9984,8 +9992,25 @@ class ConfigApp(App):
         else:
             self._active_section = "integrations"
 
+        # Update visual indicators
+        self._update_section_styles()
         self._refresh_ide_list()
         self._refresh_article99()
+
+    def _update_section_styles(self) -> None:
+        """Update section border styles based on active section."""
+        try:
+            integrations = self.query_one("#integrations-section")
+            speckit = self.query_one("#speckit-section")
+
+            if self._active_section == "integrations":
+                integrations.add_class("active")
+                speckit.remove_class("active")
+            else:
+                integrations.remove_class("active")
+                speckit.add_class("active")
+        except Exception:
+            pass
 
     def action_toggle(self) -> None:
         """Toggle current selection."""
