@@ -9817,13 +9817,12 @@ class ConfigApp(App):
     BINDINGS = [
         Binding("escape", "quit", "Quitter", show=True),
         Binding("q", "quit", "Quitter", show=False),
-        Binding("up", "move_up", "↑", show=True),
-        Binding("down", "move_down", "↓", show=True),
-        Binding("space", "toggle", "Toggle", show=True),
+        Binding("up,k", "move_up", "↑", show=True),
+        Binding("down,j", "move_down", "↓", show=True),
         Binding("g", "install_global", "Global", show=True),
         Binding("l", "install_local", "Local", show=True),
         Binding("r", "remove", "Désinstaller", show=True),
-        Binding("tab", "switch_section", "Section", show=True),
+        Binding("s", "switch_section", "Section", show=True),
     ]
 
     def __init__(self, base_path: Path | None = None):
@@ -9866,7 +9865,7 @@ class ConfigApp(App):
                 yield Static(self._build_article99_selector(), id="article99-selector", markup=True)
 
         yield Static(
-            "[dim]↑↓ naviguer • g global • l local • r désinstaller • Tab section • Esc quitter[/dim]",
+            "[dim]↑↓/jk naviguer • g global • l local • r désinstaller • s section • Esc quitter[/dim]",
             id="footer-hint"
         )
         yield Static("", id="notification")
